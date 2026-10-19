@@ -1,0 +1,414 @@
+syntax = "proto3";
+
+// =====================================================================
+// SwarmTales Shop — interface definition
+//
+// The Shop sells memberships and Ink packs, collects story open/close
+// fees for the Stories contract, and runs promo-code Ink grants.
+//
+// Payments are stablecoins only. The admin turns each token on and sets
+// every price in that token's own base units (its decimals). Nothing
+// here is hard-wired to a mainnet address, so a testnet token works.
+//
+// Every payment is split in the same transaction:
+//   founder_amount = floor(price * fee_bps / 10000)
+//   treasury gets the rest
+// fee_bps starts at 100 (1%) and can never be set above 500 (5%).
+// The Shop never holds a balance and has no withdraw function.
+// =====================================================================
+
+package shop;
+
+import "koinos/options.proto";
+
+// ---------- Shared wrappers ----------
+
+message str {
+  string value = 1;
+}
+
+message uint32 {
+  uint32 value = 1;
+}
+
+message uint64 {
+  uint64 value = 1 [jstype = JS_STRING];
+}
+
+message boole {
+  bool value = 1;
+}
+
+message empty_object {}
+
+// ---------- Catalog ----------
+
+enum tier {
+  TIER_NONE = 0;
+  TIER_READER = 1;
+  TIER_WRITER = 2;
+}
+
+enum item {
+  ITEM_UNSPECIFIED = 0;
+  ITEM_READER_MONTH = 1;
+  ITEM_WRITER_MONTH = 2;
+  ITEM_PACK_S = 3;
+  ITEM_PACK_M = 4;
+  ITEM_PACK_L = 5;
+  ITEM_OPEN_BOOK = 6;
+  ITEM_OPEN_SHORT = 7;
+  ITEM_CLOSE_BOOK = 8;
+  ITEM_CLOSE_SHORT = 9;
+}
+
+enum story_kind {
+  KIND_UNSPECIFIED = 0;
+  KIND_BOOK = 1;
+  KIND_SHORT = 2;
+}
+
+// Why Shop asks Ink to mint. These numbers MUST match ink.mint_reason.
+// Shop is only allowed PURCHASE, MEMBERSHIP, STARTER and PROMO.
+enum ink_mint_reason {
+  INK_MINT_UNSPECIFIED = 0;
+  INK_MINT_PURCHASE = 1;
+  INK_MINT_MEMBERSHIP = 2;
+  INK_MINT_STARTER = 3;
+  INK_MINT_PROMO = 4;
+}
+
+// ---------- Stored records ----------
+
+message config {
+  bytes admin = 1 [(koinos.btype) = ADDRESS];
+  bool paused = 2;
+  bytes treasury = 3 [(koinos.btype) = ADDRESS];
+  bytes founder = 4 [(koinos.btype) = ADDRESS];
+  bytes ink = 5 [(koinos.btype) = ADDRESS];
+  bytes stories = 6 [(koinos.btype) = ADDRESS];
+  uint32 fee_bps = 7;
+  bool promo_enabled = 8;
+  uint64 next_campaign_id = 9 [jstype = JS_STRING];
+  uint64 writer_ink = 10 [jstype = JS_STRING];
+  uint64 pack_s_ink = 11 [jstype = JS_STRING];
+  uint64 pack_m_ink = 12 [jstype = JS_STRING];
+  uint64 pack_l_ink = 13 [jstype = JS_STRING];
+  uint64 starter_book = 14 [jstype = JS_STRING];
+  uint64 starter_short = 15 [jstype = JS_STRING];
+}
+
+message asset {
+  bool enabled = 1;
+  uint32 decimals = 2;
+  string symbol = 3;
+}
+
+message membership {
+  tier tier = 1;
+  uint64 paid_until = 2 [jstype = JS_STRING];
+  uint64 months_unclaimed = 3 [jstype = JS_STRING];
+  uint64 next_claim_at = 4 [jstype = JS_STRING];
+  // Locked when the Writer term starts. Later catalog edits do not
+  // change Ink already paid for. A new term, after this one ends, uses
+  // the catalog amount at that purchase.
+  uint64 ink_per_month = 5 [jstype = JS_STRING];
+}
+
+message campaign {
+  bytes code_hash = 1;
+  uint64 amount = 2 [jstype = JS_STRING];
+  uint64 budget_total = 3 [jstype = JS_STRING];
+  uint64 budget_used = 4 [jstype = JS_STRING];
+  uint64 daily_cap = 5 [jstype = JS_STRING];
+  uint64 used_today = 6 [jstype = JS_STRING];
+  uint64 day = 7 [jstype = JS_STRING];
+  uint64 starts_at = 8 [jstype = JS_STRING];
+  uint64 ends_at = 9 [jstype = JS_STRING];
+  bool enabled = 10;
+  bool single_use = 11;
+}
+
+// Wire-compatible with ink.mint_arguments. Shop sends this to Ink.
+// The name does not end in _arguments, so it is not a Shop entry point.
+message ink_mint_call {
+  bytes to = 1 [(koinos.btype) = ADDRESS];
+  uint64 value = 2 [jstype = JS_STRING];
+  uint32 reason = 3;
+  string memo = 4;
+}
+
+// ---------- Reads ----------
+
+// @description Admin, pause flag, payment addresses, fee, promo switch and Ink amounts
+// @read-only true
+// @result config
+message get_config_arguments {}
+
+// @description Accepted stablecoin: enabled flag, decimals and symbol
+// @read-only true
+// @result asset
+message get_asset_arguments {
+  bytes token = 1 [(koinos.btype) = ADDRESS];
+}
+
+// @description Price of one item in one token's base units (0 = not for sale)
+// @read-only true
+// @result uint64
+message get_price_arguments {
+  item item = 1;
+  bytes token = 2 [(koinos.btype) = ADDRESS];
+}
+
+// @description Membership record for an account
+// @read-only true
+// @result membership
+message get_membership_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+}
+
+// @description One promo campaign. campaign_id 0 is never a campaign.
+// @read-only true
+// @result campaign
+message get_campaign_arguments {
+  uint64 campaign_id = 1 [jstype = JS_STRING];
+}
+
+// @description Campaign id this wallet has claimed, or 0 if it never has.
+// Stories will read this for the trial-writing check.
+// @read-only true
+// @result uint64
+message get_promo_claimed_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+}
+
+// ---------- Payments ----------
+
+// @description Buy Reader or Writer membership for 1 to 24 months
+// @read-only false
+// @result empty_object
+message buy_membership_arguments {
+  bytes payer = 1 [(koinos.btype) = ADDRESS];
+  tier tier = 2;
+  uint32 months = 3;
+  bytes token = 4 [(koinos.btype) = ADDRESS];
+}
+
+// @description Writers claim one prepaid month of Ink
+// @read-only false
+// @result empty_object
+message claim_writer_ink_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+}
+
+// @description Writers buy an Ink pack
+// @read-only false
+// @result empty_object
+message buy_pack_arguments {
+  bytes payer = 1 [(koinos.btype) = ADDRESS];
+  item pack = 2;
+  bytes token = 3 [(koinos.btype) = ADDRESS];
+}
+
+// @description Stories contract collects an open fee and Shop mints starter Ink
+// @read-only false
+// @result empty_object
+message pay_open_fee_arguments {
+  bytes payer = 1 [(koinos.btype) = ADDRESS];
+  story_kind kind = 2;
+  bytes token = 3 [(koinos.btype) = ADDRESS];
+}
+
+// @description Stories contract collects a close fee. No Ink is minted.
+// @read-only false
+// @result empty_object
+message pay_close_fee_arguments {
+  bytes payer = 1 [(koinos.btype) = ADDRESS];
+  story_kind kind = 2;
+  bytes token = 3 [(koinos.btype) = ADDRESS];
+}
+
+// ---------- Promo ----------
+
+// @description Turn every promo campaign on or off
+// @read-only false
+// @result empty_object
+message set_promo_enabled_arguments {
+  bool enabled = 1;
+}
+
+// @description Create a promo campaign. Shared campaigns pass the code.
+// Single-use campaigns leave code empty and add codes afterwards.
+// @read-only false
+// @result uint64
+message create_campaign_arguments {
+  string code = 1;
+  uint64 amount = 2 [jstype = JS_STRING];
+  uint64 budget_total = 3 [jstype = JS_STRING];
+  uint64 daily_cap = 4 [jstype = JS_STRING];
+  uint64 starts_at = 5 [jstype = JS_STRING];
+  uint64 ends_at = 6 [jstype = JS_STRING];
+  bool single_use = 7;
+  bool enabled = 8;
+}
+
+// @description Enable or disable one campaign
+// @read-only false
+// @result empty_object
+message set_campaign_enabled_arguments {
+  uint64 campaign_id = 1 [jstype = JS_STRING];
+  bool enabled = 2;
+}
+
+// @description Change a campaign's budget, daily cap or end time
+// @read-only false
+// @result empty_object
+message set_campaign_limits_arguments {
+  uint64 campaign_id = 1 [jstype = JS_STRING];
+  uint64 budget_total = 2 [jstype = JS_STRING];
+  uint64 daily_cap = 3 [jstype = JS_STRING];
+  uint64 ends_at = 4 [jstype = JS_STRING];
+}
+
+// @description Add one-time codes to a single-use campaign (max 20 per call)
+// @read-only false
+// @result empty_object
+message add_single_use_codes_arguments {
+  uint64 campaign_id = 1 [jstype = JS_STRING];
+  repeated string codes = 2;
+}
+
+// @description Claim promo Ink with a code. One claim per wallet, ever.
+// @read-only false
+// @result empty_object
+message claim_promo_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  uint64 campaign_id = 2 [jstype = JS_STRING];
+  string code = 3;
+}
+
+// ---------- Admin ----------
+
+// @description Enable or disable a stablecoin and record its decimals and symbol
+// @read-only false
+// @result empty_object
+message set_asset_arguments {
+  bytes token = 1 [(koinos.btype) = ADDRESS];
+  bool enabled = 2;
+  uint32 decimals = 3;
+  string symbol = 4;
+}
+
+// @description Set one item's price in one token. 0 removes it.
+// @read-only false
+// @result empty_object
+message set_price_arguments {
+  item item = 1;
+  bytes token = 2 [(koinos.btype) = ADDRESS];
+  uint64 amount = 3 [jstype = JS_STRING];
+}
+
+// @description Payment and partner addresses. Ink and Stories may be empty until they exist.
+// @read-only false
+// @result empty_object
+message set_addresses_arguments {
+  bytes treasury = 1 [(koinos.btype) = ADDRESS];
+  bytes founder = 2 [(koinos.btype) = ADDRESS];
+  bytes ink = 3 [(koinos.btype) = ADDRESS];
+  bytes stories = 4 [(koinos.btype) = ADDRESS];
+}
+
+// @description Ink granted by Writer months, packs and story opens
+// @read-only false
+// @result empty_object
+message set_ink_amounts_arguments {
+  uint64 writer_month = 1 [jstype = JS_STRING];
+  uint64 pack_s = 2 [jstype = JS_STRING];
+  uint64 pack_m = 3 [jstype = JS_STRING];
+  uint64 pack_l = 4 [jstype = JS_STRING];
+  uint64 starter_book = 5 [jstype = JS_STRING];
+  uint64 starter_short = 6 [jstype = JS_STRING];
+}
+
+// @description Founder fee in basis points. 100 = 1%. Cannot exceed 500.
+// @read-only false
+// @result empty_object
+message set_fee_bps_arguments {
+  uint32 fee_bps = 1;
+}
+
+// @description Pause or unpause purchases, claims, promos and story fees
+// @read-only false
+// @result empty_object
+message set_paused_arguments {
+  bool paused = 1;
+}
+
+// @description Hand admin to a new address
+// @read-only false
+// @result empty_object
+message set_admin_arguments {
+  bytes new_admin = 1 [(koinos.btype) = ADDRESS];
+}
+
+// ---------- Events ----------
+
+message payment_event {
+  bytes payer = 1 [(koinos.btype) = ADDRESS];
+  bytes token = 2 [(koinos.btype) = ADDRESS];
+  item item = 3;
+  uint64 price = 4 [jstype = JS_STRING];
+  uint64 treasury_amount = 5 [jstype = JS_STRING];
+  uint64 founder_amount = 6 [jstype = JS_STRING];
+  bytes treasury = 7 [(koinos.btype) = ADDRESS];
+  bytes founder = 8 [(koinos.btype) = ADDRESS];
+  uint32 fee_bps = 9;
+  uint64 ink_amount = 10 [jstype = JS_STRING];
+  uint32 ink_reason = 11;
+}
+
+// Exact bytes Shop sent to another contract, so the split and the mint
+// can be checked against the call itself.
+message external_call_event {
+  bytes contract_id = 1 [(koinos.btype) = ADDRESS];
+  uint32 entry_point = 2;
+  bytes payload = 3;
+}
+
+message claim_event {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  uint64 amount = 2 [jstype = JS_STRING];
+  uint64 months_unclaimed = 3 [jstype = JS_STRING];
+  uint64 next_claim_at = 4 [jstype = JS_STRING];
+}
+
+message promo_claim_event {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  uint64 campaign_id = 2 [jstype = JS_STRING];
+  uint64 amount = 3 [jstype = JS_STRING];
+  string memo = 4;
+}
+
+message paused_event {
+  bool paused = 1;
+}
+
+message admin_changed_event {
+  bytes old_admin = 1 [(koinos.btype) = ADDRESS];
+  bytes new_admin = 2 [(koinos.btype) = ADDRESS];
+}
+
+message promo_enabled_event {
+  bool enabled = 1;
+}
+
+message campaign_event {
+  uint64 campaign_id = 1 [jstype = JS_STRING];
+  bool enabled = 2;
+  uint64 amount = 3 [jstype = JS_STRING];
+  uint64 budget_total = 4 [jstype = JS_STRING];
+  uint64 daily_cap = 5 [jstype = JS_STRING];
+  uint64 starts_at = 6 [jstype = JS_STRING];
+  uint64 ends_at = 7 [jstype = JS_STRING];
+  bool single_use = 8;
+}
