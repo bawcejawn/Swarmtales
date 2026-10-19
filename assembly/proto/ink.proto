@@ -1,0 +1,215 @@
+syntax = "proto3";
+
+// =====================================================================
+// Storyloom Ink — interface definition
+//
+// Ink is a NON-TRANSFERABLE writing allowance. 1 INK = 1 character.
+// There is deliberately NO transfer, approve, allowance or transfer_from.
+// Read-only function names follow the KCS-4 token standard so wallets
+// and explorers can display balances.
+//
+// This file describes every function the contract offers and the data
+// each one takes and returns. The Koinos toolkit reads it to generate
+// helper code and the ABI file.
+// =====================================================================
+
+package ink;
+
+import "koinos/options.proto";
+
+// ---------- Small shared wrapper types ----------
+
+message str {
+  string value = 1;
+}
+
+message uint32 {
+  uint32 value = 1;
+}
+
+message uint64 {
+  uint64 value = 1 [jstype = JS_STRING];
+}
+
+message boole {
+  bool value = 1;
+}
+
+message empty_object {}
+
+// ---------- Reasons (recorded in every mint/burn event) ----------
+
+// Why Ink was created. Each minter contract is only allowed specific reasons.
+enum mint_reason {
+  MINT_REASON_UNSPECIFIED = 0;
+  MINT_PURCHASE = 1;     // Ink pack bought in the Shop
+  MINT_MEMBERSHIP = 2;   // monthly Writer allotment claimed in the Shop
+  MINT_STARTER = 3;      // starter Ink for opening a book / short story
+  MINT_PROMO = 4;        // promo campaign claim (publicly marked)
+  MINT_REFUND = 5;       // re-credit after text was removed or shortened
+}
+
+// Why Ink was used up.
+enum burn_reason {
+  BURN_REASON_UNSPECIFIED = 0;
+  BURN_CONTRIBUTION = 1; // characters written into a story
+  BURN_OTHER = 2;        // reserved for future features
+}
+
+// ---------- Stored data ----------
+
+message config {
+  bytes admin = 1 [(koinos.btype) = ADDRESS];
+  bool paused = 2;
+}
+
+// ---------- Read-only functions (KCS-4 compatible names) ----------
+
+// @description Returns the token name
+// @read-only true
+// @result str
+message name_arguments {}
+
+// @description Returns the token symbol
+// @read-only true
+// @result str
+message symbol_arguments {}
+
+// @description Returns the number of decimals (always 0: 1 INK = 1 character)
+// @read-only true
+// @result uint32
+message decimals_arguments {}
+
+message info {
+  string name = 1;
+  string symbol = 2;
+  uint32 decimals = 3;
+  string description = 4;
+}
+
+// @description Returns name, symbol, decimals and description
+// @read-only true
+// @result info
+message get_info_arguments {}
+
+// @description Returns the total Ink in existence
+// @read-only true
+// @result uint64
+message total_supply_arguments {}
+
+// @description Returns the Ink balance of an account
+// @read-only true
+// @result uint64
+message balance_of_arguments {
+  bytes owner = 1 [(koinos.btype) = ADDRESS];
+}
+
+// @description Returns the mint reasons an account may use (bit mask; 0 = not a minter)
+// @read-only true
+// @result uint32
+message get_minter_reasons_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+}
+
+// @description Returns true if the account is an approved burner contract
+// @read-only true
+// @result boole
+message is_burner_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+}
+
+// @description Returns the admin address and paused flag
+// @read-only true
+// @result config
+message get_config_arguments {}
+
+// ---------- Mint / burn (only approved Storyloom contracts) ----------
+
+// @description Create Ink for an account. Caller must be an approved minter for this reason.
+// @read-only false
+// @result empty_object
+message mint_arguments {
+  bytes to = 1 [(koinos.btype) = ADDRESS];
+  uint64 value = 2 [jstype = JS_STRING];
+  mint_reason reason = 3;
+  string memo = 4; // short public note, e.g. "pack:M" or "campaign:3" (max 64 chars)
+}
+
+// @description Use up Ink. Caller must be an approved burner AND the owner must have signed.
+// @read-only false
+// @result empty_object
+message burn_arguments {
+  bytes from = 1 [(koinos.btype) = ADDRESS];
+  uint64 value = 2 [jstype = JS_STRING];
+  burn_reason reason = 3;
+  string memo = 4;
+}
+
+// ---------- Admin functions ----------
+
+// @description Set which mint reasons a contract may use. reasons_mask = 0 removes it.
+// @read-only false
+// @result empty_object
+message set_minter_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  uint32 reasons_mask = 2;
+}
+
+// @description Approve or remove a burner contract
+// @read-only false
+// @result empty_object
+message set_burner_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  bool allowed = 2;
+}
+
+// @description Pause or unpause all minting and burning (emergency switch)
+// @read-only false
+// @result empty_object
+message set_paused_arguments {
+  bool paused = 1;
+}
+
+// @description Hand admin rights to a new address (e.g. a hardware wallet)
+// @read-only false
+// @result empty_object
+message set_admin_arguments {
+  bytes new_admin = 1 [(koinos.btype) = ADDRESS];
+}
+
+// ---------- Events (public, visible on block explorers) ----------
+
+message mint_event {
+  bytes to = 1 [(koinos.btype) = ADDRESS];
+  uint64 value = 2 [jstype = JS_STRING];
+  mint_reason reason = 3;
+  string memo = 4;
+  bytes minter = 5 [(koinos.btype) = ADDRESS];
+}
+
+message burn_event {
+  bytes from = 1 [(koinos.btype) = ADDRESS];
+  uint64 value = 2 [jstype = JS_STRING];
+  burn_reason reason = 3;
+  string memo = 4;
+  bytes burner = 5 [(koinos.btype) = ADDRESS];
+}
+
+message minter_set_event {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  uint32 reasons_mask = 2;
+}
+
+message burner_set_event {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  bool allowed = 2;
+}
+
+message paused_event {
+  bool paused = 1;
+}
+
+message admin_changed_event {
+  bytes old_admin = 1 [(koinos.btype) = ADDRESS];
+  bytes new_admin = 2 [(koinos.btype) = ADDRESS];
+}
