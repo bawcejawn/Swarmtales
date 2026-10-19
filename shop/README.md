@@ -2,7 +2,7 @@
 
 This folder is the Shop contract. Ink, the writing allowance, lives in the parent folder. The contract code is still named Shop.
 
-The repository README explains what the Shop enforces, the mainnet vUSDT and vUSDC addresses, the starting prices, and how to get Koinos testnet KOIN without running a testnet node.
+The repository README explains what is built, what is only planned, how to build and test, and how to request testnet coins.
 
 From this folder:
 

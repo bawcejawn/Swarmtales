@@ -1,12 +1,12 @@
 // =====================================================================
-// Storyloom Ink — smart contract (AssemblyScript, Koinos SDK)
+// SwarmTales Ink — smart contract (AssemblyScript, Koinos SDK)
 //
 // WHAT THIS CONTRACT DOES
 //   - Keeps every account's Ink balance and the total supply.
-//   - Lets ONLY approved Storyloom contracts create Ink (mint), and only
+//   - Lets ONLY approved SwarmTales contracts create Ink (mint), and only
 //     for the reasons each one is allowed (e.g. the Stories contract may
 //     only mint REFUNDs).
-//   - Lets ONLY approved Storyloom contracts use up Ink (burn), and only
+//   - Lets ONLY approved SwarmTales contracts use up Ink (burn), and only
 //     when the owner signed the transaction.
 //   - Has NO transfer, approve or allowance functions. Ink can never be
 //     sent, sold or traded. It is a writing allowance with no cash value.
@@ -29,11 +29,11 @@ const BURNERS_SPACE_ID: u32 = 3;
 const CONFIG_SPACE_ID: u32 = 4;
 
 // Fixed token details.
-const NAME = "Storyloom Ink";
+const NAME = "SwarmTales Ink";
 const SYMBOL = "INK";
 const DECIMALS: u32 = 0; // 1 INK = 1 character, no fractions
 const DESCRIPTION =
-  "Non-transferable writing allowance for Storyloom. 1 INK = 1 character. No cash value. Creative use only.";
+  "Non-transferable writing allowance for SwarmTales. 1 INK = 1 character. No cash value. Creative use only.";
 
 const MAX_MEMO_LENGTH: i32 = 64;
 const ADDRESS_LENGTH: i32 = 25; // Koinos addresses are 25 bytes
@@ -138,7 +138,7 @@ export class Ink {
   }
 
   // ===================================================================
-  // Mint: create Ink (approved Storyloom contracts only)
+  // Mint: create Ink (approved SwarmTales contracts only)
   // ===================================================================
 
   mint(args: ink.mint_arguments): ink.empty_object {
@@ -193,7 +193,7 @@ export class Ink {
     const reasonNumber = <i32>args.reason;
     System.require(reasonNumber >= 1 && reasonNumber <= 2, "INK: invalid burn reason");
 
-    // Only an approved Storyloom contract may burn.
+    // Only an approved SwarmTales contract may burn.
     const caller = this.requireCaller("INK: burn must come from an approved contract");
     System.require(this.burners.get(caller)!.value, "INK: caller is not an approved burner");
 

@@ -1,5 +1,5 @@
 // =====================================================================
-// Storyloom Shop — smart contract (AssemblyScript, Koinos SDK)
+// SwarmTales Shop — smart contract (AssemblyScript, Koinos SDK)
 //
 // WHAT THIS CONTRACT DOES
 //   - Sells Reader and Writer memberships, and Ink packs for Writers.

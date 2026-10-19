@@ -1,7 +1,7 @@
 syntax = "proto3";
 
 // =====================================================================
-// Storyloom Shop — interface definition
+// SwarmTales Shop — interface definition
 //
 // The Shop sells memberships and Ink packs, collects story open/close
 // fees for the Stories contract, and runs promo-code Ink grants.

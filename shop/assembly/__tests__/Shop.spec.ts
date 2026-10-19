@@ -1,5 +1,5 @@
 // =====================================================================
-// Storyloom Shop — tests
+// SwarmTales Shop — tests
 //
 // These run in the Koinos mock VM on this computer. The mock does not
 // execute other contracts, so a stablecoin transfer is checked like this:

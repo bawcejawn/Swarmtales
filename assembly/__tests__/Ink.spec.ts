@@ -1,5 +1,5 @@
 // =====================================================================
-// Storyloom Ink — tests
+// SwarmTales Ink — tests
 //
 // These run in the Koinos "mock VM" on your own computer. No blockchain,
 // wallet or tokens are needed. Run with:  koinos-sdk-as-cli run-tests
@@ -81,7 +81,7 @@ describe("Ink: token details", () => {
 
   it("reports name, symbol, decimals and zero starting supply", () => {
     const c = new Ink();
-    expect(c.name(new ink.name_arguments()).value).toBe("Storyloom Ink");
+    expect(c.name(new ink.name_arguments()).value).toBe("SwarmTales Ink");
     expect(c.symbol(new ink.symbol_arguments()).value).toBe("INK");
     expect(c.decimals(new ink.decimals_arguments()).value).toBe(0);
     expect(c.total_supply(new ink.total_supply_arguments()).value).toBe(0);
@@ -96,11 +96,11 @@ describe("Ink: token details", () => {
 
   it("returns the public token description", () => {
     const info = new Ink().get_info(new ink.get_info_arguments());
-    expect(info.name).toBe("Storyloom Ink");
+    expect(info.name).toBe("SwarmTales Ink");
     expect(info.symbol).toBe("INK");
     expect(info.decimals).toBe(0);
     expect(info.description).toBe(
-      "Non-transferable writing allowance for Storyloom. 1 INK = 1 character. No cash value. Creative use only."
+      "Non-transferable writing allowance for SwarmTales. 1 INK = 1 character. No cash value. Creative use only."
     );
   });
 });
@@ -234,7 +234,7 @@ describe("Ink: burning", () => {
     }).toThrow();
   });
 
-  it("refuses a direct burn call with no Storyloom contract involved", () => {
+  it("refuses a direct burn call with no SwarmTales contract involved", () => {
     expect(() => {
       MockVM.setCaller(new chain.caller_data(new Uint8Array(0), chain.privilege.user_mode));
       MockVM.setAuthorities([

@@ -1,7 +1,7 @@
 syntax = "proto3";
 
 // =====================================================================
-// Storyloom Ink — interface definition
+// SwarmTales Ink — interface definition
 //
 // Ink is a NON-TRANSFERABLE writing allowance. 1 INK = 1 character.
 // There is deliberately NO transfer, approve, allowance or transfer_from.
@@ -123,7 +123,7 @@ message is_burner_arguments {
 // @result config
 message get_config_arguments {}
 
-// ---------- Mint / burn (only approved Storyloom contracts) ----------
+// ---------- Mint / burn (only approved SwarmTales contracts) ----------
 
 // @description Create Ink for an account. Caller must be an approved minter for this reason.
 // @read-only false
