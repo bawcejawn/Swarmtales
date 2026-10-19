@@ -49,11 +49,14 @@ enum mint_reason {
   MINT_REFUND = 5;       // re-credit after text was removed or shortened
 }
 
-// Why Ink was used up.
+// Why Ink was used up. Only contribution is valid.
+// 2 used to be BURN_OTHER. It is reserved so a later edit cannot reuse it.
+// A new way to spend Ink needs a new name and a new number, in an upgrade.
 enum burn_reason {
   BURN_REASON_UNSPECIFIED = 0;
   BURN_CONTRIBUTION = 1; // characters written into a story
-  BURN_OTHER = 2;        // reserved for future features
+  reserved 2;
+  reserved "BURN_OTHER";
 }
 
 // ---------- Stored data ----------

@@ -10,6 +10,9 @@
 //     when the owner signed the transaction.
 //   - Has NO transfer, approve or allowance functions. Ink can never be
 //     sent, sold or traded. It is a writing allowance with no cash value.
+//   - Has NO maximum supply. That is a decided rule, not a placeholder.
+//     Minting stops when the admin pauses, or when the amount would
+//     overflow a 64-bit total.
 //   - Publishes a public event for every mint, burn and admin change.
 //
 // WHAT THE ADMIN CAN DO
@@ -28,10 +31,10 @@ const MINTERS_SPACE_ID: u32 = 2;
 const BURNERS_SPACE_ID: u32 = 3;
 const CONFIG_SPACE_ID: u32 = 4;
 
-// Fixed token details.
+// Fixed token details. "SwarmTales Ink" is the final display name.
 const NAME = "SwarmTales Ink";
 const SYMBOL = "INK";
-const DECIMALS: u32 = 0; // 1 INK = 1 character, no fractions
+const DECIMALS: u32 = 0; // whole numbers only. Story text is not counted here.
 const DESCRIPTION =
   "Non-transferable writing allowance for SwarmTales. 1 INK = 1 character. No cash value. Creative use only.";
 
@@ -163,7 +166,7 @@ export class Ink {
     const reasonBit: u32 = (<u32>1) << (<u32>reasonNumber);
     System.require((allowedMask & reasonBit) != 0, "INK: caller is not allowed to mint for this reason");
 
-    // Update supply and balance (SafeMath stops overflow).
+    // Update supply and balance. There is no supply cap. SafeMath stops overflow.
     const supply = this.supply.get()!;
     supply.value = SafeMath.add(supply.value, args.value);
     this.supply.put(supply);
@@ -190,8 +193,9 @@ export class Ink {
     System.require(args.value > 0, "INK: amount must be greater than zero");
     const memo = this.memoText(args.memo);
 
+    // Only BURN_CONTRIBUTION (1). Reason 2 is reserved and must fail.
     const reasonNumber = <i32>args.reason;
-    System.require(reasonNumber >= 1 && reasonNumber <= 2, "INK: invalid burn reason");
+    System.require(reasonNumber == 1, "INK: invalid burn reason");
 
     // Only an approved SwarmTales contract may burn.
     const caller = this.requireCaller("INK: burn must come from an approved contract");

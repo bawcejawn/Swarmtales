@@ -472,11 +472,22 @@ describe("Ink: extra burn checks", () => {
     expect(balanceOf(ALICE)).toBe(1000);
   });
 
-  it("records a burn and can use up the whole balance", () => {
-    // BURN_OTHER is accepted today. The proto comment calls it reserved.
+  it("rejects burn reason 2, the retired BURN_OTHER value", () => {
     callAs(STORIES);
     authorize(ALICE);
-    new Ink().burn(new ink.burn_arguments(ALICE, 1000, ink.burn_reason.BURN_OTHER, "future"));
+    checkpoint();
+    expect(() => {
+      new Ink().burn(new ink.burn_arguments(ALICE, 1, <ink.burn_reason>2, ""));
+    }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("INK: invalid burn reason");
+    expect(balanceOf(ALICE)).toBe(1000);
+    expect(supply()).toBe(1000);
+  });
+
+  it("records a burn and can use up the whole balance", () => {
+    callAs(STORIES);
+    authorize(ALICE);
+    new Ink().burn(new ink.burn_arguments(ALICE, 1000, ink.burn_reason.BURN_CONTRIBUTION, "story:1"));
     expect(balanceOf(ALICE)).toBe(0);
     expect(supply()).toBe(0);
 
@@ -484,9 +495,9 @@ describe("Ink: extra burn checks", () => {
     const last = events[events.length - 1];
     expect(last.name).toBe("ink.burn_event");
     const evt = Protobuf.decode<ink.burn_event>(last.data!, ink.burn_event.decode);
-    expect(evt.reason).toBe(ink.burn_reason.BURN_OTHER);
+    expect(evt.reason).toBe(ink.burn_reason.BURN_CONTRIBUTION);
     expect(evt.value).toBe(1000);
-    expect(evt.memo).toBe("future");
+    expect(evt.memo).toBe("story:1");
     expect(Base58.encode(evt.burner!)).toBe(Base58.encode(STORIES));
     expect(Base58.encode(evt.from!)).toBe(Base58.encode(ALICE));
   });
