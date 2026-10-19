@@ -10,7 +10,7 @@ Two contracts exist in this repository and have passing tests: **Ink** and **Sho
 
 | Piece | Status |
 |---|---|
-| Ink, the non-transferable writing allowance | Built and tested (41 checks) |
+| Ink, the non-transferable writing allowance | Built and tested (42 checks) |
 | Shop, the cash register for memberships, packs, story fees, and promo codes | Built and tested (39 checks) |
 | A practice stablecoin inside this repo | Not included. On testnet, deploy the official Koinos token and point Shop at it |
 | Stories (the books themselves, trials, the 3-project limit, archive, refunds) | Planned |
@@ -24,7 +24,9 @@ The prices and rules in the next sections are the design Carl confirmed. Shop ca
 
 A reader pays for a month and can read. A reader does not receive Ink.
 
-A writer pays for a month and receives Ink. **1 INK = 1 character.** Ink is not money. It cannot be sent to someone else, sold, or traded. Spending it means a future Stories contract burns it when that person adds or edits text. That burn is not built yet.
+A writer pays for a month and receives Ink. The token a wallet shows is **SwarmTales Ink**. That name is final. Ink is not money. It cannot be sent to someone else, sold, or traded. Spending it means a future Stories contract burns it when that person adds or edits text. That burn is not built yet.
+
+Story text will be charged per UTF-16 code unit. A normal letter costs 1 Ink. A typical emoji costs 2 Ink, because it is stored as two code units. Some combined emoji are longer and cost more: a flag, or a family sequence, is several code units, not two. Stories does not exist yet, so this is the written rule for that contract, not code in Ink or Shop. Ink's own public note is a separate limit of 64 UTF-16 code units.
 
 Public stories are the ones any allowed writer can add to. Private books are invite-only. Both of those live in the planned Stories contract. Shop only collects the open and close fees when Stories asks it to.
 
@@ -121,7 +123,7 @@ Ink cannot be transferred. There is no transfer, approve, or allowance function 
 
 **Who can mint.** Only a contract the Ink admin has approved, and only for the reasons in its mask. The Shop mask is **30**, which is PURCHASE (1), MEMBERSHIP (2), STARTER (3), and PROMO (4). Stories, when it exists, should be approved for REFUND (5) only. A direct call from a wallet has no calling contract, so it cannot mint.
 
-**Who can burn.** An approved burner contract, and the Ink owner's signature on that same transaction. The admin cannot burn someone's Ink. Pause blocks mint and burn. It does not block the admin, so the admin can unpause.
+**Who can burn.** An approved burner contract, and the Ink owner's signature on that same transaction. The only valid reason is contribution (1), which is text added to a story. Reason 2 is reserved. A burn that uses it fails with `INK: invalid burn reason`. Shop does not burn. The admin cannot burn someone's Ink. Pause blocks mint and burn. It does not block the admin, so the admin can unpause. A future way to spend Ink has to add a new, clearly named reason in a contract upgrade. It cannot reuse 2.
 
 **Who can move the stablecoin.** Shop asks the token to transfer from the buyer to the treasury, then to the founder. The buyer must have approved Shop and must have signed. A stranger cannot spend a leftover approval. Shop has no function that sends funds anywhere else, and it refuses to set the treasury or the founder to the Shop contract itself.
 
@@ -202,7 +204,7 @@ yarn test
 
 `yarn build:debug` is `koinos-sdk-as-cli build-all debug 0 ink.proto`. The `0` is not a version. Leaving it out makes the tool print help and stop. `yarn install` runs `scripts/patch-protoc-stdin.js`, which keeps the code generators from crashing with `EAGAIN` on Node.js 20 and later.
 
-Success means `build/debug/contract.wasm` exists and the test report ends with **41 pass** and **0 fail**.
+Success means `build/debug/contract.wasm` exists and the test report ends with **42 pass** and **0 fail**.
 
 ### Shop
 
@@ -270,21 +272,26 @@ Do not point Shop at mainnet vUSDT while you are on a testnet. Those contracts a
 1. Ink. Done and tested.
 2. Shop. Done and tested.
 3. Testnet rehearsal. Not started. Needs faucet coins, two fresh contract wallets, and a practice KCS-4 token. Carl does the wallet steps.
-4. Stories. Not started. This is the contract that would enforce the trial, the 3-open limit, character ranges, private invites, the 60-day archive, and refunds.
+4. Stories. Not started. This is the contract that would enforce the trial, the 3-open limit, character ranges, private invites, the 60-day archive, refunds, and the UTF-16 Ink charge (a typical emoji costs 2).
 5. Website. Not started.
 6. Sponsor and Books NFT. Not started. They are not required for the first public story.
 7. An independent audit, then a mainnet upload. Not started.
 
 Nothing here has been audited. Nothing has been uploaded to testnet or mainnet by this repository's tooling.
 
-## Open decisions
+## Decisions
 
-These are still Carl's to make. The code was not changed to guess them.
+### Decided
 
-1. **Supply cap.** Ink has no maximum supply. Any approved minter can mint until someone pauses it.
-2. **`BURN_OTHER`.** Burn reason 2 is accepted as well as "contribution", as long as a burner contract is approved and the owner signed. It is reserved for a future feature and is not used by Shop.
-3. **SDK pin.** The contracts stay on `@koinos/sdk-as` 1.0.0 because that is what the official template installs. A newer SDK exists and was not adopted.
-4. **Emoji counting.** Ink's public note is limited to 64 UTF-16 code units, so one emoji can count as two toward that note. Story text is not counted here. When Stories is built, Carl still needs to decide whether an emoji in a story costs one Ink or more.
+1. **No maximum supply.** Ink stays uncapped. An approved minter can mint until the admin pauses, or until the amount would overflow a 64-bit total. There is no supply-cap setting to turn on later.
+2. **Display name.** Wallets show **SwarmTales Ink**. That name is final. The symbol stays `INK`.
+3. **Emoji cost, for the planned Stories contract.** Story text is charged per UTF-16 code unit. A typical emoji costs 2 Ink. Some combined emoji, such as flags or family sequences, are more than one emoji character and cost more than 2. This is a specification for Stories. Stories is not built, and Ink does not count story text.
+4. **License.** Apache License 2.0. The full text is in `LICENSE`, with copyright 2026 Carl Padavano. `package.json` and `shop/package.json` say `"license": "Apache-2.0"`.
+5. **`BURN_OTHER` is removed.** The only valid burn reason is contribution (1). Value 2 is reserved in the proto, including the old name, so it cannot be reused by accident. A later feature that spends Ink adds a new name and a new number, then the contract is upgraded.
+
+### Still open
+
+1. **SDK pin.** The contracts stay on `@koinos/sdk-as` 1.0.0 because that is what the official template installs. A newer SDK exists and was not adopted.
 
 Other choices already built, which Carl can still change before an upload by asking for a new version:
 
@@ -298,7 +305,15 @@ Other choices already built, which Carl can still change before an upload by ask
 
 ## License
 
-No license has been chosen. The `license` field in `package.json` and `shop/package.json` still says `MIT` because the Koinos project template wrote that. That is not a decision by Carl. Do not treat this repository as MIT, or as any other license, until Carl picks one and a `LICENSE` file is added.
+SwarmTales is licensed under the Apache License, Version 2.0. The full license is in `LICENSE`. Copyright 2026 Carl Padavano.
+
+```text
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+```
 
 ## Disclaimer
 
