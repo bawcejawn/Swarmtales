@@ -498,6 +498,43 @@ Set it back afterwards to the number you choose (for example `--cap 2000`).
 
 **Send back:** the transaction ids from 13b, 13c, 13d, 13f, and both `measure` tables.
 
+### 13h. Burn Ink with one real write (signed by the test user)
+
+After the mana table from 13g, this sends one `contribute` on testnet and burns Ink.
+`--user` must be the opener of `--story` (story 1 was opened by `$USER`). The default is
+100 units of plain text, built the same way as `measure`. A `--size` above the per-submission
+cap (4,000 here) or the space left in the story is lowered to fit. The command stops when the
+Ink balance is below that cost. Mainnet is refused. The dry run runs first; the write is sent
+only after you type `SEND`.
+
+```powershell
+node deploy/deploy.js test-write --user $USER --ink $INK --stories $STORIES --story 1
+```
+
+Same story, with a different sample. Use `--size` or `--text`. Leave `--emoji` off when you pass `--text`.
+
+```powershell
+node deploy/deploy.js test-write --user $USER --ink $INK --stories $STORIES --story 1 --size 500
+```
+
+```powershell
+node deploy/deploy.js test-write --user $USER --ink $INK --stories $STORIES --story 1 --emoji
+```
+
+```powershell
+node deploy/deploy.js test-write --user $USER --ink $INK --stories $STORIES --story 1 --text "The second line of the test story."
+```
+
+Then read the balance and the story:
+
+```powershell
+node deploy/deploy.js status --ink $INK --shop $SHOP --stories $STORIES --user $USER --story 1
+```
+
+**Expect:** the test user's Ink balance is lower by the units written, and story 1's used characters are higher by the same number.
+
+**Send back:** the transaction id, plus the Ink balance line and the story 1 line.
+
 ---
 
 ## If something goes wrong
@@ -508,6 +545,8 @@ Set it back afterwards to the number you choose (for example `--cap 2000`).
 | `Chain id mismatch` | The node is not the testnet. Nothing was signed. |
 | `already has a contract on this network` | That address already holds a contract. The script will not overwrite it. |
 | `Dry run failed` / `Dry run reverted` | The node rejected it. Nothing was sent. Send back the full message. |
+| `Ink balance is ... and this text costs` | The test user's Ink balance is below the cost of that write. Nothing was sent. Use a smaller `--size`, or buy or claim Ink first. |
+| `test-write is for testnet only` | This write command stays on testnet. |
 | `payer does not have the rc` / `no mana` | Top up that wallet from the faucet or from `18Mh...`, wait a minute, retry. |
 | `running scripts is disabled` | You typed `npx`; use `npx.cmd`. |
 | `The hidden key prompt needs a real terminal window` | Run it in a normal PowerShell window, not inside another program. |

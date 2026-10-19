@@ -52,6 +52,9 @@ const STORY_CATEGORIES = [
 // Text sizes `measure` dry-runs, in Ink (UTF-16 code units).
 const MEASURE_SIZES = [100, 500, 1000, 2000, 4000];
 
+// Default sample for `test-write` when --size and --text are both omitted.
+const DEFAULT_TEST_WRITE_SIZE = 100;
+
 // Story kinds and visibility from stories.proto (koilib needs numbers).
 const STORY_KIND = { BOOK: 1, SHORT: 2 };
 const STORY_VISIBILITY = { PUBLIC: 1, UNLISTED: 2, PRIVATE: 3 };
@@ -77,6 +80,131 @@ function measurementText(units, emoji) {
   if (out.endsWith(" ")) out = out.slice(0, -1) + "a";
   if (inkCost(out) !== n) fail("internal: measurement text has the wrong length");
   return out;
+}
+
+/** A non-negative whole number from a flag or a chain read. Never accepts blanks or decimals. */
+function asWhole(value, label) {
+  if (typeof value === "bigint") {
+    if (value < 0n) fail(label + " must be a whole number of 0 or more.");
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isInteger(value) || value < 0) fail(label + " must be a whole number of 0 or more.");
+    return BigInt(value);
+  }
+  if (typeof value !== "string") fail(label + " must be a whole number of 0 or more.");
+  const s = value.trim();
+  if (!/^(0|[1-9][0-9]*)$/.test(s)) fail(label + " must be a whole number of 0 or more.");
+  return BigInt(s);
+}
+
+/**
+ * Story id for `measure` and `test-write`. The opener of that story can
+ * write without the Writer-membership checks that apply to everyone else.
+ */
+function requireStoryId(value) {
+  if (value === undefined || value === null || value === true || !/^[1-9][0-9]*$/.test(String(value))) {
+    fail("Add --story <id> (a story you opened, so no membership check is needed).");
+  }
+  return String(value);
+}
+
+/** Same opener rule as `measure`: this wallet opened the story. */
+function assertStoryOpener(storyId, opener, user) {
+  if (opener !== user) {
+    fail("Story " + storyId + " was opened by " + (opener || "nobody") + ", not " + user + ". Use your own story.");
+  }
+}
+
+/**
+ * Plan the one `contribute` that `test-write` will send.
+ *
+ * `request` is { size, emoji, text } from the command flags.
+ * `limits` is { cap, maxChars, usedChars, balance } from the chain
+ * (whole numbers, as strings, numbers, or bigints).
+ *
+ * Generated text (no --text) defaults to 100 plain units and is lowered
+ * to the per-submission cap and the space left in the story. Custom text
+ * is refused when it does not fit; it is never shortened. A balance below
+ * the cost of the text that would be sent is refused. Nothing here signs
+ * or broadcasts.
+ *
+ * Returns { text, cost, requested, capped, cap, spaceLeft, balance, emoji, custom }.
+ * Costs are decimal strings.
+ */
+function planTestWrite(request, limits) {
+  const req = request || {};
+  const lim = limits || {};
+  if (lim.cap === undefined || lim.cap === null || lim.cap === "") fail("Could not read the per-submission cap. Nothing was sent.");
+  if (lim.maxChars === undefined || lim.maxChars === null || lim.maxChars === "") fail("Could not read this story's size. Nothing was sent.");
+  if (lim.balance === undefined || lim.balance === null || lim.balance === "") fail("Could not read the Ink balance. Nothing was sent.");
+
+  const cap = asWhole(lim.cap, "contribution cap");
+  const maxChars = asWhole(lim.maxChars, "story size");
+  const usedRaw = lim.usedChars === undefined || lim.usedChars === null || lim.usedChars === "" ? "0" : lim.usedChars;
+  const used = asWhole(usedRaw, "used characters");
+  const balance = asWhole(lim.balance, "Ink balance");
+  if (used > maxChars) fail("This story is already over its size. Nothing was sent.");
+  const space = maxChars - used;
+  if (cap < 1n) fail("The per-submission cap is 0. Nothing was sent.");
+
+  const hasText = req.text !== undefined && req.text !== null;
+  const hasSize = req.size !== undefined && req.size !== null;
+  if (hasText && req.text === true) fail("--text needs the words to write.");
+  if (hasText && typeof req.text !== "string") fail("--text needs the words to write.");
+  if (hasSize && hasText) fail("Use either --text or --size.");
+  if (hasText && req.emoji) fail("--emoji applies to the generated sample. Leave it off when you pass --text.");
+
+  let text;
+  let requested;
+  let capped = false;
+  const emoji = !hasText && !!req.emoji;
+
+  if (hasText) {
+    text = req.text;
+    if (text.length === 0) fail("The text is empty. Nothing was sent.");
+    requested = BigInt(inkCost(text));
+    if (requested > cap) {
+      fail("That text costs " + requested + " Ink, over the per-submission cap of " + cap + ". Nothing was sent.");
+    }
+    if (requested > space) {
+      fail("That text costs " + requested + " Ink, and this story has " + space + " left. Nothing was sent.");
+    }
+  } else {
+    if (hasSize && req.size === true) fail("--size needs a whole number of Ink units.");
+    const raw = hasSize ? asWhole(req.size, "--size") : BigInt(DEFAULT_TEST_WRITE_SIZE);
+    if (raw < 1n) fail("--size must be at least 1.");
+    if (space < 1n) fail("This story has no space left. Nothing was sent.");
+    let size = raw;
+    if (size > cap) {
+      size = cap;
+      capped = true;
+    }
+    if (size > space) {
+      size = space;
+      capped = true;
+    }
+    if (size > BigInt(Number.MAX_SAFE_INTEGER)) fail("That size is too large to build. Nothing was sent.");
+    text = measurementText(Number(size), emoji);
+    requested = raw;
+  }
+
+  const cost = BigInt(inkCost(text));
+  if (balance < cost) {
+    const note = capped ? " (size was lowered from " + requested + " to " + cost + ")" : "";
+    fail("Ink balance is " + balance + " and this text costs " + cost + note + ". Nothing was sent.");
+  }
+  return {
+    text,
+    cost: cost.toString(),
+    requested: requested.toString(),
+    capped,
+    cap: cap.toString(),
+    spaceLeft: space.toString(),
+    balance: balance.toString(),
+    emoji,
+    custom: hasText,
+  };
 }
 
 /**
@@ -327,10 +455,14 @@ module.exports = {
   STORIES_MINT_MASK,
   STORY_CATEGORIES,
   MEASURE_SIZES,
+  DEFAULT_TEST_WRITE_SIZE,
   STORY_KIND,
   STORY_VISIBILITY,
   inkCost,
   measurementText,
+  requireStoryId,
+  assertStoryOpener,
+  planTestWrite,
   shopAddressesForStories,
   NETWORKS,
   MAINNET_FLAG,
