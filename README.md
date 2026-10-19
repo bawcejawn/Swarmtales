@@ -286,7 +286,7 @@ Nothing here has been audited. Nothing has been uploaded to testnet or mainnet b
 1. **No maximum supply.** Ink stays uncapped. An approved minter can mint until the admin pauses, or until the amount would overflow a 64-bit total. There is no supply-cap setting to turn on later.
 2. **Display name.** Wallets show **SwarmTales Ink**. That name is final. The symbol stays `INK`.
 3. **Emoji cost, for the planned Stories contract.** Story text is charged per UTF-16 code unit. A typical emoji costs 2 Ink. Some combined emoji, such as flags or family sequences, are more than one emoji character and cost more than 2. This is a specification for Stories. Stories is not built, and Ink does not count story text.
-4. **License.** Apache License 2.0. The full text is in `LICENSE`, with copyright 2026 Carl Padavano. `package.json` and `shop/package.json` say `"license": "Apache-2.0"`.
+4. **License.** Changed on 19 October 2026. An earlier commit used the Apache License 2.0. That choice is withdrawn. The project is now all rights reserved. The notice is in `LICENSE`. `package.json` and `shop/package.json` say `"license": "UNLICENSED"`, so a package tool will not treat this as open source.
 5. **`BURN_OTHER` is removed.** The only valid burn reason is contribution (1). Value 2 is reserved in the proto, including the old name, so it cannot be reused by accident. A later feature that spends Ink adds a new name and a new number, then the contract is upgraded.
 
 ### Still open
@@ -305,15 +305,9 @@ Other choices already built, which Carl can still change before an upload by ask
 
 ## License
 
-SwarmTales is licensed under the Apache License, Version 2.0. The full license is in `LICENSE`. Copyright 2026 Carl Padavano.
+Copyright (c) 2026 Carl Padavano. All rights reserved.
 
-```text
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-```
+On 19 October 2026 this replaced an earlier Apache-2.0 choice. The full notice is in `LICENSE`. The source is public so people can read it and check it against contracts that are actually deployed. That is not permission to copy, modify, distribute, sublicense, deploy, or build on it without written permission from Carl Padavano. A GitHub fork, where GitHub's own terms allow one, does not add any other right. Libraries installed by Yarn keep their own licenses. Both `package.json` files say `"UNLICENSED"`.
 
 ## Disclaimer
 
