@@ -32,6 +32,10 @@ deploy/testnet.env
 uploads/
 agent-tools/
 
+# Static website. dist and the generated ABI are rebuilt by npm run build in web/.
+web/dist/
+web/src/generated/
+
 # as-pect compiler leftovers
 **/assembly/__tests__/*.map
 **/assembly/__tests__/*.wat

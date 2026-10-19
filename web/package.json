@@ -1,0 +1,30 @@
+{
+  "name": "swarmtales-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Static SwarmTales website. No server.",
+  "scripts": {
+    "abi": "node scripts/build-abi.mjs",
+    "prebuild": "node scripts/build-abi.mjs",
+    "build": "vite build",
+    "pretest": "node scripts/build-abi.mjs",
+    "test": "node --test",
+    "predev": "node scripts/build-abi.mjs",
+    "dev": "vite",
+    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "read-testnet": "node scripts/read-testnet.mjs"
+  },
+  "dependencies": {
+    "kondor-js": "1.3.0",
+    "koilib": "9.4.0",
+    "qrcode": "1.5.4"
+  },
+  "devDependencies": {
+    "protobufjs": "7.4.0",
+    "vite": "6.3.5"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
