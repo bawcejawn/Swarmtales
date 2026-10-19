@@ -17,6 +17,9 @@ coverage/
 # Local junk
 .DS_Store
 *.log
+
+# Your copy of the testnet addresses. The example file is committed.
+deploy/testnet.env
 uploads/
 agent-tools/
 

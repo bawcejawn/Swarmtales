@@ -1,6 +1,8 @@
-# Storyloom contracts
+# SwarmTales contracts
 
-This repository holds two Koinos smart contracts. They were written and tested on a computer. Nothing here is deployed, and the tests do not spend tokens.
+This repository holds two Koinos smart contracts for SwarmTales. They were written and tested on a computer. Nothing here is deployed, and the tests do not spend tokens.
+
+The contract folders stay `ink` and `shop`. The token a wallet would display is still named **Storyloom Ink**. That on-chain name was left as-is.
 
 | Contract | Folder | What it is |
 |---|---|---|
@@ -96,17 +98,39 @@ You do not need testnet tokens to build or to run the tests above. Those run in 
 
 When you do want testnet coins, do **not** add a testnet node next to your production nodes. A second node on the same machine competes for disk and memory, and a bad config can disturb the nodes you already run. Use a public testnet instead.
 
-**Harbinger** is the Koinos Group testnet described at [docs.koinos.io/developers/testnet](https://docs.koinos.io/developers/testnet/). Their docs say to request **tKOIN** in the Discord `#faucet` channel (under Developers) with:
+The admin and test wallet for these steps is `1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW`. It is written in `deploy/testnet.env.example`, which you can copy to `deploy/testnet.env` and edit. It is not written into either contract. On Koinos the upload address becomes the contract address, so do **not** upload Ink or Shop onto that wallet. Create a new wallet for Ink and another for Shop. Keep those seeds yourself.
+
+**Mana is not a separate coin, and there is no separate mana faucet.** Mana refills from the test KOIN sitting on the address that signs the transaction. The upload is signed by the new contract wallet, so that wallet is the one that needs the coins. This Shop does not sponsor Mana for buyers.
+
+### Free coins that were confirmed
+
+The Koinos Foundation testnet was answering on 19 October 2026. Health check: [testnet.koinosfoundation.org/health](https://testnet.koinosfoundation.org/health). JSON-RPC: `https://testnet.koinosfoundation.org/jsonrpc`. The chain id it returned that day was `EiAIKVvm6-V2qmsmUvPJy09vCCLbtn9lHFpwrJbcTIEWRQ==`. Read it again before you upload, because a reset changes it.
+
+You have to request the coins yourself. Nobody else can do it for this address.
+
+1. Open Telegram and start [t.me/KoinosTestnetFaucetBot](https://t.me/KoinosTestnetFaucetBot). Send `/start`.
+2. To put coins on the admin wallet, send this as its own message:
 
 ```text
-!faucet YOUR_KOINOS_ADDRESS
+/faucet 1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW
 ```
 
-The documented reply is a transfer of 100 tKOIN. Check with `!balance YOUR_KOINOS_ADDRESS`. Their example API is `https://api.harbinger.koinos.pro/jsonrpc` and it asks for an API key. Older guides also mention `https://harbinger-api.koinos.io`. Harbinger is sometimes reset, so read the chain id from the node you are actually using (`chain.get_chain_id`) instead of copying one from a blog. If the faucet bot does not answer, ask in the Koinos Discord or Telegram. This project did not request any tokens.
+The upload spends mana on the **contract** wallet, not on this admin wallet. The bot allows one claim per Telegram user per 24 hours, so the practical order is: claim to the new Ink address on day one and upload Ink, claim to the new Shop address the next day and upload Shop, then claim to `1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW` so the admin wallet can call `set_minter` and `set_addresses`. Each successful claim sends **100 vKOIN**. There is also a 24-hour cooldown per address, and a daily cap of **10,000 vKOIN**. Check with `/balance`. Source: [koinos/koinos-testnet](https://github.com/koinos/koinos-testnet/blob/main/docs/faucet.md).
 
-There is a **second, different** public testnet run by the Koinos Foundation. Its API is `https://testnet.koinosfoundation.org/jsonrpc` and its faucet is the Telegram bot [t.me/KoinosTestnetFaucetBot](https://t.me/KoinosTestnetFaucetBot). The command is `/faucet YOUR_KOINOS_ADDRESS`. Their README says that sends 100 vKOIN, with a 24-hour cooldown. Its chain id is not the Harbinger example, so confirm which network your wallet is pointed at before you request coins.
+3. If the bot does not reply, ask in the Koinos Telegram community: [t.me/koinos_community](https://t.me/koinos_community).
 
-**Mana is not a separate coin.** It refills from the KOIN (or tKOIN / vKOIN) balance. The faucet amount arrives with Mana. This Shop does not sponsor Mana for buyers.
+### The other faucet, on a different chain
+
+[Harbinger](https://docs.koinos.io/developers/testnet/) is the Koinos Group testnet. Its docs still say to join Discord at [discord.gg/gMGMADsmfk](https://discord.gg/gMGMADsmfk), open `#faucet` under Developers, and send:
+
+```text
+!faucet 1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW
+!balance 1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW
+```
+
+The documented reply is a transfer of 100 tKOIN. Those coins are Harbinger coins. They do not show up on the Foundation testnet, and Foundation vKOIN does not show up on Harbinger. On 19 October 2026, `https://api.harbinger.koinos.pro` and `https://harbinger-api.koinos.io` did not answer from this environment. If the Discord bot is silent, ask in that server. Do not run your own testnet node to get around it.
+
+`node deploy/prepare-testnet.js` builds both release files and prints the upload commands for the addresses in the env file. It does not connect to a wallet and it refuses to run if the env file contains a private key. The upload itself is still something you do in [Koinos CLI](https://docs.koinos.io/developers/cli/), with the contract wallet open.
 
 **Do not point the Shop at mainnet vUSDT on a testnet.** Those contracts are not on the test network, and you cannot mint them. Also do not deploy a homemade token from this repository. A correct Koinos token (the KCS-4 standard) checks allowances with a system call that this SDK version (1.0.0) does not include. A simplified token would be unsafe if a contract pulled from it.
 
@@ -114,7 +138,7 @@ For a practice stablecoin, deploy the official Koinos token contract, name it so
 
 ## Ink
 
-Ink is Storyloom's non-transferable writing allowance. **1 INK = 1 character.** It is not money: it cannot be transferred, sold, redeemed, or traded, and it is not an investment.
+Ink is SwarmTales' non-transferable writing allowance. **1 INK = 1 character.** It is not money: it cannot be transferred, sold, redeemed, or traded, and it is not an investment. The name stored in the contract is still `Storyloom Ink`.
 
 The Ink project was created with:
 
@@ -127,7 +151,7 @@ The tool only accepts a name made of lowercase letters, numbers, and underscores
 ### Rules the Ink contract enforces
 
 - **No transfers.** There is no transfer, approve, or allowance function.
-- **Only approved Storyloom contracts can create Ink**, and each only for the reasons it was given:
+- **Only approved contracts can create Ink**, and each only for the reasons it was given:
   - Shop: PURCHASE, MEMBERSHIP, STARTER, PROMO
   - Stories: REFUND only
 - **Nobody can mint by calling Ink directly**, including the admin. The call has to come from an approved contract.
@@ -221,11 +245,11 @@ These are recreated every build, in both folders. Do not edit them. They are not
 
 ## Before this is ever uploaded
 
-Do not upload these contracts yet. When that day comes, two details matter for **both** contracts:
+The prepare script does not upload. When you do, two details matter for **both** contracts:
 
 - Upload each one to an address whose private key you still have, and leave the "authorize contract calls" option **off**. Until you call `set_admin`, that address is the admin. A stranger cannot take it, because Koinos asks for a signature from that address. If you upload to an address you cannot sign for, or you turn the authorize option on, nobody can ever set the admin and the contract is stuck.
 - The first thing each admin should do is `set_admin` to a hardware wallet. On Ink, then approve the Shop for PURCHASE, MEMBERSHIP, STARTER, and PROMO (and Stories for REFUND only, when that contract exists). The Ink admin key can appoint minters, so treat it like a master key. On the Shop, then set the treasury, the founder, the Ink address, and the stablecoins and prices. The Shop admin cannot pull a payment back after the split, but they can change where the next payment goes.
 
 ## Creative-use notice
 
-Ink is a usage allowance for writing on Storyloom. It has no cash value, cannot be transferred, sold, redeemed, or traded, and is not an investment. Stablecoin payments are the only money in this design, and the 1% founder fee is meant to be shown to buyers before they pay.
+Ink is a usage allowance for writing on SwarmTales. It has no cash value, cannot be transferred, sold, redeemed, or traded, and is not an investment. Stablecoin payments are the only money in this design, and the 1% founder fee is meant to be shown to buyers before they pay. The on-chain token name is still `Storyloom Ink`.
