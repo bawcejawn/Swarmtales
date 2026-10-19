@@ -11,6 +11,7 @@
     "@typescript-eslint/parser": "^5.10.0",
     "eslint": "^8.7.0",
     "jest": "^28.1.0",
+    "koilib": "9.4.0",
     "local-koinos": "^0.0.5",
     "ts-jest": "^28.0.2",
     "ts-node": "^10.4.0",
@@ -22,6 +23,8 @@
     "lint": "eslint --max-warnings 0 --ext ts \"assembly/**/*.ts\"",
     "build:debug": "koinos-sdk-as-cli build-all debug 0 ink.proto",
     "build:release": "koinos-sdk-as-cli build-all release 0 ink.proto",
-    "test": "koinos-sdk-as-cli run-tests"
+    "test": "koinos-sdk-as-cli run-tests",
+    "test:deploy": "node --test deploy/__tests__/lib.test.js",
+    "deploy": "node deploy/deploy.js"
   }
 }
