@@ -36,6 +36,10 @@
  *       (testnet: approve the Shop for the Short Story open price, then open a Short Story)
  *   node deploy/deploy.js measure --user <addr> --ink <addr> --stories <addr> --story <id> [--emoji] [--sizes 100,500,1000,2000,4000]
  *       (dry runs only: mana for contributions of each size; nothing is ever sent)
+ *   node deploy/deploy.js test-write --user <addr> --ink <addr> --stories <addr> --story <id> [--size 100] [--emoji] [--text "..."]
+ *       (testnet only: one contribute from the story opener; dry run, then SEND. Burns Ink.
+ *        --user must be the opener. Default is 100 units of plain text. Size is lowered to the
+ *        per-submission cap and the space left. Stops if the Ink balance is too low.)
  *   node deploy/deploy.js stories-limits --admin <addr> --stories <addr> --cap <100-4000>
  * Common flags: --network testnet|mainnet  --rpc <https url>
  */
@@ -628,14 +632,13 @@ async function cmdMeasure(args) {
   const user = lib.requireAddress(f.user, "user");
   const ink = lib.requireAddress(f.ink, "ink");
   const stories = lib.requireAddress(f.stories, "stories");
-  if (!f.story || !/^[1-9][0-9]*$/.test(String(f.story))) lib.fail("Add --story <id> (a story you opened, so no membership check is needed).");
-  const storyId = String(f.story);
+  const storyId = lib.requireStoryId(f.story);
   const sizes = typeof f.sizes === "string" ? f.sizes.split(",").map((x) => Number(x.trim())) : lib.MEASURE_SIZES;
   const emoji = f.emoji === true;
   const { net, provider } = await connect(f);
   const cfg = await readOnly(provider, "stories", stories, "get_config");
   const st = await readOnly(provider, "stories", stories, "get_story", { story_id: storyId });
-  if (st.opener !== user) lib.fail("Story " + storyId + " was opened by " + (st.opener || "nobody") + ", not " + user + ". Use your own story.");
+  lib.assertStoryOpener(storyId, st.opener, user);
   const bal = await readOnly(provider, "ink", ink, "balance_of", { owner: user });
   const cap = Number(cfg.contribution_cap || 2000);
   const left = BigInt(st.max_chars || "0") - BigInt(st.used_chars || "0");
@@ -676,6 +679,59 @@ async function cmdMeasure(args) {
   }
   console.log("");
   console.log("Send back: this whole table.");
+}
+
+/** Testnet only. One contribute from the story opener, dry run, then SEND. Burns Ink. */
+async function cmdTestWrite(args) {
+  const f = args.flags;
+  const user = lib.requireAddress(f.user, "user");
+  const ink = lib.requireAddress(f.ink, "ink");
+  const stories = lib.requireAddress(f.stories, "stories");
+  const storyId = lib.requireStoryId(f.story);
+  if (lib.resolveNetwork(f).mainnet) lib.fail("test-write is for testnet only.");
+  const { net, provider } = await connect(f);
+
+  const cfg = await readOnly(provider, "stories", stories, "get_config");
+  const st = await readOnly(provider, "stories", stories, "get_story", { story_id: storyId });
+  lib.assertStoryOpener(storyId, st.opener, user);
+  const bal = await readOnly(provider, "ink", ink, "balance_of", { owner: user });
+  const plan = lib.planTestWrite(
+    { size: f.size, emoji: f.emoji === true, text: f.text },
+    {
+      cap: cfg.contribution_cap,
+      maxChars: st.max_chars,
+      usedChars: st.used_chars || "0",
+      balance: bal.value,
+    }
+  );
+
+  const kind = plan.custom ? "the text you supplied" : (plan.emoji ? "sample text with emoji" : "plain sample text");
+  const cappedNote = plan.capped
+    ? " Requested " + plan.requested + "; lowered to " + plan.cost + " (per-submission cap " + plan.cap + ", space left " + plan.spaceLeft + ")."
+    : "";
+  console.log("");
+  console.log("Story " + storyId + " opener matches " + user + ".");
+  console.log("Ink balance: " + plan.balance + "    this write: " + plan.cost + "    cap: " + plan.cap + "    space left: " + plan.spaceLeft);
+
+  const signer = await getSigner(provider, user, "the test user wallet");
+  const { Contract } = koilib();
+  const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  const op = await storiesC.encodeOperation({
+    name: "contribute",
+    args: {
+      author: user,
+      story_id: storyId,
+      text: plan.text,
+      starts_chapter: false,
+      ai_assisted: false,
+      expected_ink: plan.cost,
+    },
+  });
+  const txId = await dryRunThenSend(
+    signer, provider, net, [op],
+    "stories.contribute on story " + storyId + ": burn " + plan.cost + " Ink (" + kind + ")." + cappedNote
+  );
+  console.log("Send back: the transaction id (" + txId + "). Then run status with --user and --story.");
 }
 
 async function cmdStoriesLimits(args) {
@@ -790,6 +846,8 @@ async function main() {
       return cmdTestOpen(args);
     case "measure":
       return cmdMeasure(args);
+    case "test-write":
+      return cmdTestWrite(args);
     case "stories-limits":
       return cmdStoriesLimits(args);
     default: {

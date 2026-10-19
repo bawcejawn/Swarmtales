@@ -222,6 +222,144 @@ test("shop.set_addresses arguments keep the on-chain treasury and founder", () =
   lib.shopAddressesForStories(Object.assign({ stories }, onChain), { ink: onChain.ink, stories });
 });
 
+test("test-write flags parse, including size, emoji and text", () => {
+  const a = lib.parseArgs([
+    "test-write",
+    "--user", ADDR_A,
+    "--ink", "195trftAvPnqeoPmHeGmxtwNYVUVdghm5x",
+    "--stories", "1JHakWJRXpAExjEuBik1posc8PXYYpugeN",
+    "--story", "1",
+    "--size", "100",
+    "--emoji",
+  ]);
+  assert.strictEqual(a.command, "test-write");
+  assert.strictEqual(a.flags.user, ADDR_A);
+  assert.strictEqual(a.flags.ink, "195trftAvPnqeoPmHeGmxtwNYVUVdghm5x");
+  assert.strictEqual(a.flags.stories, "1JHakWJRXpAExjEuBik1posc8PXYYpugeN");
+  assert.strictEqual(a.flags.story, "1");
+  assert.strictEqual(a.flags.size, "100");
+  assert.strictEqual(a.flags.emoji, true);
+  const custom = lib.parseArgs(["test-write", "--text", "The second line of the test story."]);
+  assert.strictEqual(custom.flags.text, "The second line of the test story.");
+  assert.strictEqual(custom.flags.size, undefined);
+});
+
+test("story id and opener checks match the measure rule", () => {
+  assert.strictEqual(lib.requireStoryId("1"), "1");
+  assert.strictEqual(lib.requireStoryId(12), "12");
+  assert.throws(() => lib.requireStoryId(undefined), /--story/);
+  assert.throws(() => lib.requireStoryId("0"), /--story/);
+  assert.throws(() => lib.requireStoryId("01"), /--story/);
+  assert.doesNotThrow(() => lib.assertStoryOpener("1", ADDR_A, ADDR_A));
+  assert.throws(() => lib.assertStoryOpener("1", ADDR_B, ADDR_A), /opened by/);
+  assert.throws(() => lib.assertStoryOpener("1", "", ADDR_A), /nobody/);
+});
+
+const LIVE_WRITE = { cap: 4000, maxChars: "10000", usedChars: "42", balance: "10000" };
+
+test("test-write defaults to 100 plain units inside the cap and the space left", () => {
+  const plan = lib.planTestWrite({}, LIVE_WRITE);
+  assert.strictEqual(plan.cost, "100");
+  assert.strictEqual(plan.requested, "100");
+  assert.strictEqual(plan.capped, false);
+  assert.strictEqual(plan.custom, false);
+  assert.strictEqual(plan.emoji, false);
+  assert.strictEqual(plan.text, lib.measurementText(100, false));
+  assert.strictEqual(plan.spaceLeft, "9958");
+  assert.strictEqual(lib.DEFAULT_TEST_WRITE_SIZE, 100);
+});
+
+test("test-write caps generated size to the contribution cap and the space left", () => {
+  const byCap = lib.planTestWrite({ size: "9000" }, LIVE_WRITE);
+  assert.strictEqual(byCap.cost, "4000");
+  assert.strictEqual(byCap.capped, true);
+  assert.strictEqual(byCap.text, lib.measurementText(4000, false));
+
+  const bySpace = lib.planTestWrite({ size: 500, emoji: true }, { cap: 4000, maxChars: "10000", usedChars: "9950", balance: "10000" });
+  assert.strictEqual(bySpace.cost, "50");
+  assert.strictEqual(bySpace.spaceLeft, "50");
+  assert.strictEqual(bySpace.capped, true);
+  assert.strictEqual(bySpace.emoji, true);
+  assert.strictEqual(bySpace.text, lib.measurementText(50, true));
+  assert.ok(bySpace.text.includes("\uD83D\uDE00"));
+});
+
+test("test-write refuses a low Ink balance and a story with no room", () => {
+  assert.throws(
+    () => lib.planTestWrite({ size: "100" }, { cap: 4000, maxChars: "10000", usedChars: "0", balance: "99" }),
+    /Ink balance is 99 and this text costs 100/
+  );
+  assert.throws(
+    () => lib.planTestWrite({ size: "500" }, { cap: 4000, maxChars: "10000", usedChars: "9950", balance: "40" }),
+    /lowered from 500 to 50/
+  );
+  assert.throws(
+    () => lib.planTestWrite({}, { cap: 4000, maxChars: "10000", usedChars: "10000", balance: "10000" }),
+    /no space left/
+  );
+  assert.throws(() => lib.planTestWrite({}, { cap: 0, maxChars: "10000", usedChars: "0", balance: "100" }), /cap is 0/);
+});
+
+test("test-write custom text is sent whole or refused", () => {
+  const text = "The second line of the test story.";
+  const plan = lib.planTestWrite({ text }, LIVE_WRITE);
+  assert.strictEqual(plan.custom, true);
+  assert.strictEqual(plan.text, text);
+  assert.strictEqual(plan.cost, String(text.length));
+  assert.strictEqual(plan.capped, false);
+  assert.throws(() => lib.planTestWrite({ text, size: "100" }, LIVE_WRITE), /either --text or --size/);
+  assert.throws(() => lib.planTestWrite({ text, emoji: true }, LIVE_WRITE), /--emoji/);
+  assert.throws(() => lib.planTestWrite({ text: "" }, LIVE_WRITE), /empty/);
+  const tooLong = "a".repeat(4001);
+  assert.throws(() => lib.planTestWrite({ text: tooLong }, LIVE_WRITE), /per-submission cap of 4000/);
+  assert.throws(
+    () => lib.planTestWrite({ text: "a".repeat(60) }, { cap: 4000, maxChars: "10000", usedChars: "9950", balance: "10000" }),
+    /has 50 left/
+  );
+  assert.throws(
+    () => lib.planTestWrite({ text: "hello" }, { cap: 4000, maxChars: "10000", usedChars: "0", balance: "4" }),
+    /Ink balance is 4 and this text costs 5/
+  );
+});
+
+test("test-write refuses a missing chain read before any text is chosen", () => {
+  assert.throws(() => lib.planTestWrite({}, { maxChars: "10000", balance: "1" }), /per-submission cap/);
+  assert.throws(() => lib.planTestWrite({}, { cap: 4000, balance: "1" }), /story's size/);
+  assert.throws(() => lib.planTestWrite({}, { cap: 4000, maxChars: "10000" }), /Ink balance/);
+  assert.throws(() => lib.planTestWrite({ size: "nope" }, LIVE_WRITE), /--size/);
+});
+
+test("deploy help documents test-write as testnet only", () => {
+  const fs = require("fs");
+  const path = require("path");
+  const src = fs.readFileSync(path.join(__dirname, "..", "deploy.js"), "utf8");
+  assert.match(src, /test-write --user <addr> --ink <addr> --stories <addr> --story <id>/);
+  assert.match(src, /test-write is for testnet only/);
+  assert.match(src, /case "test-write"/);
+});
+
+test("test-write stops before any network call when arguments or the network are wrong", () => {
+  const { spawnSync } = require("child_process");
+  const path = require("path");
+  const script = path.join(__dirname, "..", "deploy.js");
+  const run = (args) => spawnSync(process.execPath, [script, ...args], { encoding: "utf8" });
+  const missing = run(["test-write"]);
+  assert.notStrictEqual(missing.status, 0);
+  assert.match(missing.stderr, /Missing user/);
+  const mainnet = run([
+    "test-write",
+    "--user", ADDR_A,
+    "--ink", "195trftAvPnqeoPmHeGmxtwNYVUVdghm5x",
+    "--stories", "1JHakWJRXpAExjEuBik1posc8PXYYpugeN",
+    "--story", "1",
+    "--network", "mainnet",
+    "--i-understand-this-is-mainnet",
+  ]);
+  assert.notStrictEqual(mainnet.status, 0);
+  assert.match(mainnet.stderr, /test-write is for testnet only/);
+  assert.doesNotMatch(mainnet.stdout + mainnet.stderr, /Chain id|Node:/);
+});
+
 test("shop.set_addresses arguments refuse anything that does not match the chain", () => {
   const onChain = {
     treasury: "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6",
