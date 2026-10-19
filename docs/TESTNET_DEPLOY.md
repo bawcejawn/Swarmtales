@@ -364,7 +364,7 @@ ones such as ⭐ cost 1, skin tones and flags such as 👍🏽 and 🇺🇸 cost
 👨‍👩‍👧 costs 8. Stories counts this itself and refuses the text if the website's number
 disagrees, so nobody is charged a surprise amount.
 
-The steps below are in **section 13**. They need a new wallet for the Stories contract.
+The steps below are in **section 13**. The Stories contract is already on testnet at `1JHakWJRXpAExjEuBik1posc8PXYYpugeN`.
 
 ---
 
@@ -381,10 +381,9 @@ These are the addresses in use on testnet now (19 October 2026):
 | Shop (already uploaded) | `1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth` |
 | Admin, treasury and founder | `18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6` |
 | Test user | `12SVw65QpMjFo9fnc651V7LhXKqVLg15Ww` |
-| Stories | **a new wallet you create** in your wallet app. Write its recovery phrase on paper first. Send it about 100 tKOIN for the upload's mana. |
+| Stories | `1JHakWJRXpAExjEuBik1posc8PXYYpugeN` |
 
-Set them once in the PowerShell window (public addresses only, never a key). Replace
-`<StoriesWallet>` with the new wallet's address:
+Set them once in the PowerShell window (public addresses only, never a key):
 
 ```powershell
 $INK = "195trftAvPnqeoPmHeGmxtwNYVUVdghm5x"
@@ -403,7 +402,7 @@ $USER = "12SVw65QpMjFo9fnc651V7LhXKqVLg15Ww"
 ```
 
 ```powershell
-$STORIES = "<StoriesWallet>"
+$STORIES = "1JHakWJRXpAExjEuBik1posc8PXYYpugeN"
 ```
 
 ### 13a. Build and test Stories
@@ -428,7 +427,7 @@ npx.cmd yarn@1.22.22 test
 cd ..
 ```
 
-**Expect:** `[Summary]: 61 pass, 0 fail`, and `stories\build\release\contract.wasm` is 100832 bytes.
+**Expect:** `[Summary]: 86 pass, 0 fail`, and `stories\build\release\contract.wasm` is 100832 bytes.
 
 ### 13b. Upload Stories (signed by the Stories wallet)
 
@@ -484,8 +483,12 @@ node deploy/deploy.js measure --user $USER --ink $INK --stories $STORIES --story
 ```
 
 This prints the mana for 100, 500, 1000, 2000 and 4000-character contributions. Sizes above the
-current cap (2,000) show as "skipped". To measure 4,000 too, the admin raises the cap first, then
-you run `measure` again:
+current cap show as "skipped".
+
+After the 19 October 2026 mana measure, the live testnet `contribution_cap` was left at **4000**.
+A plain 4,000-character contribution was about 0.5006 mana, and the same length in emoji was about 0.5779 mana.
+
+An admin can change the cap again:
 
 ```powershell
 node deploy/deploy.js stories-limits --admin $ADMIN --stories $STORIES --cap 4000
