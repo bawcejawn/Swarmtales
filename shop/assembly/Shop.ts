@@ -722,6 +722,11 @@ export class Shop {
     );
   }
 
+  // Field 1, wire type 0, value 0: the protobuf encoding of `bool value = false`.
+  private transferResultIsFalse(raw: Uint8Array): bool {
+    return raw.length >= 2 && raw[0] == 8 && raw[1] == 0;
+  }
+
   private transferToken(assetId: Uint8Array, from: Uint8Array, to: Uint8Array, amount: u64): void {
     const args = new token.transfer_arguments(from, to, amount);
     const payload = Protobuf.encode(args, token.transfer_arguments.encode);
@@ -745,6 +750,14 @@ export class Shop {
   ): void {
     const callRes = System.call(contractId, entryPoint, payload);
     System.require(callRes.code == 0, message);
+    // Some tokens return exit code 0 and a protobuf bool of false when they
+    // refuse the transfer. That must not count as a payment. An empty result
+    // still counts as success: tokens built with SDK 1.0.0 encode
+    // transfer_result as empty bytes.
+    if (entryPoint == TOKEN_TRANSFER_ENTRY) {
+      const raw = callRes.res.object;
+      if (raw != null && this.transferResultIsFalse(raw!)) System.require(false, message);
+    }
     const event = new shop.external_call_event(contractId, entryPoint, payload);
     System.event(
       "shop.external_call_event",

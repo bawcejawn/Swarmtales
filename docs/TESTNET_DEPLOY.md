@@ -11,7 +11,7 @@ Everything here is free. Testnet coins (tKOIN) have no value.
 | Thing | How to check | If missing |
 |---|---|---|
 | Git for Windows | `git --version` prints a version | Install from https://git-scm.com/download/win (defaults are fine) |
-| Node.js 22 LTS | `node -v` prints `v22.x` | Install the 22 LTS from https://nodejs.org (tested with v22; v20 also works) |
+| Node.js 22 LTS | `node -v` prints `v22.x` (v20 and v24 also work) | Install the 22 LTS from https://nodejs.org. Node 24 has been seen working for install, build, and test. |
 | Four testnet wallets | You have the addresses | See "Wallets" below |
 
 Open **PowerShell** (Start menu, type PowerShell). Every command below is typed or
@@ -94,37 +94,87 @@ a yarn lock file, so this is the same idea as `npm ci`.)
 
 **Expect:** each ends with `Done in ...s`. Warnings about "unmet peer dependency" are normal.
 
-## Step 3. Run the tests (folder: `C:\swarmtales`)
+## Step 3. Build both contracts (folder: `C:\swarmtales`)
+
+Build **before** the tests. The tests import generated files under `assembly/proto/*.ts`, and those files do not exist until `build:release` has run. Testing first fails with `File 'assembly/proto/ink.ts' not found`.
+
+Paste **one line at a time**. After each line, read the prompt before you paste the next one. It must say `PS C:\swarmtales>` when the note below says you are in the Ink folder. After `cd shop` it says `PS C:\swarmtales\shop>`. If a later line is meant for `C:\swarmtales` and the prompt still shows `\shop>`, run `cd ..` and check again.
+
+Ink, from `C:\swarmtales`:
 
 ```powershell
 cd C:\swarmtales
-npx.cmd yarn@1.22.22 test
-npx.cmd yarn@1.22.22 test:deploy
+```
+
+```powershell
+npx.cmd yarn@1.22.22 build:release
+```
+
+Shop, from `C:\swarmtales\shop`:
+
+```powershell
 cd shop
+```
+
+```powershell
+npx.cmd yarn@1.22.22 build:release
+```
+
+Back to `C:\swarmtales` (prompt must show `PS C:\swarmtales>`):
+
+```powershell
+cd ..
+```
+
+```powershell
+Get-Item build\release\contract.wasm, shop\build\release\contract.wasm | Select-Object FullName, Length
+```
+
+**Expect:** two files. Ink is 38420 bytes. Shop is 65086 bytes.
+**Send back:** the two lengths.
+
+## Step 4. Run the tests (folder: `C:\swarmtales`)
+
+Same rule as Step 3: paste **one line at a time**, and check the prompt. Ink and the deploy script run from `PS C:\swarmtales>`. Shop tests run from `PS C:\swarmtales\shop>`.
+
+Ink:
+
+```powershell
+cd C:\swarmtales
+```
+
+```powershell
 npx.cmd yarn@1.22.22 test
+```
+
+Deploy script (still in `C:\swarmtales`):
+
+```powershell
+npx.cmd yarn@1.22.22 test:deploy
+```
+
+Shop:
+
+```powershell
+cd shop
+```
+
+```powershell
+npx.cmd yarn@1.22.22 test
+```
+
+Back to `C:\swarmtales`:
+
+```powershell
 cd ..
 ```
 
 **Expect:**
-- Ink: `[Summary]: 42 pass, 0 fail`
+- Ink: `[Summary]: 48 pass, 0 fail`
 - Deploy script: `# pass 19` and `# fail 0`
-- Shop: `[Summary]: 39 pass, 0 fail`
+- Shop: `[Summary]: 51 pass, 0 fail`
 
 **Send back:** the three pass/fail lines. Stop here if anything fails.
-
-## Step 4. Build both contracts (folder: `C:\swarmtales`)
-
-```powershell
-cd C:\swarmtales
-npx.cmd yarn@1.22.22 build:release
-cd shop
-npx.cmd yarn@1.22.22 build:release
-cd ..
-Get-Item build\release\contract.wasm, shop\build\release\contract.wasm | Select-Object FullName, Length
-```
-
-**Expect:** two files. Ink is about 38 KB (38420 bytes), Shop about 65 KB (64982 bytes).
-**Send back:** the two lengths.
 
 ## Step 5. Check the network and your wallets (no key needed)
 

@@ -615,3 +615,131 @@ describe("Ink: extra admin checks", () => {
     expect(new Ink().get_config(new ink.get_config_arguments()).paused).toBe(true);
   });
 });
+
+// The failing mint inside expect() cannot see a local, so it reads this.
+let deniedReason: i32 = 1;
+
+function mintDenied(): void {
+  callAs(SHOP);
+  new Ink().mint(new ink.mint_arguments(ALICE, 1, <ink.mint_reason>deniedReason, ""));
+}
+
+function cAdmin(): string {
+  return Base58.encode(new Ink().get_config(new ink.get_config_arguments()).admin!);
+}
+
+describe("Ink: null reads, masks, and overflow", () => {
+  beforeEach(() => {
+    MockVM.reset();
+    MockVM.setContractId(CONTRACT_ID);
+  });
+
+  it("treats a missing address as an empty account", () => {
+    const c = new Ink();
+    expect(c.balance_of(new ink.balance_of_arguments(null)).value).toBe(0);
+    expect(c.get_minter_reasons(new ink.get_minter_reasons_arguments(null)).value).toBe(0);
+    expect(c.is_burner(new ink.is_burner_arguments(null)).value).toBe(false);
+    expect(c.balance_of(new ink.balance_of_arguments(new Uint8Array(0))).value).toBe(0);
+    expect(c.get_minter_reasons(new ink.get_minter_reasons_arguments(new Uint8Array(0))).value).toBe(0);
+    expect(c.is_burner(new ink.is_burner_arguments(new Uint8Array(0))).value).toBe(false);
+  });
+
+  it("refuses every admin method when the caller is not the admin", () => {
+    checkpoint();
+    authorize(MALLORY);
+    expect(() => {
+      new Ink().set_minter(new ink.set_minter_arguments(SHOP, SHOP_REASONS));
+    }).toThrow();
+    expect(() => {
+      new Ink().set_burner(new ink.set_burner_arguments(STORIES, true));
+    }).toThrow();
+    expect(() => {
+      new Ink().set_paused(new ink.set_paused_arguments(true));
+    }).toThrow();
+    expect(() => {
+      new Ink().set_admin(new ink.set_admin_arguments(MALLORY));
+    }).toThrow();
+    expect(cAdmin()).toBe(Base58.encode(CONTRACT_ID));
+    expect(new Ink().get_minter_reasons(new ink.get_minter_reasons_arguments(SHOP)).value).toBe(0);
+    expect(new Ink().is_burner(new ink.is_burner_arguments(STORIES)).value).toBe(false);
+    expect(new Ink().get_config(new ink.get_config_arguments()).paused).toBe(false);
+  });
+
+  it("lets the new admin change minters and refuses the old admin", () => {
+    authorize(CONTRACT_ID);
+    new Ink().set_admin(new ink.set_admin_arguments(ALICE));
+    authorize(ALICE);
+    new Ink().set_minter(new ink.set_minter_arguments(SHOP, SHOP_REASONS));
+    expect(new Ink().get_minter_reasons(new ink.get_minter_reasons_arguments(SHOP)).value).toBe(SHOP_REASONS);
+    checkpoint();
+
+    authorize(CONTRACT_ID);
+    expect(() => {
+      new Ink().set_minter(new ink.set_minter_arguments(SHOP, 0));
+    }).toThrow();
+    expect(new Ink().get_minter_reasons(new ink.get_minter_reasons_arguments(SHOP)).value).toBe(SHOP_REASONS);
+  });
+
+  it("allows each mint reason bit alone and denies the other reasons", () => {
+    const reasons: i32[] = [
+      ink.mint_reason.MINT_PURCHASE,
+      ink.mint_reason.MINT_MEMBERSHIP,
+      ink.mint_reason.MINT_STARTER,
+      ink.mint_reason.MINT_PROMO,
+      ink.mint_reason.MINT_REFUND,
+    ];
+    for (let i = 0; i < reasons.length; i++) {
+      const reason = reasons[i];
+      authorize(CONTRACT_ID);
+      new Ink().set_minter(new ink.set_minter_arguments(SHOP, <u32>1 << reason));
+      callAs(SHOP);
+      new Ink().mint(new ink.mint_arguments(ALICE, 1, <ink.mint_reason>reason, ""));
+      expect(balanceOf(ALICE)).toBe(<u64>(i + 1));
+      checkpoint();
+      deniedReason = reason == ink.mint_reason.MINT_PURCHASE
+        ? ink.mint_reason.MINT_MEMBERSHIP
+        : ink.mint_reason.MINT_PURCHASE;
+      expect(() => { mintDenied(); }).toThrow();
+      expect(balanceOf(ALICE)).toBe(<u64>(i + 1));
+    }
+  });
+
+  it("denies the refund bit when the mask is Shop's 30", () => {
+    authorize(CONTRACT_ID);
+    new Ink().set_minter(new ink.set_minter_arguments(SHOP, 30));
+    callAs(SHOP);
+    const c = new Ink();
+    c.mint(new ink.mint_arguments(ALICE, 1, ink.mint_reason.MINT_PURCHASE, ""));
+    c.mint(new ink.mint_arguments(ALICE, 1, ink.mint_reason.MINT_MEMBERSHIP, ""));
+    c.mint(new ink.mint_arguments(ALICE, 1, ink.mint_reason.MINT_STARTER, ""));
+    c.mint(new ink.mint_arguments(ALICE, 1, ink.mint_reason.MINT_PROMO, ""));
+    expect(balanceOf(ALICE)).toBe(4);
+    checkpoint();
+    deniedReason = ink.mint_reason.MINT_REFUND;
+    expect(() => { mintDenied(); }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("INK: caller is not allowed to mint for this reason");
+    expect(balanceOf(ALICE)).toBe(4);
+    expect(supply()).toBe(4);
+  });
+
+  it("rejects a zero mint and a mint that would overflow another account", () => {
+    setupMintersAndBurners();
+    callAs(SHOP);
+    checkpoint();
+    expect(() => {
+      new Ink().mint(new ink.mint_arguments(ALICE, 0, ink.mint_reason.MINT_PURCHASE, ""));
+    }).toThrow();
+    expect(supply()).toBe(0);
+
+    new Ink().mint(new ink.mint_arguments(ALICE, u64.MAX_VALUE, ink.mint_reason.MINT_PURCHASE, ""));
+    expect(balanceOf(ALICE)).toBe(u64.MAX_VALUE);
+    checkpoint();
+    expect(() => {
+      MockVM.setCaller(new chain.caller_data(SHOP, chain.privilege.user_mode));
+      new Ink().mint(new ink.mint_arguments(MALLORY, 1, ink.mint_reason.MINT_PURCHASE, ""));
+    }).toThrow();
+    expect(balanceOf(ALICE)).toBe(u64.MAX_VALUE);
+    expect(balanceOf(MALLORY)).toBe(0);
+    expect(supply()).toBe(u64.MAX_VALUE);
+  });
+});

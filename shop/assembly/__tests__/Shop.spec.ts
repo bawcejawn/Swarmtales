@@ -156,6 +156,14 @@ function okCall(): system_calls.exit_arguments {
   return new system_calls.exit_arguments(0, new chain.result(new Uint8Array(0)));
 }
 
+// Exit code 0, but the protobuf bool is false (field 1 = 0).
+function falseCall(): system_calls.exit_arguments {
+  const encoded = new Uint8Array(2);
+  encoded[0] = 8;
+  encoded[1] = 0;
+  return new system_calls.exit_arguments(0, new chain.result(encoded));
+}
+
 function allowCalls(count: i32): void {
   const results: system_calls.exit_arguments[] = [];
   for (let i = 0; i < count; i++) results.push(okCall());
@@ -1064,3 +1072,282 @@ describe("Shop: promo codes", () => {
     expect(() => { failAddCodes(); }).toThrow();
   });
 });
+
+// 1700000000 is 80000 seconds into a UTC day, so the next day starts 6400 seconds later.
+const NEXT_DAY: u64 = 1700006400;
+
+function setHeadMs(ms: u64): void {
+  MockVM.setHeadInfo(new chain.head_info(null, ms, 0));
+}
+
+describe("Shop: reads, splits, and exact times", () => {
+  beforeEach(() => {
+    MockVM.reset();
+    MockVM.setContractId(SHOP);
+    setTime(START);
+    callAs(new Uint8Array(0));
+    resetLedger();
+    checkpoint();
+    configure();
+  });
+
+  it("returns empty reads for a missing, empty, or unknown address", () => {
+    const c = new Shop();
+    const missing = c.get_asset(new shop.get_asset_arguments(null));
+    expect(missing.enabled).toBe(false);
+    expect(missing.decimals).toBe(0);
+    expect(missing.symbol).toBe("");
+    const empty = c.get_asset(new shop.get_asset_arguments(new Uint8Array(0)));
+    expect(empty.enabled).toBe(false);
+    const unknown = c.get_asset(new shop.get_asset_arguments(MALLORY));
+    expect(unknown.enabled).toBe(false);
+    expect(unknown.symbol).toBe("");
+
+    expect(c.get_price(new shop.get_price_arguments(shop.item.ITEM_READER_MONTH, USDT)).value).toBe(ONE_6);
+    expect(c.get_price(new shop.get_price_arguments(shop.item.ITEM_READER_MONTH, null)).value).toBe(0);
+    expect(c.get_price(new shop.get_price_arguments(shop.item.ITEM_READER_MONTH, new Uint8Array(24))).value).toBe(0);
+
+    const noAccount = c.get_membership(new shop.get_membership_arguments(null));
+    expect(noAccount.tier).toBe(shop.tier.TIER_NONE);
+    expect(noAccount.paid_until).toBe(0);
+    const shortAccount = c.get_membership(new shop.get_membership_arguments(new Uint8Array(0)));
+    expect(shortAccount.tier).toBe(shop.tier.TIER_NONE);
+
+    const zeroCampaign = c.get_campaign(new shop.get_campaign_arguments(0));
+    expect(zeroCampaign.amount).toBe(0);
+    expect(zeroCampaign.enabled).toBe(false);
+    const unknownCampaign = c.get_campaign(new shop.get_campaign_arguments(99));
+    expect(unknownCampaign.amount).toBe(0);
+    expect(unknownCampaign.budget_total).toBe(0);
+
+    expect(c.get_promo_claimed(new shop.get_promo_claimed_arguments(null)).value).toBe(0);
+    expect(c.get_promo_claimed(new shop.get_promo_claimed_arguments(new Uint8Array(0))).value).toBe(0);
+  });
+
+  it("refuses a missing symbol, which is stored as an empty string", () => {
+    authorize(SHOP);
+    expect(() => {
+      new Shop().set_asset(new shop.set_asset_arguments(USDT, true, 6, null));
+    }).toThrow();
+  });
+
+  it("refuses admin methods from someone who is not the admin", () => {
+    authorize(MALLORY);
+    expect(() => {
+      new Shop().set_asset(new shop.set_asset_arguments(USDT, false, 6, "USDT"));
+    }).toThrow();
+    expect(() => {
+      new Shop().set_price(new shop.set_price_arguments(shop.item.ITEM_READER_MONTH, USDT, 1));
+    }).toThrow();
+    expect(() => {
+      new Shop().set_addresses(new shop.set_addresses_arguments(MALLORY, MALLORY, INK, STORIES));
+    }).toThrow();
+    expect(() => {
+      new Shop().set_fee_bps(new shop.set_fee_bps_arguments(0));
+    }).toThrow();
+    expect(() => {
+      new Shop().set_admin(new shop.set_admin_arguments(MALLORY));
+    }).toThrow();
+    expect(() => {
+      new Shop().set_ink_amounts(new shop.set_ink_amounts_arguments(1, 1, 1, 1, 1, 1));
+    }).toThrow();
+    expect(() => {
+      new Shop().set_promo_enabled(new shop.set_promo_enabled_arguments(true));
+    }).toThrow();
+    expect(() => {
+      new Shop().create_campaign(new shop.create_campaign_arguments("X", 1, 1, 0, START, START + 10, false, true));
+    }).toThrow();
+    expect(new Shop().get_config(new shop.get_config_arguments()).fee_bps).toBe(100);
+    expect(new Shop().get_asset(new shop.get_asset_arguments(USDT)).enabled).toBe(true);
+  });
+
+  it("splits a 1 base unit price and an odd price so the two legs equal the price", () => {
+    authorize(SHOP);
+    new Shop().set_price(new shop.set_price_arguments(shop.item.ITEM_READER_MONTH, USDT, 1));
+    checkpoint();
+    fund(USDT, ALICE, 1);
+    allowCalls(1);
+    buyReader(1, USDT);
+    applyTransfers();
+    let pay = lastPayment();
+    expect(pay.price).toBe(1);
+    expect(pay.founder_amount).toBe(0);
+    expect(pay.treasury_amount).toBe(1);
+    expect(pay.treasury_amount + pay.founder_amount).toBe(pay.price);
+    expect(transfers().length).toBe(1);
+
+    authorize(SHOP);
+    new Shop().set_price(new shop.set_price_arguments(shop.item.ITEM_READER_MONTH, USDT, 101));
+    checkpoint();
+    fund(USDT, ALICE, 101);
+    allowCalls(2);
+    buyReader(1, USDT);
+    pay = lastPayment();
+    expect(pay.founder_amount).toBe(1);
+    expect(pay.treasury_amount).toBe(100);
+    expect(pay.treasury_amount + pay.founder_amount).toBe(101);
+  });
+
+  it("accepts a fee of exactly 0 and exactly 5 percent, and refuses one basis point more", () => {
+    authorize(SHOP);
+    new Shop().set_fee_bps(new shop.set_fee_bps_arguments(0));
+    expect(new Shop().get_config(new shop.get_config_arguments()).fee_bps).toBe(0);
+    new Shop().set_fee_bps(new shop.set_fee_bps_arguments(500));
+    expect(new Shop().get_config(new shop.get_config_arguments()).fee_bps).toBe(500);
+    checkpoint();
+    expect(() => {
+      new Shop().set_fee_bps(new shop.set_fee_bps_arguments(501));
+    }).toThrow();
+    expect(new Shop().get_config(new shop.get_config_arguments()).fee_bps).toBe(500);
+  });
+
+  it("rolls the purchase back when the token returns false without an error code", () => {
+    fund(USDT, ALICE, ONE_6);
+    MockVM.setCallContractResults([falseCall()]);
+    expect(() => {
+      buyReader(1, USDT);
+    }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: stablecoin transfer failed");
+    expect(membershipOf(ALICE).tier).toBe(shop.tier.TIER_NONE);
+    expect(membershipOf(ALICE).paid_until).toBe(0);
+    expect(getBal(USDT, ALICE)).toBe(ONE_6);
+    expect(getBal(USDT, TREASURY)).toBe(0);
+  });
+
+  it("refuses an unknown asset and a purchase signed by someone else", () => {
+    authorize(ALICE);
+    expect(() => {
+      new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_READER, 1, MALLORY));
+    }).toThrow();
+    expect(membershipOf(ALICE).tier).toBe(shop.tier.TIER_NONE);
+
+    fund(USDT, ALICE, ONE_6);
+    authorize(BOB);
+    expect(() => {
+      new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_READER, 1, USDT));
+    }).toThrow();
+    expect(membershipOf(ALICE).paid_until).toBe(0);
+    expect(getBal(USDT, ALICE)).toBe(ONE_6);
+  });
+
+  it("extends a reader before expiry, starts over at the exact expiry second, and lets a reader become a writer", () => {
+    allowCalls(2);
+    buyReader(1, USDT);
+    const end = START + PERIOD;
+    expect(membershipOf(ALICE).paid_until).toBe(end);
+
+    setTime(end - 1);
+    allowCalls(2);
+    buyReader(1, USDT);
+    expect(membershipOf(ALICE).paid_until).toBe(end + PERIOD);
+    expect(membershipOf(ALICE).tier).toBe(shop.tier.TIER_READER);
+
+    setTime(end + PERIOD);
+    allowCalls(2);
+    buyReader(1, USDT);
+    expect(membershipOf(ALICE).paid_until).toBe(end + PERIOD + PERIOD);
+
+    setTime(end + PERIOD + PERIOD + 1);
+    allowCalls(2);
+    buyReader(1, USDT);
+    expect(membershipOf(ALICE).paid_until).toBe(end + PERIOD + PERIOD + 1 + PERIOD);
+
+    allowCalls(3);
+    buyWriter(1);
+    expect(membershipOf(ALICE).tier).toBe(shop.tier.TIER_WRITER);
+    expect(mints().length).toBe(1);
+  });
+
+  it("pays Writer Ink at the exact period and not one millisecond earlier", () => {
+    allowCalls(3);
+    buyWriter(2);
+    const due = START + PERIOD;
+    expect(membershipOf(ALICE).next_claim_at).toBe(due);
+    checkpoint();
+
+    setHeadMs(due * 1000 - 1);
+    authorize(ALICE);
+    expect(() => {
+      new Shop().claim_writer_ink(new shop.claim_writer_ink_arguments(ALICE));
+    }).toThrow();
+    expect(membershipOf(ALICE).months_unclaimed).toBe(1);
+
+    setHeadMs(due * 1000);
+    allowCalls(1);
+    new Shop().claim_writer_ink(new shop.claim_writer_ink_arguments(ALICE));
+    expect(membershipOf(ALICE).months_unclaimed).toBe(0);
+    expect(decodeMint(mints()[mints().length - 1]).value).toBe(15000);
+  });
+
+  it("resets the daily cap on the exact next day and stops when the budget is exactly spent", () => {
+    const id = openPromo("EDGE", 1000, 2000, 1000, START, START + DAY * 3);
+    claim(ALICE, id, "EDGE");
+    expect(new Shop().get_campaign(new shop.get_campaign_arguments(id)).used_today).toBe(1000);
+    checkpoint();
+
+    setHeadMs((NEXT_DAY - 1) * 1000);
+    failAccount = BOB;
+    failId = id;
+    failCode = "EDGE";
+    expect(() => { failClaim(); }).toThrow();
+    expect(new Shop().get_campaign(new shop.get_campaign_arguments(id)).budget_used).toBe(1000);
+
+    setHeadMs(NEXT_DAY * 1000);
+    checkpoint();
+    claim(BOB, id, "EDGE");
+    const row = new Shop().get_campaign(new shop.get_campaign_arguments(id));
+    expect(row.used_today).toBe(1000);
+    expect(row.budget_used).toBe(2000);
+    checkpoint();
+
+    setTime(NEXT_DAY + DAY);
+    failAccount = CARA;
+    expect(() => { failClaim(); }).toThrow();
+    expect(new Shop().get_campaign(new shop.get_campaign_arguments(id)).budget_used).toBe(2000);
+    expect(new Shop().get_promo_claimed(new shop.get_promo_claimed_arguments(CARA)).value).toBe(0);
+  });
+
+  it("opens a campaign on its start second and closes it on its end second", () => {
+    authorize(SHOP);
+    const c = new Shop();
+    c.set_promo_enabled(new shop.set_promo_enabled_arguments(true));
+    const id = c.create_campaign(new shop.create_campaign_arguments(
+      "EDGE", 1000, 5000, 0, START + 10, START + 20, false, true
+    )).value;
+    checkpoint();
+
+    setHeadMs((START + 10) * 1000 - 1);
+    failAccount = ALICE;
+    failId = id;
+    failCode = "EDGE";
+    expect(() => { failClaim(); }).toThrow();
+
+    setHeadMs((START + 10) * 1000);
+    checkpoint();
+    claim(ALICE, id, "EDGE");
+    checkpoint();
+
+    setHeadMs((START + 20) * 1000 - 1);
+    claim(BOB, id, "EDGE");
+    checkpoint();
+
+    setHeadMs((START + 20) * 1000);
+    failAccount = CARA;
+    expect(() => { failClaim(); }).toThrow();
+    expect(new Shop().get_promo_claimed(new shop.get_promo_claimed_arguments(CARA)).value).toBe(0);
+  });
+
+  it("accepts a daily cap that covers one claim and refuses a smaller one", () => {
+    const id = openPromo("CAP", 1000, 5000, 0, START, START + DAY);
+    failId = id;
+    expect(() => { failTightCap(); }).toThrow();
+    authorize(SHOP);
+    new Shop().set_campaign_limits(new shop.set_campaign_limits_arguments(id, 5000, 1000, START + DAY));
+    expect(new Shop().get_campaign(new shop.get_campaign_arguments(id)).daily_cap).toBe(1000);
+  });
+});
+
+function failTightCap(): void {
+  authorize(SHOP);
+  new Shop().set_campaign_limits(new shop.set_campaign_limits_arguments(failId, 5000, 999, START + DAY));
+}
