@@ -1,0 +1,701 @@
+syntax = "proto3";
+
+// =====================================================================
+// SwarmTales Stories — interface definition
+//
+// One contract holds every Book and Short Story. Writing burns the
+// writer's Ink (reason BURN_CONTRIBUTION). Editor removals and
+// shortenings re-credit the ORIGINAL author through Ink mint with
+// reason MINT_REFUND (the only mint reason Stories is allowed).
+// Open and close fees are paid through Shop, which splits them.
+//
+// Ink cost of text = number of UTF-16 code units. A letter costs 1,
+// most emoji cost 2, a few older emoji cost 1, skin tones and flags
+// cost 4, family emoji cost 8. The website shows the exact number and
+// sends it as expected_ink; the contract refuses any mismatch.
+// All times are seconds.
+// =====================================================================
+
+package stories;
+
+import "koinos/options.proto";
+
+// ---------- Shared wrappers ----------
+
+message str {
+  string value = 1;
+}
+
+message uint32 {
+  uint32 value = 1;
+}
+
+message uint64 {
+  uint64 value = 1 [jstype = JS_STRING];
+}
+
+message boole {
+  bool value = 1;
+}
+
+message empty_object {}
+
+message id_list {
+  repeated uint64 values = 1 [jstype = JS_STRING];
+}
+
+// ---------- Enums ----------
+
+// Same numbers as shop.story_kind.
+enum story_kind {
+  KIND_UNSPECIFIED = 0;
+  KIND_BOOK = 1;
+  KIND_SHORT = 2;
+}
+
+enum visibility {
+  VISIBILITY_UNSPECIFIED = 0;
+  VISIBILITY_PUBLIC = 1;   // in the gallery; anyone eligible may write
+  VISIBILITY_UNLISTED = 2; // hidden from the gallery; anyone eligible may write
+  VISIBILITY_PRIVATE = 3;  // only opener, editors and allow-listed wallets may write
+}
+
+enum story_status {
+  STATUS_NONE = 0;
+  STATUS_OPEN = 1;
+  STATUS_LOCKED = 2;
+  STATUS_EDITING = 3;
+  STATUS_FINALIZED = 4;
+  STATUS_ARCHIVED = 5;
+}
+
+enum segment_status {
+  SEGMENT_NONE = 0;
+  SEGMENT_ACTIVE = 1;
+  SEGMENT_REMOVED = 2;
+}
+
+enum final_mode {
+  FINAL_PENDING = 0;
+  FINAL_UNCHANGED = 1;
+  FINAL_EDITED = 2;
+  FINAL_REMOVED = 3;
+}
+
+// ---------- Stored records ----------
+
+message config {
+  bytes admin = 1 [(koinos.btype) = ADDRESS];
+  bool paused = 2;
+  bytes ink = 3 [(koinos.btype) = ADDRESS];
+  bytes shop = 4 [(koinos.btype) = ADDRESS];
+  uint32 contribution_cap = 5;   // max Ink per submission
+  uint32 trial_limit = 6;        // lifetime trial characters for promo wallets
+  uint32 open_limit = 7;         // active projects per opener
+  uint32 archive_days = 8;       // inactivity before anyone may archive
+  uint32 inactivity_days = 9;    // opener inactivity before the admin may take over
+  uint64 next_story_id = 10 [jstype = JS_STRING];
+  uint32 next_category_id = 11;
+}
+
+message story {
+  story_kind kind = 1;
+  bytes opener = 2 [(koinos.btype) = ADDRESS];
+  string title = 3;
+  uint32 category_1 = 4;
+  uint32 category_2 = 5;
+  visibility visibility = 6;
+  story_status status = 7;
+  uint64 max_chars = 8 [jstype = JS_STRING];
+  uint64 used_chars = 9 [jstype = JS_STRING];
+  uint64 total_burned = 10 [jstype = JS_STRING];
+  uint64 total_refunded = 11 [jstype = JS_STRING];
+  uint64 segment_count = 12 [jstype = JS_STRING];
+  uint64 chapter_count = 13 [jstype = JS_STRING];
+  uint64 contributor_count = 14 [jstype = JS_STRING];
+  uint32 free_chapters = 15;
+  uint64 contributor_edition_min = 16 [jstype = JS_STRING];
+  uint64 created_at = 17 [jstype = JS_STRING];
+  uint64 last_activity_at = 18 [jstype = JS_STRING];
+  uint64 opener_last_active = 19 [jstype = JS_STRING];
+  uint64 locked_at = 20 [jstype = JS_STRING];
+  bool admin_finalize_requested = 21;
+  bool finalizer_is_admin = 22;
+  bool close_fee_paid = 23;
+  uint64 final_cursor = 24 [jstype = JS_STRING];
+  bytes running_hash = 25;
+  bool revived = 26;
+  string pdf_uri = 27;
+  bytes pdf_hash = 28;
+  uint32 editor_count = 29;
+  uint64 next_invite_id = 30 [jstype = JS_STRING];
+}
+
+message segment {
+  bytes author = 1 [(koinos.btype) = ADDRESS];
+  string text = 2;
+  bytes text_hash = 3;
+  uint64 original_cost = 4 [jstype = JS_STRING];
+  uint64 charged = 5 [jstype = JS_STRING];
+  uint64 current_cost = 6 [jstype = JS_STRING];
+  segment_status status = 7;
+  bool starts_chapter = 8;
+  bool ai_assisted = 9;
+  uint64 created_at = 10 [jstype = JS_STRING];
+  bytes last_edited_by = 11 [(koinos.btype) = ADDRESS];
+  uint64 last_edited_at = 12 [jstype = JS_STRING];
+  final_mode final_mode = 13;
+  uint64 surviving = 14 [jstype = JS_STRING];
+}
+
+message segment_list {
+  repeated segment values = 1;
+}
+
+message segment_ref {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 seq = 2 [jstype = JS_STRING];
+}
+
+message segment_ref_list {
+  repeated segment_ref values = 1;
+}
+
+message invite {
+  bytes code_hash = 1;
+  uint32 max_uses = 2;
+  uint32 uses = 3;
+  uint64 expires_at = 4 [jstype = JS_STRING];
+  bool revoked = 5;
+}
+
+message category {
+  string name = 1;
+  bool active = 2;
+}
+
+message final_item {
+  uint64 seq = 1 [jstype = JS_STRING];
+  final_mode mode = 2;
+  string text = 3;            // only for FINAL_EDITED
+  uint64 expected_cost = 4 [jstype = JS_STRING]; // only for FINAL_EDITED
+}
+
+// ---------- Messages Stories SENDS to other contracts ----------
+// Names do not end in _arguments, so they are not Stories entry points.
+
+// Wire-compatible with ink.burn_arguments.
+message ink_burn_call {
+  bytes from = 1 [(koinos.btype) = ADDRESS];
+  uint64 value = 2 [jstype = JS_STRING];
+  uint32 reason = 3;
+  string memo = 4;
+}
+
+// Wire-compatible with ink.mint_arguments.
+message ink_mint_call {
+  bytes to = 1 [(koinos.btype) = ADDRESS];
+  uint64 value = 2 [jstype = JS_STRING];
+  uint32 reason = 3;
+  string memo = 4;
+}
+
+// Wire-compatible with shop.pay_open_fee_arguments / pay_close_fee_arguments.
+message shop_fee_call {
+  bytes payer = 1 [(koinos.btype) = ADDRESS];
+  uint32 kind = 2;
+  bytes token = 3 [(koinos.btype) = ADDRESS];
+}
+
+// Wire-compatible with shop.get_membership_arguments / get_promo_claimed_arguments.
+message shop_account_call {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+}
+
+// Wire-compatible with shop.membership (what get_membership returns).
+message shop_membership {
+  uint32 tier = 1;
+  uint64 paid_until = 2 [jstype = JS_STRING];
+  uint64 months_unclaimed = 3 [jstype = JS_STRING];
+  uint64 next_claim_at = 4 [jstype = JS_STRING];
+  uint64 ink_per_month = 5 [jstype = JS_STRING];
+}
+
+// ---------- Reads ----------
+
+// @description Admin, pause flag, Ink and Shop addresses, limits and counters
+// @read-only true
+// @result config
+message get_config_arguments {}
+
+// @description One story. An unknown id returns an empty record (status 0).
+// @read-only true
+// @result story
+message get_story_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+}
+
+// @description One segment (story id + sequence number, starting at 1)
+// @read-only true
+// @result segment
+message get_segment_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 seq = 2 [jstype = JS_STRING];
+}
+
+// @description Up to 10 segments starting at seq `start`
+// @read-only true
+// @result segment_list
+message get_segments_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 start = 2 [jstype = JS_STRING];
+  uint32 limit = 3;
+}
+
+// @description Live Ink-backed characters of one author in one story
+// @read-only true
+// @result uint64
+message get_contributor_total_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  bytes account = 2 [(koinos.btype) = ADDRESS];
+}
+
+// @description Surviving characters after the final edit (credits and Contributor Editions)
+// @read-only true
+// @result uint64
+message get_surviving_total_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  bytes account = 2 [(koinos.btype) = ADDRESS];
+}
+
+// @description Whether an account is an editor of a story
+// @read-only true
+// @result boole
+message is_editor_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  bytes account = 2 [(koinos.btype) = ADDRESS];
+}
+
+// @description Whether an account is on a story's allow-list
+// @read-only true
+// @result boole
+message is_allowed_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  bytes account = 2 [(koinos.btype) = ADDRESS];
+}
+
+// @description One invite (the code itself is never stored, only its hash)
+// @read-only true
+// @result invite
+message get_invite_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 invite_id = 2 [jstype = JS_STRING];
+}
+
+// @description Lifetime trial characters a wallet has written
+// @read-only true
+// @result uint64
+message get_trial_used_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+}
+
+// @description Active projects (OPEN, LOCKED or EDITING) a wallet has opened
+// @read-only true
+// @result uint32
+message get_open_count_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+}
+
+// @description One category
+// @read-only true
+// @result category
+message get_category_arguments {
+  uint32 category_id = 1;
+}
+
+// @description Story ids opened by an account (index from 0, up to 50)
+// @read-only true
+// @result id_list
+message get_opener_stories_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  uint64 start = 2 [jstype = JS_STRING];
+  uint32 limit = 3;
+}
+
+// @description Story ids ever placed in a category (index from 0, up to 50). Check each story's current categories.
+// @read-only true
+// @result id_list
+message get_category_stories_arguments {
+  uint32 category_id = 1;
+  uint64 start = 2 [jstype = JS_STRING];
+  uint32 limit = 3;
+}
+
+// @description Segments written by an account (index from 0, up to 50)
+// @read-only true
+// @result segment_ref_list
+message get_author_segments_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  uint64 start = 2 [jstype = JS_STRING];
+  uint32 limit = 3;
+}
+
+// @description Exact Ink the contract would charge for this text. Fails with the reason if the text is not allowed.
+// @read-only true
+// @result uint64
+message quote_cost_arguments {
+  string text = 1;
+}
+
+// ---------- Opening and settings ----------
+
+// @description Open a Book or Short Story. Pays the open fee through Shop (which mints starter Ink), then burns Ink for the opening text.
+// @read-only false
+// @result uint64
+message open_story_arguments {
+  bytes opener = 1 [(koinos.btype) = ADDRESS];
+  story_kind kind = 2;
+  string title = 3;
+  uint64 max_chars = 4 [jstype = JS_STRING];
+  uint32 category_1 = 5;
+  uint32 category_2 = 6;
+  visibility visibility = 7;
+  uint32 free_chapters = 8;
+  uint64 contributor_edition_min = 9 [jstype = JS_STRING];
+  string opening_text = 10;
+  bool ai_assisted = 11;
+  uint64 expected_ink = 12 [jstype = JS_STRING];
+  bytes token = 13 [(koinos.btype) = ADDRESS];
+}
+
+// @description Opener changes title, categories, visibility and free chapters (send all of them)
+// @read-only false
+// @result empty_object
+message update_story_arguments {
+  bytes opener = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  string title = 3;
+  uint32 category_1 = 4;
+  uint32 category_2 = 5;
+  visibility visibility = 6;
+  uint32 free_chapters = 7;
+}
+
+// @description Opener adds or removes an editor (max 10)
+// @read-only false
+// @result empty_object
+message set_editor_arguments {
+  bytes opener = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  bytes account = 3 [(koinos.btype) = ADDRESS];
+  bool allowed = 4;
+}
+
+// @description Opener or editor adds or removes wallets on the allow-list (max 20 per call)
+// @read-only false
+// @result empty_object
+message set_allowed_arguments {
+  bytes actor = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  repeated bytes accounts = 3 [(koinos.btype) = ADDRESS];
+  bool allowed = 4;
+}
+
+// @description Opener creates an invite code (8-64 characters) with a use limit and expiry
+// @read-only false
+// @result uint64
+message create_invite_arguments {
+  bytes opener = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  string code = 3;
+  uint32 max_uses = 4;
+  uint64 expires_at = 5 [jstype = JS_STRING];
+}
+
+// @description Opener revokes an invite
+// @read-only false
+// @result empty_object
+message revoke_invite_arguments {
+  bytes opener = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  uint64 invite_id = 3 [jstype = JS_STRING];
+}
+
+// @description A wallet joins a story's allow-list with an invite code
+// @read-only false
+// @result empty_object
+message join_with_invite_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  uint64 invite_id = 3 [jstype = JS_STRING];
+  string code = 4;
+}
+
+// ---------- Writing and editing ----------
+
+// @description Add text to an OPEN story. Burns exactly expected_ink from the author.
+// @read-only false
+// @result uint64
+message contribute_arguments {
+  bytes author = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  string text = 3;
+  bool starts_chapter = 4;
+  bool ai_assisted = 5;
+  uint64 expected_ink = 6 [jstype = JS_STRING];
+}
+
+// @description Opener or editor lightly edits a segment of an OPEN story. Shortening refunds the author.
+// @read-only false
+// @result empty_object
+message edit_segment_arguments {
+  bytes editor = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  uint64 seq = 3 [jstype = JS_STRING];
+  string new_text = 4;
+  uint64 expected_cost = 5 [jstype = JS_STRING];
+}
+
+// @description Opener or editor removes a segment of an OPEN story. The author is refunded.
+// @read-only false
+// @result empty_object
+message remove_segment_arguments {
+  bytes editor = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  uint64 seq = 3 [jstype = JS_STRING];
+}
+
+// ---------- Closing and the final edit ----------
+
+// @description Opener pays the close fee through Shop and starts the final edit
+// @read-only false
+// @result empty_object
+message close_story_arguments {
+  bytes opener = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  bytes token = 3 [(koinos.btype) = ADDRESS];
+}
+
+// @description Opener turns the "admin, please finalize" request on or off
+// @read-only false
+// @result empty_object
+message request_admin_finalize_arguments {
+  bytes opener = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  bool requested = 3;
+}
+
+// @description Admin takes over the final edit (opener asked, or opener inactive 30+ days). No fee.
+// @read-only false
+// @result empty_object
+message admin_take_over_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+}
+
+// @description Finalizer submits the next final-edit results, in order (max 20 items, 8,000 Ink units of text)
+// @read-only false
+// @result empty_object
+message submit_final_batch_arguments {
+  bytes finalizer = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  repeated final_item items = 3;
+}
+
+// @description Finalizer stores the PDF link and hash once every segment is processed
+// @read-only false
+// @result empty_object
+message finalize_arguments {
+  bytes finalizer = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  string pdf_uri = 3;
+  bytes pdf_hash = 4;
+}
+
+// ---------- Archive ----------
+
+// @description Anyone archives an OPEN story with no contribution or edit for the archive period
+// @read-only false
+// @result empty_object
+message archive_if_stale_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+}
+
+// @description Opener revives an archived story once, for free
+// @read-only false
+// @result empty_object
+message revive_arguments {
+  bytes opener = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+}
+
+// ---------- Admin ----------
+
+// @description Set the Ink and Shop contract addresses
+// @read-only false
+// @result empty_object
+message set_addresses_arguments {
+  bytes ink = 1 [(koinos.btype) = ADDRESS];
+  bytes shop = 2 [(koinos.btype) = ADDRESS];
+}
+
+// @description Set the adjustable limits, each inside its hard-coded bounds
+// @read-only false
+// @result empty_object
+message set_limits_arguments {
+  uint32 contribution_cap = 1;
+  uint32 trial_limit = 2;
+  uint32 open_limit = 3;
+  uint32 archive_days = 4;
+  uint32 inactivity_days = 5;
+}
+
+// @description Add a category (1-32 characters). Returns its id.
+// @read-only false
+// @result uint32
+message add_category_arguments {
+  string name = 1;
+}
+
+// @description Turn a category on or off for new picks
+// @read-only false
+// @result empty_object
+message set_category_active_arguments {
+  uint32 category_id = 1;
+  bool active = 2;
+}
+
+// @description Pause or unpause every Stories write except admin settings
+// @read-only false
+// @result empty_object
+message set_paused_arguments {
+  bool paused = 1;
+}
+
+// @description Hand admin to a new address
+// @read-only false
+// @result empty_object
+message set_admin_arguments {
+  bytes new_admin = 1 [(koinos.btype) = ADDRESS];
+}
+
+// ---------- Events ----------
+
+message story_opened_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  bytes opener = 2 [(koinos.btype) = ADDRESS];
+  story_kind kind = 3;
+  uint64 max_chars = 4 [jstype = JS_STRING];
+  bytes token = 5 [(koinos.btype) = ADDRESS];
+}
+
+message story_updated_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  string title = 2;
+  uint32 category_1 = 3;
+  uint32 category_2 = 4;
+  visibility visibility = 5;
+  uint32 free_chapters = 6;
+}
+
+message status_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  story_status status = 2;
+  string why = 3;  // "auto-lock", "closed", "admin-take-over", "archived", "revived", "finalized"
+  bytes by = 4 [(koinos.btype) = ADDRESS];
+}
+
+message contribution_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 seq = 2 [jstype = JS_STRING];
+  bytes author = 3 [(koinos.btype) = ADDRESS];
+  uint64 cost = 4 [jstype = JS_STRING];
+  bool starts_chapter = 5;
+  bool ai_assisted = 6;
+  bytes text_hash = 7;
+  bool trial = 8;
+}
+
+message segment_changed_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 seq = 2 [jstype = JS_STRING];
+  bytes by = 3 [(koinos.btype) = ADDRESS];
+  uint64 old_cost = 4 [jstype = JS_STRING];
+  uint64 new_cost = 5 [jstype = JS_STRING];
+  uint64 refund = 6 [jstype = JS_STRING];
+  bool removed = 7;
+  bool final_pass = 8;
+}
+
+message editor_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  bytes account = 2 [(koinos.btype) = ADDRESS];
+  bool allowed = 3;
+}
+
+message allowed_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  bytes account = 2 [(koinos.btype) = ADDRESS];
+  bool allowed = 3;
+  uint64 invite_id = 4 [jstype = JS_STRING];
+}
+
+message invite_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 invite_id = 2 [jstype = JS_STRING];
+  uint32 max_uses = 3;
+  uint64 expires_at = 4 [jstype = JS_STRING];
+  bool revoked = 5;
+}
+
+message admin_finalize_request_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  bool requested = 2;
+}
+
+message final_batch_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 final_cursor = 2 [jstype = JS_STRING];
+  bytes running_hash = 3;
+}
+
+message story_finalized_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  string pdf_uri = 2;
+  bytes pdf_hash = 3;
+  bytes running_hash = 4;
+}
+
+// Exact bytes Stories sent to Ink or Shop.
+message external_call_event {
+  bytes contract_id = 1 [(koinos.btype) = ADDRESS];
+  uint32 entry_point = 2;
+  bytes payload = 3;
+}
+
+message category_event {
+  uint32 category_id = 1;
+  string name = 2;
+  bool active = 3;
+}
+
+message limits_event {
+  uint32 contribution_cap = 1;
+  uint32 trial_limit = 2;
+  uint32 open_limit = 3;
+  uint32 archive_days = 4;
+  uint32 inactivity_days = 5;
+}
+
+message addresses_event {
+  bytes ink = 1 [(koinos.btype) = ADDRESS];
+  bytes shop = 2 [(koinos.btype) = ADDRESS];
+}
+
+message paused_event {
+  bool paused = 1;
+}
+
+message admin_changed_event {
+  bytes old_admin = 1 [(koinos.btype) = ADDRESS];
+  bytes new_admin = 2 [(koinos.btype) = ADDRESS];
+}

@@ -24,10 +24,10 @@ pasted there, one block at a time.
 
 | Role | Address | Funded with | Signs |
 |---|---|---|---|
-| Ink contract | `1DdeLhBvZdMJtBUNZBEobkDPJ2jAu9BFCz` | 50 tKOIN | Ink upload, Ink set_admin |
-| Shop contract | `1C72FDL8NV3MHG7urVgXyvLBjMoC2WPJc6` | 950 tKOIN | Shop upload, Shop set_admin |
-| Admin (your main testnet wallet) | `1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW` | 1000 tKOIN | wire, test-asset |
-| Test user (a normal reader/writer) | `18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6` | 100 tKOIN | test-buy, claim-promo, user-checks |
+| Ink contract | `195trftAvPnqeoPmHeGmxtwNYVUVdghm5x` | 50 tKOIN | Ink upload, Ink set_admin |
+| Shop contract | `1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth` | 950 tKOIN | Shop upload, Shop set_admin |
+| Admin (your main testnet wallet) | `18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6` | 1000 tKOIN | wire, test-asset |
+| Test user (a normal reader/writer) | `12SVw65QpMjFo9fnc651V7LhXKqVLg15Ww` | 100 tKOIN | test-buy, claim-promo, user-checks |
 
 On Koinos, the wallet that uploads a contract **becomes** the contract address. That is why
 Ink and Shop each have their own wallet.
@@ -130,7 +130,8 @@ cd ..
 Get-Item build\release\contract.wasm, shop\build\release\contract.wasm | Select-Object FullName, Length
 ```
 
-**Expect:** two files. Ink is 38420 bytes. Shop is 65086 bytes.
+**Expect:** two files. Ink is 38459 bytes. Shop is 65086 bytes.
+(Ink was 38420 bytes before 19 October 2026. The 39 extra bytes are the new mainnet description, "1 INK per text unit; most emoji cost 2". The Ink already on testnet keeps the old text and is **not** re-uploaded.)
 **Send back:** the two lengths.
 
 ## Step 4. Run the tests (folder: `C:\swarmtales`)
@@ -171,7 +172,7 @@ cd ..
 
 **Expect:**
 - Ink: `[Summary]: 48 pass, 0 fail`
-- Deploy script: `# pass 19` and `# fail 0`
+- Deploy script: `# pass 25` and `# fail 0`
 - Shop: `[Summary]: 51 pass, 0 fail`
 
 **Send back:** the three pass/fail lines. Stop here if anything fails.
@@ -180,7 +181,7 @@ cd ..
 
 ```powershell
 cd C:\swarmtales
-node deploy/deploy.js status --admin 1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW --ink 1DdeLhBvZdMJtBUNZBEobkDPJ2jAu9BFCz --shop 1C72FDL8NV3MHG7urVgXyvLBjMoC2WPJc6
+node deploy/deploy.js status --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6 --ink 195trftAvPnqeoPmHeGmxtwNYVUVdghm5x --shop 1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth
 ```
 
 **Expect:** `(chain id verified)`, then mana about 1000 / 50 / 950. The contract lines say
@@ -190,7 +191,7 @@ node deploy/deploy.js status --admin 1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW --ink 1D
 
 ```powershell
 cd C:\swarmtales
-node deploy/deploy.js upload ink --expect 1DdeLhBvZdMJtBUNZBEobkDPJ2jAu9BFCz
+node deploy/deploy.js upload ink --expect 195trftAvPnqeoPmHeGmxtwNYVUVdghm5x
 ```
 
 Paste the **Ink wallet's** private key at the prompt and press Enter.
@@ -201,7 +202,7 @@ Type `SEND` and press Enter. Then you see `Transaction id: 0x...` and `included 
 ## Step 7. Make your main wallet the Ink admin (signed by the Ink wallet)
 
 ```powershell
-node deploy/deploy.js set-admin ink --contract 1DdeLhBvZdMJtBUNZBEobkDPJ2jAu9BFCz --admin 1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW
+node deploy/deploy.js set-admin ink --contract 195trftAvPnqeoPmHeGmxtwNYVUVdghm5x --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
 ```
 
 Paste the **Ink wallet's** key again, then type `SEND`.
@@ -211,8 +212,8 @@ After this, Ink admin actions are signed by your main wallet, not the Ink wallet
 ## Step 8. Upload Shop and make your main wallet its admin (signed by the Shop wallet)
 
 ```powershell
-node deploy/deploy.js upload shop --expect 1C72FDL8NV3MHG7urVgXyvLBjMoC2WPJc6
-node deploy/deploy.js set-admin shop --contract 1C72FDL8NV3MHG7urVgXyvLBjMoC2WPJc6 --admin 1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW
+node deploy/deploy.js upload shop --expect 1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth
+node deploy/deploy.js set-admin shop --contract 1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
 ```
 
 Both use the **Shop wallet's** key. The Shop upload uses about 5 to 8 mana.
@@ -221,10 +222,10 @@ Both use the **Shop wallet's** key. The Shop upload uses about 5 to 8 mana.
 ## Step 9. Connect Shop to Ink (signed by your main wallet)
 
 ```powershell
-node deploy/deploy.js wire --admin 1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW --ink 1DdeLhBvZdMJtBUNZBEobkDPJ2jAu9BFCz --shop 1C72FDL8NV3MHG7urVgXyvLBjMoC2WPJc6 --treasury 1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW --founder 1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW
+node deploy/deploy.js wire --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6 --ink 195trftAvPnqeoPmHeGmxtwNYVUVdghm5x --shop 1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth --treasury 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6 --founder 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
 ```
 
-Paste your **main wallet's** key (`1MQ3...`). One transaction does three things:
+Paste your **main wallet's** key (`18Mh...`). One transaction does three things:
 
 - `ink.set_minter(Shop, 30)`: Shop may mint Ink for purchases, memberships, starters and promos. It may **not** mint refunds.
 - `shop.set_addresses`: on testnet, treasury and founder are both your main wallet. Ink is set. Stories stays empty until that contract exists.
@@ -239,7 +240,7 @@ on, so for testing it uses **tKOIN**, which has 8 decimals. Prices are small tes
 (Writer month = 2 tKOIN). These are **not** launch prices.
 
 ```powershell
-node deploy/deploy.js test-asset --admin 1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW --shop 1C72FDL8NV3MHG7urVgXyvLBjMoC2WPJc6
+node deploy/deploy.js test-asset --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6 --shop 1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth
 ```
 
 **Send back:** the transaction id.
@@ -247,19 +248,19 @@ node deploy/deploy.js test-asset --admin 1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW --sh
 ## Step 11. Check everything
 
 ```powershell
-node deploy/deploy.js status --admin 1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW --ink 1DdeLhBvZdMJtBUNZBEobkDPJ2jAu9BFCz --shop 1C72FDL8NV3MHG7urVgXyvLBjMoC2WPJc6
+node deploy/deploy.js status --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6 --ink 195trftAvPnqeoPmHeGmxtwNYVUVdghm5x --shop 1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth
 ```
 
 **Expect:**
 - Both contracts show `[contract uploaded]`.
-- `ink.get_config` admin = `1MQ3...`.
+- `ink.get_config` admin = `18Mh...`.
 - `ink minter mask for Shop` = `{"value":30}`.
 - `shop.get_config` shows admin, treasury, founder and ink, and `fee_bps` 100.
 - The tKOIN asset is `enabled: true`.
 
 **Send back:** the whole output.
 
-## Step 12. Act as a normal user (test user wallet `18Mh...`, folder `C:\swarmtales`)
+## Step 12. Act as a normal user (test user wallet `12SV...`, folder `C:\swarmtales`)
 
 In this phase the test user wallet behaves like a normal reader or writer. It is not the
 treasury, founder, or admin, so its payments really move between wallets. You sign with the
@@ -270,10 +271,10 @@ only. Never put a key in a variable like this.
 
 ```powershell
 cd C:\swarmtales
-$INK  = "1DdeLhBvZdMJtBUNZBEobkDPJ2jAu9BFCz"
-$SHOP = "1C72FDL8NV3MHG7urVgXyvLBjMoC2WPJc6"
-$ADMIN = "1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW"
-$USER = "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6"
+$INK  = "195trftAvPnqeoPmHeGmxtwNYVUVdghm5x"
+$SHOP = "1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth"
+$ADMIN = "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6"
+$USER = "12SVw65QpMjFo9fnc651V7LhXKqVLg15Ww"
 ```
 
 (If you close PowerShell, run that block again.)
@@ -310,7 +311,7 @@ node deploy/deploy.js status --ink $INK --shop $SHOP --user $USER
 ```
 
 One transaction approves the Shop for exactly 2 tKOIN, then buys a Writer month. 1.98 tKOIN
-goes to treasury and 0.02 (1%) to founder. Both are `1MQ3...` on testnet. Shop mints
+goes to treasury and 0.02 (1%) to founder. Both are `18Mh...` on testnet. Shop mints
 **15000 Ink** to the user.
 
 **Expect** in status:
@@ -356,15 +357,143 @@ node deploy/deploy.js user-checks --user $USER --ink $INK --shop $SHOP --admin $
 wallet, ever) and "wrong code".
 **Send back:** the transaction ids and both outputs.
 
-### 12e. Spending Ink on writing (not testable yet)
+### 12e. Spending Ink on writing: the Stories contract
 
-Writing (1 Ink per character, and **2 Ink per emoji**) spends Ink through the **Stories**
-contract. Ink only lets an approved contract burn, and only when the writer signed. Stories is
-not built yet, so the chain cannot test this phase. Check 12a already confirms that a user
-**cannot** burn or move Ink without it. Once Stories exists, this guide gets a step 12e with
-real writes, emoji counting and edge cases (not enough Ink, empty text, very long text).
+Story text costs **1 Ink per text unit** (UTF-16 code unit). Most emoji cost 2, a few older
+ones such as ⭐ cost 1, skin tones and flags such as 👍🏽 and 🇺🇸 cost 4, and a family such as
+👨‍👩‍👧 costs 8. Stories counts this itself and refuses the text if the website's number
+disagrees, so nobody is charged a surprise amount.
+
+The steps below are in **section 13**. They need a new wallet for the Stories contract.
 
 ---
+
+## Step 13. Stories on testnet (folder: `C:\swarmtales`)
+
+Testnet coins are play money. Nothing in this step uses real money. Each signed step is a dry run
+first, and nothing is sent until you type `SEND`.
+
+These are the addresses in use on testnet now (19 October 2026):
+
+| Role | Address |
+|---|---|
+| Ink (already uploaded) | `195trftAvPnqeoPmHeGmxtwNYVUVdghm5x` |
+| Shop (already uploaded) | `1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth` |
+| Admin, treasury and founder | `18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6` |
+| Test user | `12SVw65QpMjFo9fnc651V7LhXKqVLg15Ww` |
+| Stories | **a new wallet you create** in your wallet app. Write its recovery phrase on paper first. Send it about 100 tKOIN for the upload's mana. |
+
+Set them once in the PowerShell window (public addresses only, never a key). Replace
+`<StoriesWallet>` with the new wallet's address:
+
+```powershell
+$INK = "195trftAvPnqeoPmHeGmxtwNYVUVdghm5x"
+```
+
+```powershell
+$SHOP = "1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth"
+```
+
+```powershell
+$ADMIN = "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6"
+```
+
+```powershell
+$USER = "12SVw65QpMjFo9fnc651V7LhXKqVLg15Ww"
+```
+
+```powershell
+$STORIES = "<StoriesWallet>"
+```
+
+### 13a. Build and test Stories
+
+```powershell
+cd stories
+```
+
+```powershell
+npx.cmd yarn@1.22.22 install --frozen-lockfile
+```
+
+```powershell
+npx.cmd yarn@1.22.22 build:release
+```
+
+```powershell
+npx.cmd yarn@1.22.22 test
+```
+
+```powershell
+cd ..
+```
+
+**Expect:** `[Summary]: 61 pass, 0 fail`, and `stories\build\release\contract.wasm` is 100832 bytes.
+
+### 13b. Upload Stories (signed by the Stories wallet)
+
+```powershell
+node deploy/deploy.js upload stories --expect $STORIES
+```
+
+### 13c. Make the admin wallet the Stories admin (signed by the Stories wallet)
+
+```powershell
+node deploy/deploy.js set-admin stories --contract $STORIES --admin $ADMIN
+```
+
+After this, put the Stories wallet's key away. Everything below is signed by the admin or the test user.
+
+### 13d. Wire Stories to Ink and Shop (signed by the admin wallet, one transaction)
+
+```powershell
+node deploy/deploy.js wire-stories --admin $ADMIN --ink $INK --shop $SHOP --stories $STORIES --treasury $ADMIN --founder $ADMIN
+```
+
+This does, in one transaction: `stories.set_addresses`, `ink.set_burner(Stories, true)`,
+`ink.set_minter(Stories, 32)` (refunds only), `shop.set_addresses`, and the 11 categories.
+`shop.set_addresses` replaces **all four** Shop addresses, so the script **reads the current
+treasury and founder from the Shop on chain** and sends them back unchanged. It stops if they
+don't match the `--treasury` / `--founder` you typed, or if Shop already points at another Stories.
+
+### 13e. Check the wiring (no key needed)
+
+```powershell
+node deploy/deploy.js status --admin $ADMIN --ink $INK --shop $SHOP --stories $STORIES --user $USER
+```
+
+**Expect:** burner flag `true`, minter mask `32`, Shop points at `$STORIES`, category 1 is Fantasy.
+
+### 13f. Open a test Short Story (signed by the test user)
+
+The test user needs tKOIN for the Short Story open price (0.5 tKOIN with the test prices). The
+Shop mints 10,000 starter Ink to the opener in the same transaction.
+
+```powershell
+node deploy/deploy.js test-open --user $USER --shop $SHOP --stories $STORIES
+```
+
+### 13g. Measure mana per submission size (dry runs only, nothing is sent)
+
+```powershell
+node deploy/deploy.js measure --user $USER --ink $INK --stories $STORIES --story 1
+```
+
+```powershell
+node deploy/deploy.js measure --user $USER --ink $INK --stories $STORIES --story 1 --emoji
+```
+
+This prints the mana for 100, 500, 1000, 2000 and 4000-character contributions. Sizes above the
+current cap (2,000) show as "skipped". To measure 4,000 too, the admin raises the cap first, then
+you run `measure` again:
+
+```powershell
+node deploy/deploy.js stories-limits --admin $ADMIN --stories $STORIES --cap 4000
+```
+
+Set it back afterwards to the number you choose (for example `--cap 2000`).
+
+**Send back:** the transaction ids from 13b, 13c, 13d, 13f, and both `measure` tables.
 
 ---
 
@@ -376,7 +505,7 @@ real writes, emoji counting and edge cases (not enough Ink, empty text, very lon
 | `Chain id mismatch` | The node is not the testnet. Nothing was signed. |
 | `already has a contract on this network` | That address already holds a contract. The script will not overwrite it. |
 | `Dry run failed` / `Dry run reverted` | The node rejected it. Nothing was sent. Send back the full message. |
-| `payer does not have the rc` / `no mana` | Top up that wallet from the faucet or from `1MQ3...`, wait a minute, retry. |
+| `payer does not have the rc` / `no mana` | Top up that wallet from the faucet or from `18Mh...`, wait a minute, retry. |
 | `running scripts is disabled` | You typed `npx`; use `npx.cmd`. |
 | `The hidden key prompt needs a real terminal window` | Run it in a normal PowerShell window, not inside another program. |
 

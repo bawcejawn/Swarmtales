@@ -12,4 +12,4 @@ yarn build:debug
 yarn test
 ```
 
-Those commands are the same on Windows PowerShell, Linux, and macOS. Success means `build/debug/contract.wasm` exists and the test report ends with **39 pass** and **0 fail**. Nothing is deployed, and the tests do not need tokens.
+Those commands are the same on Windows PowerShell, Linux, and macOS. Success means `build/debug/contract.wasm` exists and the test report ends with **51 pass** and **0 fail**. Nothing is deployed, and the tests do not need tokens.

@@ -167,3 +167,72 @@ test("test promo fits the Shop's own rules", () => {
   assert.ok(BigInt(p.budget_total) >= BigInt(p.amount));
   assert.ok(BigInt(p.daily_cap) >= BigInt(p.amount));
 });
+
+// ---------- Stories helpers ----------
+
+test("Stories may only mint refunds (mask 32, reason 5)", () => {
+  assert.strictEqual(lib.STORIES_MINT_MASK, 32);
+  assert.strictEqual(lib.STORIES_MINT_MASK, 1 << 5);
+  assert.strictEqual(lib.STORIES_MINT_MASK & lib.SHOP_MINT_MASK, 0);
+});
+
+test("eleven story categories, no duplicates, each 1 to 32 characters", () => {
+  assert.strictEqual(lib.STORY_CATEGORIES.length, 11);
+  assert.strictEqual(new Set(lib.STORY_CATEGORIES).size, 11);
+  for (const name of lib.STORY_CATEGORIES) {
+    assert.ok(name.length >= 1 && name.length <= 32, name);
+  }
+});
+
+test("inkCost follows the UTF-16 rule", () => {
+  assert.strictEqual(lib.inkCost("a"), 1);
+  assert.strictEqual(lib.inkCost("\u00E9"), 1);
+  assert.strictEqual(lib.inkCost("e\u0301"), 2);
+  assert.strictEqual(lib.inkCost("\uD83D\uDE00"), 2);
+  assert.strictEqual(lib.inkCost("\u2764\uFE0F"), 2);
+  assert.strictEqual(lib.inkCost("\u2B50"), 1);
+  assert.strictEqual(lib.inkCost("\uD83D\uDC4D\uD83C\uDFFD"), 4);
+  assert.strictEqual(lib.inkCost("\uD83C\uDDFA\uD83C\uDDF8"), 4);
+  assert.strictEqual(lib.inkCost("\uD83D\uDC68\u200D\uD83D\uDC69\u200D\uD83D\uDC67"), 8);
+});
+
+test("measurement text costs exactly the requested Ink and is valid story text", () => {
+  for (const size of lib.MEASURE_SIZES) {
+    for (const emoji of [false, true]) {
+      const t = lib.measurementText(size, emoji);
+      assert.strictEqual(lib.inkCost(t), size);
+      assert.ok(!/\n/.test(t));
+      assert.ok(!t.startsWith(" ") && !t.endsWith(" "));
+      if (emoji) assert.ok(t.includes("\uD83D\uDE00"));
+    }
+  }
+  assert.throws(() => lib.measurementText(0, false), lib.UserError);
+});
+
+test("shop.set_addresses arguments keep the on-chain treasury and founder", () => {
+  const onChain = {
+    treasury: "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6",
+    founder: "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6",
+    ink: "195trftAvPnqeoPmHeGmxtwNYVUVdghm5x",
+  };
+  const stories = "12SVw65QpMjFo9fnc651V7LhXKqVLg15Ww";
+  const args = lib.shopAddressesForStories(onChain, { ink: onChain.ink, stories });
+  assert.deepStrictEqual(args, { treasury: onChain.treasury, founder: onChain.founder, ink: onChain.ink, stories });
+  // Same Stories again is fine (re-running wire-stories).
+  lib.shopAddressesForStories(Object.assign({ stories }, onChain), { ink: onChain.ink, stories });
+});
+
+test("shop.set_addresses arguments refuse anything that does not match the chain", () => {
+  const onChain = {
+    treasury: "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6",
+    founder: "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6",
+    ink: "195trftAvPnqeoPmHeGmxtwNYVUVdghm5x",
+  };
+  const stories = "12SVw65QpMjFo9fnc651V7LhXKqVLg15Ww";
+  const other = "1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth";
+  assert.throws(() => lib.shopAddressesForStories(onChain, { ink: other, stories }), lib.UserError);
+  assert.throws(() => lib.shopAddressesForStories(onChain, { ink: onChain.ink, stories, treasury: other }), lib.UserError);
+  assert.throws(() => lib.shopAddressesForStories(onChain, { ink: onChain.ink, stories, founder: other }), lib.UserError);
+  assert.throws(() => lib.shopAddressesForStories(Object.assign({ stories: other }, onChain), { ink: onChain.ink, stories }), lib.UserError);
+  assert.throws(() => lib.shopAddressesForStories({}, { ink: onChain.ink, stories }), lib.UserError);
+});

@@ -100,7 +100,7 @@ describe("Ink: token details", () => {
     expect(info.symbol).toBe("INK");
     expect(info.decimals).toBe(0);
     expect(info.description).toBe(
-      "Non-transferable writing allowance for SwarmTales. 1 INK = 1 character. No cash value. Creative use only."
+      "Non-transferable writing allowance for SwarmTales. 1 INK per text unit; most emoji cost 2. No cash value. Creative use only."
     );
   });
 });

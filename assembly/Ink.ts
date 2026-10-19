@@ -36,7 +36,7 @@ const NAME = "SwarmTales Ink";
 const SYMBOL = "INK";
 const DECIMALS: u32 = 0; // whole numbers only. Story text is not counted here.
 const DESCRIPTION =
-  "Non-transferable writing allowance for SwarmTales. 1 INK = 1 character. No cash value. Creative use only.";
+  "Non-transferable writing allowance for SwarmTales. 1 INK per text unit; most emoji cost 2. No cash value. Creative use only.";
 
 const MAX_MEMO_LENGTH: i32 = 64;
 const ADDRESS_LENGTH: i32 = 25; // Koinos addresses are 25 bytes

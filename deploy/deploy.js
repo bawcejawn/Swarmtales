@@ -17,9 +17,9 @@
  *    Nothing is sent for real until you type SEND.
  *
  * Commands (run from the repository root, after building both contracts):
- *   node deploy/deploy.js status   --ink <addr> --shop <addr> --admin <addr> [--user <addr>]
- *   node deploy/deploy.js upload   ink|shop --expect <contract wallet address>
- *   node deploy/deploy.js set-admin ink|shop --contract <addr> --admin <addr>
+ *   node deploy/deploy.js status   --ink <addr> --shop <addr> --admin <addr> [--user <addr>] [--stories <addr>] [--story <id>]
+ *   node deploy/deploy.js upload   ink|shop|stories --expect <contract wallet address>
+ *   node deploy/deploy.js set-admin ink|shop|stories --contract <addr> --admin <addr>
  *   node deploy/deploy.js wire     --admin <addr> --ink <addr> --shop <addr> --treasury <addr> --founder <addr>
  *   node deploy/deploy.js test-asset --admin <addr> --shop <addr> [--token <addr>] [--symbol tKOIN] [--decimals 8]
  *   node deploy/deploy.js test-buy --user <addr> --shop <addr> [--tier writer|reader] [--token <addr>]
@@ -27,6 +27,16 @@
  *   node deploy/deploy.js claim-promo --account <addr> --shop <addr> --campaign <id> [--code SWARMTEST]
  *   node deploy/deploy.js user-checks --user <addr> --ink <addr> --shop <addr> --admin <addr>
  *       (dry runs only: each call must be REJECTED; nothing is ever sent)
+ *
+ * Stories (after building stories/ and uploading it):
+ *   node deploy/deploy.js wire-stories --admin <addr> --ink <addr> --shop <addr> --stories <addr> [--treasury <addr>] [--founder <addr>]
+ *       (one admin transaction: stories.set_addresses, ink.set_burner, ink.set_minter mask 32,
+ *        shop.set_addresses with the treasury and founder READ FROM THE CHAIN, and the 11 categories)
+ *   node deploy/deploy.js test-open --user <addr> --shop <addr> --stories <addr> [--token <addr>]
+ *       (testnet: approve the Shop for the Short Story open price, then open a Short Story)
+ *   node deploy/deploy.js measure --user <addr> --ink <addr> --stories <addr> --story <id> [--emoji] [--sizes 100,500,1000,2000,4000]
+ *       (dry runs only: mana for contributions of each size; nothing is ever sent)
+ *   node deploy/deploy.js stories-limits --admin <addr> --stories <addr> --cap <100-4000>
  * Common flags: --network testnet|mainnet  --rpc <https url>
  */
 "use strict";
@@ -47,6 +57,11 @@ const CONTRACTS = {
     abi: path.join(root, "shop", "abi", "shop.abi"),
     buildHint: "cd shop; npx yarn@1.22.22 build:release; cd ..",
   },
+  stories: {
+    wasm: path.join(root, "stories", "build", "release", "contract.wasm"),
+    abi: path.join(root, "stories", "abi", "stories.abi"),
+    buildHint: "cd stories; npx yarn@1.22.22 build:release; cd ..",
+  },
 };
 
 function koilib() {
@@ -64,7 +79,7 @@ function readFileOrFail(file, hint) {
 
 function contractFiles(target) {
   const c = CONTRACTS[target];
-  if (!c) lib.fail("Say which contract: ink or shop.");
+  if (!c) lib.fail("Say which contract: ink, shop or stories.");
   return c;
 }
 
@@ -250,7 +265,7 @@ async function cmdUpload(args) {
   const signer = await getSigner(provider, expected, "the " + target + " contract wallet");
   const { Contract } = koilib();
   const contract = new Contract({ id: expected, signer, provider, bytecode: new Uint8Array(wasm) });
-  // The three authorizes* flags stay false: neither contract has an
+  // The three authorizes* flags stay false: no SwarmTales contract has an
   // authorize() function, so the wallet key keeps full control.
   const { operation } = await contract.deploy({
     abi: abiText,
@@ -495,6 +510,197 @@ async function cmdUserChecks(args) {
   if (failed) process.exitCode = 2;
 }
 
+// ---------- Stories ----------
+
+async function readOnly(provider, target, addr, name, a) {
+  const { Contract } = koilib();
+  const c = new Contract({ id: addr, abi: loadAbiJson(target), provider });
+  const { result } = await c.functions[name](a || {});
+  return result || {};
+}
+
+async function cmdWireStories(args) {
+  const f = args.flags;
+  const admin = lib.requireAddress(f.admin, "admin");
+  const ink = lib.requireAddress(f.ink, "ink");
+  const shop = lib.requireAddress(f.shop, "shop");
+  const stories = lib.requireAddress(f.stories, "stories");
+  if (new Set([ink, shop, stories]).size !== 3) lib.fail("Ink, Shop and Stories must be three different addresses.");
+  if (stories === admin) lib.fail("Stories is a contract address, not the admin wallet.");
+  const { net, provider } = await connect(f);
+
+  // shop.set_addresses replaces ALL FOUR addresses. Read the current
+  // treasury and founder from the Shop itself and send them back unchanged.
+  const shopCfg = await readOnly(provider, "shop", shop, "get_config");
+  const shopArgs = lib.shopAddressesForStories(shopCfg, {
+    ink,
+    stories,
+    treasury: f.treasury === undefined ? undefined : lib.requireAddress(f.treasury, "treasury"),
+    founder: f.founder === undefined ? undefined : lib.requireAddress(f.founder, "founder"),
+  });
+  const storiesCfg = await readOnly(provider, "stories", stories, "get_config");
+  if (storiesCfg.admin !== admin) {
+    lib.fail("Stories admin is " + (storiesCfg.admin || "(not readable)") + ", not " + admin + ". Run set-admin stories first.");
+  }
+  const haveCategories = storiesCfg.next_category_id && storiesCfg.next_category_id !== 0 && storiesCfg.next_category_id !== 1;
+
+  console.log("");
+  console.log("Shop addresses that will be sent (treasury and founder copied from the chain):");
+  console.log("  treasury " + shopArgs.treasury);
+  console.log("  founder  " + shopArgs.founder);
+  console.log("  ink      " + shopArgs.ink);
+  console.log("  stories  " + shopArgs.stories);
+
+  const signer = await getSigner(provider, admin, "the admin wallet");
+  const { Contract } = koilib();
+  const inkC = new Contract({ id: ink, abi: loadAbiJson("ink"), provider });
+  const shopC = new Contract({ id: shop, abi: loadAbiJson("shop"), provider });
+  const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  const ops = [
+    await storiesC.encodeOperation({ name: "set_addresses", args: { ink, shop } }),
+    await inkC.encodeOperation({ name: "set_burner", args: { account: stories, allowed: true } }),
+    await inkC.encodeOperation({ name: "set_minter", args: { account: stories, reasons_mask: lib.STORIES_MINT_MASK } }),
+    await shopC.encodeOperation({ name: "set_addresses", args: shopArgs }),
+  ];
+  if (!haveCategories) {
+    for (const name of lib.STORY_CATEGORIES) {
+      ops.push(await storiesC.encodeOperation({ name: "add_category", args: { name } }));
+    }
+  } else {
+    console.log("Stories already has categories; they are left as they are.");
+  }
+  const txId = await dryRunThenSend(
+    signer, provider, net, ops,
+    "stories.set_addresses + ink.set_burner(Stories) + ink.set_minter(Stories, mask 32 = refunds only) + shop.set_addresses (treasury/founder unchanged)" +
+      (haveCategories ? "" : " + " + lib.STORY_CATEGORIES.length + " categories") + ", in one transaction"
+  );
+  console.log("Send back: the transaction id (" + txId + "). Then run status with --stories.");
+}
+
+async function cmdTestOpen(args) {
+  const f = args.flags;
+  const user = lib.requireAddress(f.user, "user");
+  const shop = lib.requireAddress(f.shop, "shop");
+  const stories = lib.requireAddress(f.stories, "stories");
+  const { net, provider } = await connect(f);
+  if (net.mainnet) lib.fail("test-open is for testnet only.");
+  const token = lib.requireAddress(f.token || net.koin, "token");
+  const { Contract, utils } = koilib();
+  const shopC = new Contract({ id: shop, abi: loadAbiJson("shop"), provider });
+  const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  const { result: priceRes } = await shopC.functions.get_price({ item: lib.SHOP_ITEMS.ITEM_OPEN_SHORT, token });
+  const price = priceRes && priceRes.value ? priceRes.value : "0";
+  if (price === "0") lib.fail("Opening a Short Story has no price for that token yet. Run test-asset first.");
+  const text = "The first line of a SwarmTales test story.";
+  const signer = await getSigner(provider, user, "the test user wallet");
+  const tokenC = new Contract({ id: token, abi: utils.tokenAbi, provider });
+  const ops = [
+    await tokenC.encodeOperation({ name: "approve", args: { owner: user, spender: shop, value: price } }),
+    await storiesC.encodeOperation({
+      name: "open_story",
+      args: {
+        opener: user,
+        kind: lib.STORY_KIND.SHORT,
+        title: "Testnet Short Story",
+        max_chars: "10000",
+        category_1: 1,
+        category_2: 0,
+        visibility: lib.STORY_VISIBILITY.PUBLIC,
+        free_chapters: 0,
+        contributor_edition_min: "0",
+        opening_text: text,
+        ai_assisted: false,
+        expected_ink: String(lib.inkCost(text)),
+        token,
+      },
+    }),
+  ];
+  const txId = await dryRunThenSend(
+    signer, provider, net, ops,
+    "approve the Shop for " + price + " (Short Story open price), then open a 10,000-character Short Story (Shop mints the starter Ink; the opening line burns " + lib.inkCost(text) + " Ink)"
+  );
+  console.log("Send back: the transaction id (" + txId + "). The new story id is shown by status --stories --story 1 (or the next number).");
+}
+
+/** Dry runs only: never broadcast. Shows the mana each contribution size would use. */
+async function cmdMeasure(args) {
+  const f = args.flags;
+  const user = lib.requireAddress(f.user, "user");
+  const ink = lib.requireAddress(f.ink, "ink");
+  const stories = lib.requireAddress(f.stories, "stories");
+  if (!f.story || !/^[1-9][0-9]*$/.test(String(f.story))) lib.fail("Add --story <id> (a story you opened, so no membership check is needed).");
+  const storyId = String(f.story);
+  const sizes = typeof f.sizes === "string" ? f.sizes.split(",").map((x) => Number(x.trim())) : lib.MEASURE_SIZES;
+  const emoji = f.emoji === true;
+  const { net, provider } = await connect(f);
+  const cfg = await readOnly(provider, "stories", stories, "get_config");
+  const st = await readOnly(provider, "stories", stories, "get_story", { story_id: storyId });
+  if (st.opener !== user) lib.fail("Story " + storyId + " was opened by " + (st.opener || "nobody") + ", not " + user + ". Use your own story.");
+  const bal = await readOnly(provider, "ink", ink, "balance_of", { owner: user });
+  const cap = Number(cfg.contribution_cap || 2000);
+  const left = BigInt(st.max_chars || "0") - BigInt(st.used_chars || "0");
+  console.log("Per-submission cap now: " + cap + "   Ink balance: " + (bal.value || "0") + "   Space left in story: " + left);
+
+  const signer = await getSigner(provider, user, "the test user wallet");
+  const { Contract } = koilib();
+  const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  const available = await provider.getAccountRc(user);
+  if (BigInt(available) === 0n) lib.fail("The test user wallet has no mana. Fund it first.");
+  console.log("");
+  console.log("Dry runs only. Nothing is sent. " + (emoji ? "Text includes emoji." : "Plain text."));
+  console.log("size  | result   | mana (rc)  | disk | network | compute");
+  for (const size of sizes) {
+    const text = lib.measurementText(size, emoji);
+    let line = String(size).padEnd(5) + " | ";
+    if (size > cap) {
+      console.log(line + "skipped  | over the cap " + cap + ". Raise it first: stories-limits --cap " + Math.min(4000, size));
+      continue;
+    }
+    try {
+      const op = await storiesC.encodeOperation({
+        name: "contribute",
+        args: { author: user, story_id: storyId, text, starts_chapter: false, ai_assisted: false, expected_ink: String(lib.inkCost(text)) },
+      });
+      const tx = await buildTx(signer, provider, net, [op], available);
+      const { receipt } = await provider.sendTransaction(tx.transaction, false);
+      if (receipt.reverted) {
+        line += "REVERTED | " + (receipt.logs || []).join(" | ");
+      } else {
+        line += "ok       | " + lib.formatMana(receipt.rc_used).padEnd(10) + " | " + String(receipt.disk_storage_used || 0).padEnd(4) + " | " +
+          String(receipt.network_bandwidth_used || 0).padEnd(7) + " | " + String(receipt.compute_bandwidth_used || 0);
+      }
+    } catch (e) {
+      line += "REJECTED | " + String(e && e.message ? e.message : e).slice(0, 200);
+    }
+    console.log(line);
+  }
+  console.log("");
+  console.log("Send back: this whole table.");
+}
+
+async function cmdStoriesLimits(args) {
+  const f = args.flags;
+  const admin = lib.requireAddress(f.admin, "admin");
+  const stories = lib.requireAddress(f.stories, "stories");
+  const cap = Number(f.cap);
+  if (!Number.isInteger(cap) || cap < 100 || cap > 4000) lib.fail("--cap must be a whole number from 100 to 4000.");
+  const { net, provider } = await connect(f);
+  const cfg = await readOnly(provider, "stories", stories, "get_config");
+  const limits = {
+    contribution_cap: cap,
+    trial_limit: cfg.trial_limit || 0,
+    open_limit: cfg.open_limit || 3,
+    archive_days: cfg.archive_days || 60,
+    inactivity_days: cfg.inactivity_days || 30,
+  };
+  const signer = await getSigner(provider, admin, "the admin wallet");
+  const { Contract } = koilib();
+  const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  const op = await storiesC.encodeOperation({ name: "set_limits", args: limits });
+  const txId = await dryRunThenSend(signer, provider, net, [op], "stories.set_limits: per-submission cap " + cap + " (other limits unchanged: " + JSON.stringify(limits) + ")");
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
 async function cmdStatus(args) {
   const f = Object.assign({}, args.flags);
   if (f.user && !f.buyer) f.buyer = f.user;
@@ -511,6 +717,7 @@ async function cmdStatus(args) {
   await show("admin", f.admin);
   await show("ink", f.ink);
   await show("shop", f.shop);
+  await show("stories", f.stories);
   await show("user", f.buyer);
   const read = async (target, addr, name, a) => {
     try {
@@ -538,6 +745,22 @@ async function cmdStatus(args) {
     }
     console.log("shop campaign 1: " + JSON.stringify(await read("shop", f.shop, "get_campaign", { campaign_id: "1" })));
   }
+  if (f.stories) {
+    lib.requireAddress(f.stories, "stories");
+    console.log("");
+    console.log("stories.get_config: " + JSON.stringify(await read("stories", f.stories, "get_config")));
+    if (f.ink) {
+      console.log("ink burner flag for Stories (want true): " + JSON.stringify(await read("ink", f.ink, "is_burner", { account: f.stories })));
+      console.log("ink minter mask for Stories (want 32): " + JSON.stringify(await read("ink", f.ink, "get_minter_reasons", { account: f.stories })));
+    }
+    if (f.shop) {
+      const cfg = await read("shop", f.shop, "get_config");
+      console.log("shop points at Stories (want " + f.stories + "): " + JSON.stringify(cfg && cfg.stories));
+    }
+    console.log("stories category 1: " + JSON.stringify(await read("stories", f.stories, "get_category", { category_id: 1 })));
+    if (f.story) console.log("story " + f.story + ": " + JSON.stringify(await read("stories", f.stories, "get_story", { story_id: String(f.story) })));
+    if (f.buyer) console.log("open projects of user: " + JSON.stringify(await read("stories", f.stories, "get_open_count", { account: f.buyer })));
+  }
 }
 
 async function main() {
@@ -561,6 +784,14 @@ async function main() {
       return cmdClaimPromo(args);
     case "user-checks":
       return cmdUserChecks(args);
+    case "wire-stories":
+      return cmdWireStories(args);
+    case "test-open":
+      return cmdTestOpen(args);
+    case "measure":
+      return cmdMeasure(args);
+    case "stories-limits":
+      return cmdStoriesLimits(args);
     default: {
       const head = fs.readFileSync(__filename, "utf8").split("*/")[0];
       console.log(head.replace(/^#!.*\n/, "").replace(/^\/\*\*?|^ \* ?/gm, ""));

@@ -1,0 +1,1454 @@
+// =====================================================================
+// SwarmTales Stories — smart contract (AssemblyScript, Koinos SDK)
+//
+// WHAT THIS CONTRACT DOES
+//   - Holds every Book and Short Story: who wrote what, when, and for
+//     how much Ink.
+//   - Opening: Shop collects the open fee (99/1 split) and mints the
+//     starter Ink, then Stories burns Ink for the opening text. One
+//     transaction: if any part fails, nothing happens.
+//   - Writing burns the writer's own Ink (Ink checks their signature).
+//   - Editors may shorten or remove text while a story is OPEN. The
+//     ORIGINAL author is re-credited through Ink mint, reason REFUND,
+//     the only mint reason Stories is allowed.
+//   - Closing (opener pays the close fee through Shop), the final edit
+//     in ordered batches, surviving characters, and finalize.
+//   - The 3-open-projects limit, the promo trial, private allow-lists
+//     with invite codes, the 60-day archive and the admin-finalize rule.
+//
+// WHAT THIS CONTRACT DOES NOT DO
+//   - It never moves stablecoins and holds no money.
+//   - The admin cannot edit or remove text, move or burn Ink, refund
+//     outside the rules, or finalize except under the admin rule.
+//
+// INK COST OF TEXT
+//   Cost = number of UTF-16 code units (JavaScript's text.length).
+//   A letter costs 1, most emoji 2, some older emoji 1, skin tones and
+//   flags 4, family emoji 8. The caller sends the expected cost and the
+//   contract refuses any mismatch, so nobody is charged a surprise.
+// =====================================================================
+
+import { System, Storage, authority, Protobuf, SafeMath, Crypto, StringBytes, Arrays } from "@koinos/sdk-as";
+import { stories } from "./proto/stories";
+
+// Story text, final batches and stored segments are larger than the
+// SDK's default 1 KB system buffer. This runs once when the contract
+// loads, before any entry point reads its arguments.
+const SYSTEM_BUFFER_SIZE: u32 = 65536;
+System.setSystemBufferSize(SYSTEM_BUFFER_SIZE);
+
+// ---------- storage spaces ----------
+const CONFIG_SPACE_ID: u32 = 0;
+const LOCK_SPACE_ID: u32 = 1;
+const STORIES_SPACE_ID: u32 = 2;
+const SEGMENTS_SPACE_ID: u32 = 3;
+const EDITORS_SPACE_ID: u32 = 4;
+const ALLOWED_SPACE_ID: u32 = 5;
+const INVITES_SPACE_ID: u32 = 6;
+const CONTRIBUTOR_TOTALS_SPACE_ID: u32 = 7;
+const SURVIVING_TOTALS_SPACE_ID: u32 = 8;
+const TRIAL_USED_SPACE_ID: u32 = 9;
+const OPEN_COUNT_SPACE_ID: u32 = 10;
+const OPENER_COUNT_SPACE_ID: u32 = 11;
+const OPENER_LIST_SPACE_ID: u32 = 12;
+const CATEGORY_COUNT_SPACE_ID: u32 = 13;
+const CATEGORY_LIST_SPACE_ID: u32 = 14;
+const CATEGORY_MEMBER_SPACE_ID: u32 = 15;
+const AUTHOR_COUNT_SPACE_ID: u32 = 16;
+const AUTHOR_LIST_SPACE_ID: u32 = 17;
+const CATEGORIES_SPACE_ID: u32 = 18;
+
+const ADDRESS_LENGTH: i32 = 25;
+const DAY_SECONDS: u64 = 86400;
+
+// ---------- fixed rules (changing these needs a published upgrade) ----------
+const BOOK_MIN: u64 = 100000;
+const BOOK_MAX: u64 = 1000000;
+const SHORT_MIN: u64 = 10000;
+const SHORT_MAX: u64 = 99999;
+// A story this close to its own maximum may be closed even below the
+// kind minimum, so a 100,000 Book stuck at 99,998 is not stuck forever.
+const CLOSE_SLACK: u64 = 100;
+
+const MAX_TITLE: i32 = 100;
+const MAX_CATEGORY_NAME: i32 = 32;
+const MAX_CATEGORIES: u32 = 255;
+const MAX_EDITORS: u32 = 10;
+const MAX_ACCOUNTS_PER_CALL: i32 = 20;
+const MAX_FREE_CHAPTERS: u32 = 5;
+const MAX_BATCH_ITEMS: i32 = 20;
+const MAX_BATCH_UNITS: u64 = 8000;
+const MAX_LIST: u32 = 50;
+const MAX_SEGMENT_READ: u32 = 10;
+const MAX_NEWLINE_RUN: i32 = 3;
+const MIN_CODE: i32 = 8;
+const MAX_CODE: i32 = 64;
+const MAX_INVITE_USES: u32 = 1000;
+const MAX_INVITE_DAYS: u64 = 365;
+const MAX_PDF_URI: i32 = 200;
+const MIN_PDF_HASH: i32 = 32;
+const MAX_PDF_HASH: i32 = 64;
+
+// ---------- adjustable limits: start value and hard bounds ----------
+const DEFAULT_CAP: u32 = 2000;
+const CAP_MIN: u32 = 100;
+const CAP_MAX: u32 = 4000;
+const DEFAULT_TRIAL: u32 = 1000;
+const TRIAL_MAX: u32 = 5000;
+const DEFAULT_OPEN_LIMIT: u32 = 3;
+const OPEN_LIMIT_MIN: u32 = 1;
+const OPEN_LIMIT_MAX: u32 = 10;
+const DEFAULT_ARCHIVE_DAYS: u32 = 60;
+const ARCHIVE_DAYS_MIN: u32 = 30;
+const DEFAULT_INACTIVITY_DAYS: u32 = 30;
+const INACTIVITY_DAYS_MIN: u32 = 30;
+const DAYS_MAX: u32 = 365;
+
+// ---------- other contracts ----------
+// First 4 bytes of sha256(entry point name).
+const INK_BURN_ENTRY: u32 = 2241834181;       // 0x859facc5 "burn"
+const INK_MINT_ENTRY: u32 = 3698268091;       // 0xdc6f17bb "mint"
+const SHOP_OPEN_FEE_ENTRY: u32 = 547545118;   // 0x20a2e01e "pay_open_fee"
+const SHOP_CLOSE_FEE_ENTRY: u32 = 3080983189; // 0xb7a41295 "pay_close_fee"
+const SHOP_MEMBERSHIP_ENTRY: u32 = 1996602347; // 0x7701bbeb "get_membership"
+const SHOP_PROMO_ENTRY: u32 = 672038647;      // 0x280e7ef7 "get_promo_claimed"
+
+const BURN_CONTRIBUTION: u32 = 1;
+const MINT_REFUND: u32 = 5;
+const SHOP_TIER_WRITER: u32 = 2;
+
+export class Stories {
+  contractId: Uint8Array;
+  config: Storage.Obj<stories.config>;
+  lock: Storage.Obj<stories.boole>;
+  stories: Storage.Map<Uint8Array, stories.story>;
+  segments: Storage.Map<Uint8Array, stories.segment>;
+  editors: Storage.Map<Uint8Array, stories.boole>;
+  allowed: Storage.Map<Uint8Array, stories.boole>;
+  invites: Storage.Map<Uint8Array, stories.invite>;
+  contributorTotals: Storage.Map<Uint8Array, stories.uint64>;
+  survivingTotals: Storage.Map<Uint8Array, stories.uint64>;
+  trialUsed: Storage.Map<Uint8Array, stories.uint64>;
+  openCount: Storage.Map<Uint8Array, stories.uint32>;
+  openerCount: Storage.Map<Uint8Array, stories.uint64>;
+  openerList: Storage.Map<Uint8Array, stories.uint64>;
+  categoryCount: Storage.Map<Uint8Array, stories.uint64>;
+  categoryList: Storage.Map<Uint8Array, stories.uint64>;
+  categoryMember: Storage.Map<Uint8Array, stories.boole>;
+  authorCount: Storage.Map<Uint8Array, stories.uint64>;
+  authorList: Storage.Map<Uint8Array, stories.segment_ref>;
+  categories: Storage.Map<Uint8Array, stories.category>;
+
+  constructor() {
+    this.contractId = System.getContractId();
+    const id = this.contractId;
+    this.config = new Storage.Obj(id, CONFIG_SPACE_ID, stories.config.decode, stories.config.encode,
+      () => new stories.config(
+        new Uint8Array(0), false, new Uint8Array(0), new Uint8Array(0),
+        DEFAULT_CAP, DEFAULT_TRIAL, DEFAULT_OPEN_LIMIT, DEFAULT_ARCHIVE_DAYS, DEFAULT_INACTIVITY_DAYS, 0, 0
+      ));
+    this.lock = new Storage.Obj(id, LOCK_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
+    this.stories = new Storage.Map(id, STORIES_SPACE_ID, stories.story.decode, stories.story.encode, null);
+    this.segments = new Storage.Map(id, SEGMENTS_SPACE_ID, stories.segment.decode, stories.segment.encode, null);
+    this.editors = new Storage.Map(id, EDITORS_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
+    this.allowed = new Storage.Map(id, ALLOWED_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
+    this.invites = new Storage.Map(id, INVITES_SPACE_ID, stories.invite.decode, stories.invite.encode, null);
+    // No default: a missing entry means "never contributed here", which
+    // is how contributor_count counts each author once.
+    this.contributorTotals = new Storage.Map(id, CONTRIBUTOR_TOTALS_SPACE_ID, stories.uint64.decode, stories.uint64.encode, null);
+    this.survivingTotals = new Storage.Map(id, SURVIVING_TOTALS_SPACE_ID, stories.uint64.decode, stories.uint64.encode, () => new stories.uint64(0));
+    this.trialUsed = new Storage.Map(id, TRIAL_USED_SPACE_ID, stories.uint64.decode, stories.uint64.encode, () => new stories.uint64(0));
+    this.openCount = new Storage.Map(id, OPEN_COUNT_SPACE_ID, stories.uint32.decode, stories.uint32.encode, () => new stories.uint32(0));
+    this.openerCount = new Storage.Map(id, OPENER_COUNT_SPACE_ID, stories.uint64.decode, stories.uint64.encode, () => new stories.uint64(0));
+    this.openerList = new Storage.Map(id, OPENER_LIST_SPACE_ID, stories.uint64.decode, stories.uint64.encode, null);
+    this.categoryCount = new Storage.Map(id, CATEGORY_COUNT_SPACE_ID, stories.uint64.decode, stories.uint64.encode, () => new stories.uint64(0));
+    this.categoryList = new Storage.Map(id, CATEGORY_LIST_SPACE_ID, stories.uint64.decode, stories.uint64.encode, null);
+    this.categoryMember = new Storage.Map(id, CATEGORY_MEMBER_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
+    this.authorCount = new Storage.Map(id, AUTHOR_COUNT_SPACE_ID, stories.uint64.decode, stories.uint64.encode, () => new stories.uint64(0));
+    this.authorList = new Storage.Map(id, AUTHOR_LIST_SPACE_ID, stories.segment_ref.decode, stories.segment_ref.encode, null);
+    this.categories = new Storage.Map(id, CATEGORIES_SPACE_ID, stories.category.decode, stories.category.encode, null);
+  }
+
+  // ===================================================================
+  // Reads
+  // ===================================================================
+
+  get_config(args: stories.get_config_arguments): stories.config {
+    const cfg = this.config.get()!;
+    cfg.admin = this.getAdmin();
+    return cfg;
+  }
+
+  get_story(args: stories.get_story_arguments): stories.story {
+    const found = this.stories.get(this.u64Key(args.story_id));
+    return found != null ? found! : new stories.story();
+  }
+
+  get_segment(args: stories.get_segment_arguments): stories.segment {
+    const found = this.segments.get(this.pairKey(args.story_id, args.seq));
+    return found != null ? found! : new stories.segment();
+  }
+
+  get_segments(args: stories.get_segments_arguments): stories.segment_list {
+    const out = new stories.segment_list();
+    const found = this.stories.get(this.u64Key(args.story_id));
+    if (found == null) return out;
+    const limit = args.limit == 0 || args.limit > MAX_SEGMENT_READ ? MAX_SEGMENT_READ : args.limit;
+    let seq = args.start == 0 ? 1 : args.start;
+    for (let n: u32 = 0; n < limit && seq <= found!.segment_count; n++) {
+      out.values.push(this.segments.get(this.pairKey(args.story_id, seq))!);
+      seq++;
+    }
+    return out;
+  }
+
+  get_contributor_total(args: stories.get_contributor_total_arguments): stories.uint64 {
+    if (!this.isAddress(args.account)) return new stories.uint64(0);
+    const found = this.contributorTotals.get(this.idAddrKey(args.story_id, args.account!));
+    return found != null ? found! : new stories.uint64(0);
+  }
+
+  get_surviving_total(args: stories.get_surviving_total_arguments): stories.uint64 {
+    if (!this.isAddress(args.account)) return new stories.uint64(0);
+    return this.survivingTotals.get(this.idAddrKey(args.story_id, args.account!))!;
+  }
+
+  is_editor(args: stories.is_editor_arguments): stories.boole {
+    if (!this.isAddress(args.account)) return new stories.boole(false);
+    return this.editors.get(this.idAddrKey(args.story_id, args.account!))!;
+  }
+
+  is_allowed(args: stories.is_allowed_arguments): stories.boole {
+    if (!this.isAddress(args.account)) return new stories.boole(false);
+    return this.allowed.get(this.idAddrKey(args.story_id, args.account!))!;
+  }
+
+  get_invite(args: stories.get_invite_arguments): stories.invite {
+    const found = this.invites.get(this.pairKey(args.story_id, args.invite_id));
+    return found != null ? found! : new stories.invite();
+  }
+
+  get_trial_used(args: stories.get_trial_used_arguments): stories.uint64 {
+    if (!this.isAddress(args.account)) return new stories.uint64(0);
+    return this.trialUsed.get(args.account!)!;
+  }
+
+  get_open_count(args: stories.get_open_count_arguments): stories.uint32 {
+    if (!this.isAddress(args.account)) return new stories.uint32(0);
+    return this.openCount.get(args.account!)!;
+  }
+
+  get_category(args: stories.get_category_arguments): stories.category {
+    const found = this.categories.get(this.u32Key(args.category_id));
+    return found != null ? found! : new stories.category();
+  }
+
+  get_opener_stories(args: stories.get_opener_stories_arguments): stories.id_list {
+    const out = new stories.id_list();
+    if (!this.isAddress(args.account)) return out;
+    const total = this.openerCount.get(args.account!)!.value;
+    const limit = this.listLimit(args.limit);
+    for (let i = args.start; i < total && <u32>(i - args.start) < limit; i++) {
+      out.values.push(this.openerList.get(this.addrIdxKey(args.account!, i))!.value);
+    }
+    return out;
+  }
+
+  get_category_stories(args: stories.get_category_stories_arguments): stories.id_list {
+    const out = new stories.id_list();
+    const total = this.categoryCount.get(this.u32Key(args.category_id))!.value;
+    const limit = this.listLimit(args.limit);
+    for (let i = args.start; i < total && <u32>(i - args.start) < limit; i++) {
+      out.values.push(this.categoryList.get(this.u32IdxKey(args.category_id, i))!.value);
+    }
+    return out;
+  }
+
+  get_author_segments(args: stories.get_author_segments_arguments): stories.segment_ref_list {
+    const out = new stories.segment_ref_list();
+    if (!this.isAddress(args.account)) return out;
+    const total = this.authorCount.get(args.account!)!.value;
+    const limit = this.listLimit(args.limit);
+    for (let i = args.start; i < total && <u32>(i - args.start) < limit; i++) {
+      out.values.push(this.authorList.get(this.addrIdxKey(args.account!, i))!);
+    }
+    return out;
+  }
+
+  quote_cost(args: stories.quote_cost_arguments): stories.uint64 {
+    return new stories.uint64(this.requireText(this.text(args.text), true));
+  }
+
+  // ===================================================================
+  // Opening and settings
+  // ===================================================================
+
+  open_story(args: stories.open_story_arguments): stories.uint64 {
+    this.enter();
+    this.requireNotPaused();
+    const opener = this.requireAddress(args.opener, "STORIES: invalid opener address");
+    this.requireSigner(opener, "STORIES: opener has not authorized this");
+    const cfg = this.config.get()!;
+    const ink = this.requireAddress(cfg.ink, "STORIES: Ink contract is not set");
+    const shopId = this.requireAddress(cfg.shop, "STORIES: Shop contract is not set");
+    const token = this.requireAddress(args.token, "STORIES: invalid token address");
+
+    const kind = args.kind;
+    System.require(kind == stories.story_kind.KIND_BOOK || kind == stories.story_kind.KIND_SHORT, "STORIES: kind must be Book or Short Story");
+    const isBook = kind == stories.story_kind.KIND_BOOK;
+    const lo = isBook ? BOOK_MIN : SHORT_MIN;
+    const hi = isBook ? BOOK_MAX : SHORT_MAX;
+    System.require(args.max_chars >= lo && args.max_chars <= hi, isBook
+      ? "STORIES: a Book must be 100,000 to 1,000,000 characters"
+      : "STORIES: a Short Story must be 10,000 to 99,999 characters");
+
+    const title = this.requireTitle(args.title);
+    this.requireCategories(args.category_1, args.category_2);
+    this.requireVisibility(args.visibility);
+    System.require(args.free_chapters <= MAX_FREE_CHAPTERS, "STORIES: free chapters must be 0 to 5");
+    System.require(args.contributor_edition_min <= args.max_chars, "STORIES: Contributor Edition minimum is above the story size");
+
+    const text = this.text(args.opening_text);
+    const cost = <u64>this.requireText(text, true);
+    System.require(cost == args.expected_ink, "STORIES: Ink cost does not match expected_ink");
+    System.require(cost <= <u64>cfg.contribution_cap, "STORIES: text is over the per-submission cap");
+
+    const open = this.openCount.get(opener)!;
+    System.require(open.value < cfg.open_limit, "STORIES: you already have the maximum number of open projects");
+
+    let storyId = cfg.next_story_id;
+    if (storyId == 0) storyId = 1;
+    cfg.next_story_id = SafeMath.add(storyId, 1);
+    this.saveConfig(cfg);
+
+    const now = this.now();
+    const st = new stories.story();
+    st.kind = kind;
+    st.opener = opener;
+    st.title = title;
+    st.category_1 = args.category_1;
+    st.category_2 = args.category_2;
+    st.visibility = args.visibility;
+    st.status = stories.story_status.STATUS_OPEN;
+    st.max_chars = args.max_chars;
+    st.free_chapters = args.free_chapters;
+    st.contributor_edition_min = args.contributor_edition_min;
+    st.created_at = now;
+    st.last_activity_at = now;
+    st.opener_last_active = now;
+    st.next_invite_id = 1;
+
+    open.value = open.value + 1;
+    this.openCount.put(opener, open);
+    this.appendOpener(opener, storyId);
+    this.addToCategory(args.category_1, storyId);
+    if (args.category_2 != 0) this.addToCategory(args.category_2, storyId);
+
+    const ev = new stories.story_opened_event(storyId, opener, kind, args.max_chars, token);
+    System.event("stories.story_opened_event", Protobuf.encode(ev, stories.story_opened_event.encode), [opener]);
+
+    // 1) Shop takes the fee and mints the starter Ink to the opener.
+    const fee = new stories.shop_fee_call(opener, <u32>kind, token);
+    this.callOut(shopId, SHOP_OPEN_FEE_ENTRY, Protobuf.encode(fee, stories.shop_fee_call.encode), [opener], "STORIES: open fee payment failed");
+
+    // 2) The opening text is segment 1, paid in Ink like any other text.
+    this.writeSegment(storyId, st, opener, text, cost, true, args.ai_assisted, false, ink);
+    this.leave();
+    return new stories.uint64(storyId);
+  }
+
+  update_story(args: stories.update_story_arguments): stories.empty_object {
+    this.enter();
+    this.requireNotPaused();
+    const opener = this.requireAddress(args.opener, "STORIES: invalid opener address");
+    this.requireSigner(opener, "STORIES: opener has not authorized this");
+    const st = this.requireStory(args.story_id);
+    this.requireOpener(st, opener);
+    System.require(st.status != stories.story_status.STATUS_FINALIZED, "STORIES: a finalized story cannot be changed");
+    st.title = this.requireTitle(args.title);
+    this.requireCategories(args.category_1, args.category_2);
+    this.requireVisibility(args.visibility);
+    System.require(args.free_chapters <= MAX_FREE_CHAPTERS, "STORIES: free chapters must be 0 to 5");
+    st.category_1 = args.category_1;
+    st.category_2 = args.category_2;
+    st.visibility = args.visibility;
+    st.free_chapters = args.free_chapters;
+    st.opener_last_active = this.now();
+    this.addToCategory(args.category_1, args.story_id);
+    if (args.category_2 != 0) this.addToCategory(args.category_2, args.story_id);
+    this.putStory(args.story_id, st);
+    const ev = new stories.story_updated_event(args.story_id, st.title, st.category_1, st.category_2, st.visibility, st.free_chapters);
+    System.event("stories.story_updated_event", Protobuf.encode(ev, stories.story_updated_event.encode), [opener]);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  set_editor(args: stories.set_editor_arguments): stories.empty_object {
+    this.enter();
+    this.requireNotPaused();
+    const opener = this.requireAddress(args.opener, "STORIES: invalid opener address");
+    this.requireSigner(opener, "STORIES: opener has not authorized this");
+    const st = this.requireStory(args.story_id);
+    this.requireOpener(st, opener);
+    System.require(st.status != stories.story_status.STATUS_FINALIZED, "STORIES: a finalized story cannot be changed");
+    const account = this.requireAddress(args.account, "STORIES: invalid editor address");
+    System.require(!Arrays.equal(account, opener), "STORIES: the opener is already in charge");
+    const key = this.idAddrKey(args.story_id, account);
+    const already = this.editors.get(key)!.value;
+    if (args.allowed) {
+      System.require(!already, "STORIES: already an editor");
+      System.require(st.editor_count < MAX_EDITORS, "STORIES: a story can have at most 10 editors");
+      this.editors.put(key, new stories.boole(true));
+      st.editor_count = st.editor_count + 1;
+    } else {
+      System.require(already, "STORIES: not an editor");
+      this.editors.remove(key);
+      st.editor_count = st.editor_count - 1;
+    }
+    st.opener_last_active = this.now();
+    this.putStory(args.story_id, st);
+    const ev = new stories.editor_event(args.story_id, account, args.allowed);
+    System.event("stories.editor_event", Protobuf.encode(ev, stories.editor_event.encode), [account]);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  set_allowed(args: stories.set_allowed_arguments): stories.empty_object {
+    this.enter();
+    this.requireNotPaused();
+    const actor = this.requireAddress(args.actor, "STORIES: invalid address");
+    this.requireSigner(actor, "STORIES: caller has not authorized this");
+    const st = this.requireStory(args.story_id);
+    System.require(this.isPrivileged(args.story_id, st, actor), "STORIES: only the opener or an editor may change the allow-list");
+    System.require(st.status != stories.story_status.STATUS_FINALIZED, "STORIES: a finalized story cannot be changed");
+    const list = args.accounts;
+    System.require(list.length > 0 && list.length <= MAX_ACCOUNTS_PER_CALL, "STORIES: send 1 to 20 wallets per call");
+    for (let i = 0; i < list.length; i++) {
+      const account = this.requireAddress(list[i], "STORIES: invalid wallet address");
+      const key = this.idAddrKey(args.story_id, account);
+      if (args.allowed) this.allowed.put(key, new stories.boole(true));
+      else this.allowed.remove(key);
+      const ev = new stories.allowed_event(args.story_id, account, args.allowed, 0);
+      System.event("stories.allowed_event", Protobuf.encode(ev, stories.allowed_event.encode), [account]);
+    }
+    if (Arrays.equal(actor, st.opener!)) {
+      st.opener_last_active = this.now();
+      this.putStory(args.story_id, st);
+    }
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  create_invite(args: stories.create_invite_arguments): stories.uint64 {
+    this.enter();
+    this.requireNotPaused();
+    const opener = this.requireAddress(args.opener, "STORIES: invalid opener address");
+    this.requireSigner(opener, "STORIES: opener has not authorized this");
+    const st = this.requireStory(args.story_id);
+    this.requireOpener(st, opener);
+    this.requireJoinable(st);
+    const code = this.requireCode(args.code);
+    System.require(args.max_uses >= 1 && args.max_uses <= MAX_INVITE_USES, "STORIES: invite uses must be 1 to 1000");
+    const now = this.now();
+    System.require(args.expires_at > now, "STORIES: invite expiry must be in the future");
+    System.require(args.expires_at <= now + MAX_INVITE_DAYS * DAY_SECONDS, "STORIES: invite expiry can be at most 365 days away");
+
+    let inviteId = st.next_invite_id;
+    if (inviteId == 0) inviteId = 1;
+    st.next_invite_id = SafeMath.add(inviteId, 1);
+    st.opener_last_active = now;
+    this.putStory(args.story_id, st);
+    this.invites.put(this.pairKey(args.story_id, inviteId), new stories.invite(this.sha256(StringBytes.stringToBytes(code)), args.max_uses, 0, args.expires_at, false));
+    const ev = new stories.invite_event(args.story_id, inviteId, args.max_uses, args.expires_at, false);
+    System.event("stories.invite_event", Protobuf.encode(ev, stories.invite_event.encode), [opener]);
+    this.leave();
+    return new stories.uint64(inviteId);
+  }
+
+  revoke_invite(args: stories.revoke_invite_arguments): stories.empty_object {
+    this.enter();
+    this.requireNotPaused();
+    const opener = this.requireAddress(args.opener, "STORIES: invalid opener address");
+    this.requireSigner(opener, "STORIES: opener has not authorized this");
+    const st = this.requireStory(args.story_id);
+    this.requireOpener(st, opener);
+    const key = this.pairKey(args.story_id, args.invite_id);
+    const inv = this.invites.get(key);
+    System.require(inv != null, "STORIES: unknown invite");
+    inv!.revoked = true;
+    this.invites.put(key, inv!);
+    const ev = new stories.invite_event(args.story_id, args.invite_id, inv!.max_uses, inv!.expires_at, true);
+    System.event("stories.invite_event", Protobuf.encode(ev, stories.invite_event.encode), [opener]);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  join_with_invite(args: stories.join_with_invite_arguments): stories.empty_object {
+    this.enter();
+    this.requireNotPaused();
+    const account = this.requireAddress(args.account, "STORIES: invalid wallet address");
+    this.requireSigner(account, "STORIES: wallet has not authorized this");
+    const st = this.requireStory(args.story_id);
+    this.requireJoinable(st);
+    const key = this.pairKey(args.story_id, args.invite_id);
+    const inv = this.invites.get(key);
+    System.require(inv != null, "STORIES: unknown invite");
+    const row = inv!;
+    System.require(!row.revoked, "STORIES: invite was revoked");
+    System.require(this.now() < row.expires_at, "STORIES: invite has expired");
+    System.require(row.uses < row.max_uses, "STORIES: invite has no uses left");
+    const code = this.text(args.code);
+    System.require(code.length >= MIN_CODE && code.length <= MAX_CODE, "STORIES: invite code rejected");
+    System.require(Arrays.equal(this.sha256(StringBytes.stringToBytes(code)), row.code_hash), "STORIES: invite code rejected");
+    const allowKey = this.idAddrKey(args.story_id, account);
+    System.require(!this.allowed.get(allowKey)!.value, "STORIES: already on the allow-list");
+    this.allowed.put(allowKey, new stories.boole(true));
+    row.uses = row.uses + 1;
+    this.invites.put(key, row);
+    const ev = new stories.allowed_event(args.story_id, account, true, args.invite_id);
+    System.event("stories.allowed_event", Protobuf.encode(ev, stories.allowed_event.encode), [account]);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  // ===================================================================
+  // Writing and editing
+  // ===================================================================
+
+  contribute(args: stories.contribute_arguments): stories.uint64 {
+    this.enter();
+    this.requireNotPaused();
+    const author = this.requireAddress(args.author, "STORIES: invalid author address");
+    this.requireSigner(author, "STORIES: author has not authorized this");
+    const cfg = this.config.get()!;
+    const ink = this.requireAddress(cfg.ink, "STORIES: Ink contract is not set");
+    const st = this.requireStory(args.story_id);
+    System.require(st.status == stories.story_status.STATUS_OPEN, "STORIES: story is not open for writing");
+
+    const text = this.text(args.text);
+    const cost = <u64>this.requireText(text, true);
+    System.require(cost == args.expected_ink, "STORIES: Ink cost does not match expected_ink");
+    System.require(cost <= <u64>cfg.contribution_cap, "STORIES: text is over the per-submission cap");
+    System.require(SafeMath.add(st.used_chars, cost) <= st.max_chars, "STORIES: not enough space left in this story");
+
+    const privileged = this.isPrivileged(args.story_id, st, author);
+    if (st.visibility == stories.visibility.VISIBILITY_PRIVATE) {
+      System.require(
+        privileged || this.allowed.get(this.idAddrKey(args.story_id, author))!.value,
+        "STORIES: this story is private"
+      );
+    }
+    let trial = false;
+    if (!privileged && !this.isActiveWriter(author)) {
+      System.require(this.promoClaimed(author), "STORIES: an active Writer membership is required");
+      const used = this.trialUsed.get(author)!;
+      System.require(SafeMath.add(used.value, cost) <= <u64>cfg.trial_limit, "STORIES: trial writing limit reached");
+      used.value = used.value + cost;
+      this.trialUsed.put(author, used);
+      trial = true;
+    }
+
+    const seq = this.writeSegment(args.story_id, st, author, text, cost, args.starts_chapter, args.ai_assisted, trial, ink);
+    this.leave();
+    return new stories.uint64(seq);
+  }
+
+  edit_segment(args: stories.edit_segment_arguments): stories.empty_object {
+    this.enter();
+    this.requireNotPaused();
+    const editor = this.requireAddress(args.editor, "STORIES: invalid editor address");
+    this.requireSigner(editor, "STORIES: editor has not authorized this");
+    const ink = this.requireAddress(this.config.get()!.ink, "STORIES: Ink contract is not set");
+    const st = this.requireStory(args.story_id);
+    System.require(st.status == stories.story_status.STATUS_OPEN, "STORIES: text can only be edited while the story is open");
+    System.require(this.isPrivileged(args.story_id, st, editor), "STORIES: only the opener or an editor may edit");
+    const key = this.pairKey(args.story_id, args.seq);
+    const seg = this.requireActiveSegment(key);
+
+    const text = this.text(args.new_text);
+    const newCost = <u64>this.requireText(text, true);
+    System.require(newCost == args.expected_cost, "STORIES: Ink cost does not match expected_cost");
+    System.require(newCost <= SafeMath.add(seg.charged, this.allowance(seg.original_cost)), "STORIES: edit grows the text too much (light edits only)");
+    const oldCost = seg.current_cost;
+    const nextUsed = SafeMath.add(SafeMath.sub(st.used_chars, oldCost), newCost);
+    if (newCost > oldCost) System.require(nextUsed <= st.max_chars, "STORIES: not enough space left in this story");
+
+    const refund = seg.charged > newCost ? seg.charged - newCost : 0;
+    const now = this.now();
+    seg.text = text;
+    seg.text_hash = this.sha256(StringBytes.stringToBytes(text));
+    seg.current_cost = newCost;
+    seg.charged = seg.charged - refund;
+    seg.last_edited_by = editor;
+    seg.last_edited_at = now;
+    this.segments.put(key, seg);
+
+    st.used_chars = nextUsed;
+    st.last_activity_at = now;
+    if (Arrays.equal(editor, st.opener!)) st.opener_last_active = now;
+    this.applyRefund(args.story_id, st, seg.author!, refund);
+    this.maybeAutoLock(args.story_id, st, editor);
+    this.putStory(args.story_id, st);
+
+    this.emitChange(args.story_id, args.seq, editor, oldCost, newCost, refund, false, false, seg.author!);
+    if (refund > 0) this.refundInk(ink, seg.author!, refund, args.story_id, args.seq);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  remove_segment(args: stories.remove_segment_arguments): stories.empty_object {
+    this.enter();
+    this.requireNotPaused();
+    const editor = this.requireAddress(args.editor, "STORIES: invalid editor address");
+    this.requireSigner(editor, "STORIES: editor has not authorized this");
+    const ink = this.requireAddress(this.config.get()!.ink, "STORIES: Ink contract is not set");
+    const st = this.requireStory(args.story_id);
+    System.require(st.status == stories.story_status.STATUS_OPEN, "STORIES: text can only be removed while the story is open");
+    System.require(this.isPrivileged(args.story_id, st, editor), "STORIES: only the opener or an editor may remove text");
+    const key = this.pairKey(args.story_id, args.seq);
+    const seg = this.requireActiveSegment(key);
+
+    const refund = seg.charged;
+    const oldCost = seg.current_cost;
+    const now = this.now();
+    this.clearSegment(seg, editor, now);
+    this.segments.put(key, seg);
+
+    st.used_chars = SafeMath.sub(st.used_chars, oldCost);
+    st.last_activity_at = now;
+    if (Arrays.equal(editor, st.opener!)) st.opener_last_active = now;
+    this.applyRefund(args.story_id, st, seg.author!, refund);
+    this.putStory(args.story_id, st);
+
+    this.emitChange(args.story_id, args.seq, editor, oldCost, 0, refund, true, false, seg.author!);
+    if (refund > 0) this.refundInk(ink, seg.author!, refund, args.story_id, args.seq);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  // ===================================================================
+  // Closing and the final edit
+  // ===================================================================
+
+  close_story(args: stories.close_story_arguments): stories.empty_object {
+    this.enter();
+    this.requireNotPaused();
+    const opener = this.requireAddress(args.opener, "STORIES: invalid opener address");
+    this.requireSigner(opener, "STORIES: opener has not authorized this");
+    const shopId = this.requireAddress(this.config.get()!.shop, "STORIES: Shop contract is not set");
+    const token = this.requireAddress(args.token, "STORIES: invalid token address");
+    const st = this.requireStory(args.story_id);
+    this.requireOpener(st, opener);
+    System.require(
+      st.status == stories.story_status.STATUS_LOCKED ||
+        (st.status == stories.story_status.STATUS_OPEN && this.closeReady(st)),
+      "STORIES: story cannot be closed yet"
+    );
+    const now = this.now();
+    st.status = stories.story_status.STATUS_EDITING;
+    st.finalizer_is_admin = false;
+    st.close_fee_paid = true;
+    if (st.locked_at == 0) st.locked_at = now;
+    st.opener_last_active = now;
+    this.putStory(args.story_id, st);
+    this.emitStatus(args.story_id, st.status, "closed", opener);
+
+    const fee = new stories.shop_fee_call(opener, <u32>st.kind, token);
+    this.callOut(shopId, SHOP_CLOSE_FEE_ENTRY, Protobuf.encode(fee, stories.shop_fee_call.encode), [opener], "STORIES: close fee payment failed");
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  request_admin_finalize(args: stories.request_admin_finalize_arguments): stories.empty_object {
+    this.enter();
+    this.requireNotPaused();
+    const opener = this.requireAddress(args.opener, "STORIES: invalid opener address");
+    this.requireSigner(opener, "STORIES: opener has not authorized this");
+    const st = this.requireStory(args.story_id);
+    this.requireOpener(st, opener);
+    System.require(
+      st.status == stories.story_status.STATUS_OPEN ||
+        st.status == stories.story_status.STATUS_LOCKED ||
+        st.status == stories.story_status.STATUS_EDITING,
+      "STORIES: story is not active"
+    );
+    st.admin_finalize_requested = args.requested;
+    st.opener_last_active = this.now();
+    this.putStory(args.story_id, st);
+    const ev = new stories.admin_finalize_request_event(args.story_id, args.requested);
+    System.event("stories.admin_finalize_request_event", Protobuf.encode(ev, stories.admin_finalize_request_event.encode), [opener]);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  admin_take_over(args: stories.admin_take_over_arguments): stories.empty_object {
+    this.enter();
+    this.requireAdmin();
+    const st = this.requireStory(args.story_id);
+    const eligible =
+      st.status == stories.story_status.STATUS_LOCKED ||
+      (st.status == stories.story_status.STATUS_OPEN && this.closeReady(st)) ||
+      (st.status == stories.story_status.STATUS_EDITING && !st.finalizer_is_admin);
+    System.require(eligible, "STORIES: story is not ready for an admin finalize");
+    const now = this.now();
+    const wait = SafeMath.mul(<u64>this.config.get()!.inactivity_days, DAY_SECONDS);
+    System.require(
+      st.admin_finalize_requested || now >= SafeMath.add(st.opener_last_active, wait),
+      "STORIES: the opener has not asked and has not been inactive long enough"
+    );
+    st.status = stories.story_status.STATUS_EDITING;
+    st.finalizer_is_admin = true;
+    if (st.locked_at == 0) st.locked_at = now;
+    this.putStory(args.story_id, st);
+    this.emitStatus(args.story_id, st.status, "admin-take-over", this.getAdmin());
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  submit_final_batch(args: stories.submit_final_batch_arguments): stories.empty_object {
+    this.enter();
+    this.requireNotPaused();
+    const finalizer = this.requireAddress(args.finalizer, "STORIES: invalid finalizer address");
+    const ink = this.requireAddress(this.config.get()!.ink, "STORIES: Ink contract is not set");
+    const st = this.requireStory(args.story_id);
+    System.require(st.status == stories.story_status.STATUS_EDITING, "STORIES: story is not in the final edit");
+    this.requireFinalizer(st, finalizer);
+    const items = args.items;
+    System.require(items.length > 0 && items.length <= MAX_BATCH_ITEMS, "STORIES: send 1 to 20 items per batch");
+
+    let units: u64 = 0;
+    const now = this.now();
+    for (let i = 0; i < items.length; i++) {
+      this.skipRemoved(args.story_id, st);
+      const item = items[i];
+      const next = st.final_cursor + 1;
+      System.require(next <= st.segment_count, "STORIES: more items than segments");
+      System.require(item.seq == next, "STORIES: items must be in order, starting at the next unprocessed segment");
+      const key = this.pairKey(args.story_id, next);
+      const seg = this.segments.get(key)!;
+      const oldCost = seg.current_cost;
+      let refund: u64 = 0;
+      let removed = false;
+
+      if (item.mode == stories.final_mode.FINAL_UNCHANGED) {
+        seg.surviving = oldCost < seg.charged ? oldCost : seg.charged;
+      } else if (item.mode == stories.final_mode.FINAL_EDITED) {
+        const text = this.text(item.text);
+        const newCost = <u64>this.requireText(text, true);
+        System.require(newCost == item.expected_cost, "STORIES: Ink cost does not match expected_cost");
+        System.require(newCost <= SafeMath.add(seg.charged, this.allowance(seg.original_cost)), "STORIES: edit grows the text too much (light edits only)");
+        units = SafeMath.add(units, newCost);
+        System.require(units <= MAX_BATCH_UNITS, "STORIES: batch text is over 8,000 Ink units");
+        refund = seg.charged > newCost ? seg.charged - newCost : 0;
+        seg.text = text;
+        seg.text_hash = this.sha256(StringBytes.stringToBytes(text));
+        seg.current_cost = newCost;
+        seg.charged = seg.charged - refund;
+        seg.last_edited_by = finalizer;
+        seg.last_edited_at = now;
+        seg.surviving = newCost < seg.charged ? newCost : seg.charged;
+        // The final pass may grow text a little past max_chars (grammar
+        // fixes in a full book). Growth stays inside the light-edit allowance.
+        st.used_chars = SafeMath.add(SafeMath.sub(st.used_chars, oldCost), newCost);
+      } else if (item.mode == stories.final_mode.FINAL_REMOVED) {
+        refund = seg.charged;
+        this.clearSegment(seg, finalizer, now);
+        st.used_chars = SafeMath.sub(st.used_chars, oldCost);
+        removed = true;
+      } else {
+        System.require(false, "STORIES: unknown final mode");
+      }
+
+      seg.final_mode = item.mode;
+      this.segments.put(key, seg);
+      this.applyRefund(args.story_id, st, seg.author!, refund);
+      this.addSurviving(args.story_id, seg.author!, seg.surviving);
+      st.running_hash = this.foldHash(st.running_hash, next, <u8>item.mode, removed ? new Uint8Array(32) : seg.text_hash!);
+      st.final_cursor = next;
+      if (item.mode != stories.final_mode.FINAL_UNCHANGED) {
+        this.emitChange(args.story_id, next, finalizer, oldCost, seg.current_cost, refund, removed, true, seg.author!);
+      }
+      if (refund > 0) this.refundInk(ink, seg.author!, refund, args.story_id, next);
+    }
+    this.skipRemoved(args.story_id, st);
+    if (!st.finalizer_is_admin) st.opener_last_active = now;
+    this.putStory(args.story_id, st);
+    const ev = new stories.final_batch_event(args.story_id, st.final_cursor, st.running_hash);
+    System.event("stories.final_batch_event", Protobuf.encode(ev, stories.final_batch_event.encode), [st.opener!]);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  finalize(args: stories.finalize_arguments): stories.empty_object {
+    this.enter();
+    this.requireNotPaused();
+    const finalizer = this.requireAddress(args.finalizer, "STORIES: invalid finalizer address");
+    const st = this.requireStory(args.story_id);
+    System.require(st.status == stories.story_status.STATUS_EDITING, "STORIES: story is not in the final edit");
+    this.requireFinalizer(st, finalizer);
+    this.skipRemoved(args.story_id, st);
+    System.require(st.final_cursor == st.segment_count, "STORIES: some segments are not processed yet");
+    const uri = this.text(args.pdf_uri);
+    System.require(uri.length >= 1 && uri.length <= MAX_PDF_URI && this.isPlainAscii(uri), "STORIES: PDF link must be 1 to 200 plain characters");
+    const hash = args.pdf_hash;
+    System.require(hash != null && hash.length >= MIN_PDF_HASH && hash.length <= MAX_PDF_HASH, "STORIES: PDF hash must be 32 to 64 bytes");
+
+    st.status = stories.story_status.STATUS_FINALIZED;
+    st.pdf_uri = uri;
+    st.pdf_hash = hash;
+    if (!st.finalizer_is_admin) st.opener_last_active = this.now();
+    this.decrementOpen(st.opener!);
+    this.putStory(args.story_id, st);
+    this.emitStatus(args.story_id, st.status, "finalized", finalizer);
+    const ev = new stories.story_finalized_event(args.story_id, uri, hash, st.running_hash);
+    System.event("stories.story_finalized_event", Protobuf.encode(ev, stories.story_finalized_event.encode), [st.opener!]);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  // ===================================================================
+  // Archive
+  // ===================================================================
+
+  archive_if_stale(args: stories.archive_if_stale_arguments): stories.empty_object {
+    this.enter();
+    this.requireNotPaused();
+    const st = this.requireStory(args.story_id);
+    System.require(st.status == stories.story_status.STATUS_OPEN, "STORIES: only an open story can be archived");
+    const wait = SafeMath.mul(<u64>this.config.get()!.archive_days, DAY_SECONDS);
+    System.require(this.now() >= SafeMath.add(st.last_activity_at, wait), "STORIES: story has been active recently");
+    st.status = stories.story_status.STATUS_ARCHIVED;
+    this.decrementOpen(st.opener!);
+    this.putStory(args.story_id, st);
+    this.emitStatus(args.story_id, st.status, "archived", new Uint8Array(0));
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  revive(args: stories.revive_arguments): stories.empty_object {
+    this.enter();
+    this.requireNotPaused();
+    const opener = this.requireAddress(args.opener, "STORIES: invalid opener address");
+    this.requireSigner(opener, "STORIES: opener has not authorized this");
+    const st = this.requireStory(args.story_id);
+    this.requireOpener(st, opener);
+    System.require(st.status == stories.story_status.STATUS_ARCHIVED, "STORIES: story is not archived");
+    System.require(!st.revived, "STORIES: the free revive was already used");
+    const open = this.openCount.get(opener)!;
+    System.require(open.value < this.config.get()!.open_limit, "STORIES: you already have the maximum number of open projects");
+    open.value = open.value + 1;
+    this.openCount.put(opener, open);
+    const now = this.now();
+    st.status = stories.story_status.STATUS_OPEN;
+    st.revived = true;
+    st.last_activity_at = now;
+    st.opener_last_active = now;
+    this.putStory(args.story_id, st);
+    this.emitStatus(args.story_id, st.status, "revived", opener);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  // ===================================================================
+  // Admin
+  // ===================================================================
+
+  set_addresses(args: stories.set_addresses_arguments): stories.empty_object {
+    this.enter();
+    this.requireAdmin();
+    const ink = this.requireAddress(args.ink, "STORIES: invalid Ink address");
+    const shopId = this.requireAddress(args.shop, "STORIES: invalid Shop address");
+    System.require(!Arrays.equal(ink, this.contractId) && !Arrays.equal(shopId, this.contractId), "STORIES: Ink and Shop cannot be the Stories contract");
+    System.require(!Arrays.equal(ink, shopId), "STORIES: Ink and Shop must be different contracts");
+    const cfg = this.config.get()!;
+    cfg.ink = ink;
+    cfg.shop = shopId;
+    this.saveConfig(cfg);
+    const ev = new stories.addresses_event(ink, shopId);
+    System.event("stories.addresses_event", Protobuf.encode(ev, stories.addresses_event.encode), []);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  set_limits(args: stories.set_limits_arguments): stories.empty_object {
+    this.enter();
+    this.requireAdmin();
+    System.require(args.contribution_cap >= CAP_MIN && args.contribution_cap <= CAP_MAX, "STORIES: per-submission cap must be 100 to 4000");
+    System.require(args.trial_limit <= TRIAL_MAX, "STORIES: trial limit must be 0 to 5000");
+    System.require(args.open_limit >= OPEN_LIMIT_MIN && args.open_limit <= OPEN_LIMIT_MAX, "STORIES: open-project limit must be 1 to 10");
+    System.require(args.archive_days >= ARCHIVE_DAYS_MIN && args.archive_days <= DAYS_MAX, "STORIES: archive period must be 30 to 365 days");
+    System.require(args.inactivity_days >= INACTIVITY_DAYS_MIN && args.inactivity_days <= DAYS_MAX, "STORIES: admin-finalize wait must be 30 to 365 days");
+    const cfg = this.config.get()!;
+    cfg.contribution_cap = args.contribution_cap;
+    cfg.trial_limit = args.trial_limit;
+    cfg.open_limit = args.open_limit;
+    cfg.archive_days = args.archive_days;
+    cfg.inactivity_days = args.inactivity_days;
+    this.saveConfig(cfg);
+    const ev = new stories.limits_event(args.contribution_cap, args.trial_limit, args.open_limit, args.archive_days, args.inactivity_days);
+    System.event("stories.limits_event", Protobuf.encode(ev, stories.limits_event.encode), []);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  add_category(args: stories.add_category_arguments): stories.uint32 {
+    this.enter();
+    this.requireAdmin();
+    const name = this.text(args.name);
+    this.requireTextIn(name, MAX_CATEGORY_NAME, "STORIES: category name must be 1 to 32 characters");
+    const cfg = this.config.get()!;
+    const id: u32 = cfg.next_category_id == 0 ? 1 : cfg.next_category_id;
+    System.require(id <= MAX_CATEGORIES, "STORIES: too many categories");
+    cfg.next_category_id = id + 1;
+    this.saveConfig(cfg);
+    this.categories.put(this.u32Key(id), new stories.category(name, true));
+    const ev = new stories.category_event(id, name, true);
+    System.event("stories.category_event", Protobuf.encode(ev, stories.category_event.encode), []);
+    this.leave();
+    return new stories.uint32(id);
+  }
+
+  set_category_active(args: stories.set_category_active_arguments): stories.empty_object {
+    this.enter();
+    this.requireAdmin();
+    const key = this.u32Key(args.category_id);
+    const found = this.categories.get(key);
+    System.require(found != null, "STORIES: unknown category");
+    found!.active = args.active;
+    this.categories.put(key, found!);
+    const ev = new stories.category_event(args.category_id, found!.name, args.active);
+    System.event("stories.category_event", Protobuf.encode(ev, stories.category_event.encode), []);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  set_paused(args: stories.set_paused_arguments): stories.empty_object {
+    this.enter();
+    this.requireAdmin();
+    const cfg = this.config.get()!;
+    cfg.paused = args.paused;
+    this.saveConfig(cfg);
+    const ev = new stories.paused_event(args.paused);
+    System.event("stories.paused_event", Protobuf.encode(ev, stories.paused_event.encode), []);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  set_admin(args: stories.set_admin_arguments): stories.empty_object {
+    this.enter();
+    this.requireAdmin();
+    const newAdmin = this.requireAddress(args.new_admin, "STORIES: invalid admin address");
+    const oldAdmin = this.getAdmin();
+    const cfg = this.config.get()!;
+    cfg.admin = newAdmin;
+    this.config.put(cfg);
+    const ev = new stories.admin_changed_event(oldAdmin, newAdmin);
+    System.event("stories.admin_changed_event", Protobuf.encode(ev, stories.admin_changed_event.encode), [newAdmin]);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  // ===================================================================
+  // Writing helpers
+  // ===================================================================
+
+  // Append a new segment, update the story, then burn the Ink.
+  private writeSegment(
+    storyId: u64, st: stories.story, author: Uint8Array, text: string, cost: u64,
+    startsChapter: bool, aiAssisted: bool, trial: bool, ink: Uint8Array
+  ): u64 {
+    const now = this.now();
+    const seq = st.segment_count + 1;
+    const chapter = startsChapter || seq == 1;
+    const hash = this.sha256(StringBytes.stringToBytes(text));
+    const seg = new stories.segment();
+    seg.author = author;
+    seg.text = text;
+    seg.text_hash = hash;
+    seg.original_cost = cost;
+    seg.charged = cost;
+    seg.current_cost = cost;
+    seg.status = stories.segment_status.SEGMENT_ACTIVE;
+    seg.starts_chapter = chapter;
+    seg.ai_assisted = aiAssisted;
+    seg.created_at = now;
+    this.segments.put(this.pairKey(storyId, seq), seg);
+
+    st.segment_count = seq;
+    st.used_chars = SafeMath.add(st.used_chars, cost);
+    st.total_burned = SafeMath.add(st.total_burned, cost);
+    if (chapter) st.chapter_count = st.chapter_count + 1;
+    st.last_activity_at = now;
+    if (Arrays.equal(author, st.opener!)) st.opener_last_active = now;
+
+    const totalKey = this.idAddrKey(storyId, author);
+    const total = this.contributorTotals.get(totalKey);
+    if (total == null) {
+      st.contributor_count = st.contributor_count + 1;
+      this.contributorTotals.put(totalKey, new stories.uint64(cost));
+    } else {
+      total.value = SafeMath.add(total.value, cost);
+      this.contributorTotals.put(totalKey, total);
+    }
+    const count = this.authorCount.get(author)!;
+    this.authorList.put(this.addrIdxKey(author, count.value), new stories.segment_ref(storyId, seq));
+    count.value = count.value + 1;
+    this.authorCount.put(author, count);
+
+    this.maybeAutoLock(storyId, st, author);
+    this.putStory(storyId, st);
+
+    const ev = new stories.contribution_event(storyId, seq, author, cost, chapter, aiAssisted, hash, trial);
+    System.event("stories.contribution_event", Protobuf.encode(ev, stories.contribution_event.encode), [author]);
+
+    const burn = new stories.ink_burn_call(author, cost, BURN_CONTRIBUTION, "s:" + storyId.toString() + ":" + seq.toString());
+    this.callOut(ink, INK_BURN_ENTRY, Protobuf.encode(burn, stories.ink_burn_call.encode), [author], "STORIES: Ink burn failed");
+    return seq;
+  }
+
+  private maybeAutoLock(storyId: u64, st: stories.story, by: Uint8Array): void {
+    if (st.status == stories.story_status.STATUS_OPEN && st.used_chars >= st.max_chars) {
+      st.status = stories.story_status.STATUS_LOCKED;
+      st.locked_at = this.now();
+      this.emitStatus(storyId, st.status, "auto-lock", by);
+    }
+  }
+
+  // Record a refund on the story and the author's live total. A refund
+  // can never take a story past the Ink it actually burned.
+  private applyRefund(storyId: u64, st: stories.story, author: Uint8Array, refund: u64): void {
+    if (refund == 0) return;
+    st.total_refunded = SafeMath.add(st.total_refunded, refund);
+    System.require(st.total_refunded <= st.total_burned, "STORIES: refund would exceed the Ink burned for this story");
+    const key = this.idAddrKey(storyId, author);
+    const total = this.contributorTotals.get(key)!;
+    total.value = SafeMath.sub(total.value, refund);
+    this.contributorTotals.put(key, total);
+  }
+
+  private refundInk(ink: Uint8Array, author: Uint8Array, amount: u64, storyId: u64, seq: u64): void {
+    const mint = new stories.ink_mint_call(author, amount, MINT_REFUND, "r:" + storyId.toString() + ":" + seq.toString());
+    this.callOut(ink, INK_MINT_ENTRY, Protobuf.encode(mint, stories.ink_mint_call.encode), [author], "STORIES: Ink refund failed");
+  }
+
+  private clearSegment(seg: stories.segment, by: Uint8Array, now: u64): void {
+    seg.text = "";
+    seg.charged = 0;
+    seg.current_cost = 0;
+    seg.surviving = 0;
+    seg.status = stories.segment_status.SEGMENT_REMOVED;
+    seg.last_edited_by = by;
+    seg.last_edited_at = now;
+  }
+
+  // Free growth for a light edit: 10% of the original, or up to 20 for
+  // short text, but never more than doubling. Fixed per segment and
+  // measured from what is still paid for, so it cannot stack.
+  private allowance(original: u64): u64 {
+    const tenth = original / 10;
+    const small = original < 20 ? original : 20;
+    return tenth > small ? tenth : small;
+  }
+
+  // Segments removed before the lock are folded into the final hash
+  // automatically, so the finalizer only submits live text.
+  private skipRemoved(storyId: u64, st: stories.story): void {
+    while (st.final_cursor < st.segment_count) {
+      const next = st.final_cursor + 1;
+      const key = this.pairKey(storyId, next);
+      const seg = this.segments.get(key)!;
+      if (seg.status != stories.segment_status.SEGMENT_REMOVED) return;
+      if (seg.final_mode == stories.final_mode.FINAL_PENDING) {
+        seg.final_mode = stories.final_mode.FINAL_REMOVED;
+        this.segments.put(key, seg);
+      }
+      st.running_hash = this.foldHash(st.running_hash, next, <u8>stories.final_mode.FINAL_REMOVED, new Uint8Array(32));
+      st.final_cursor = next;
+    }
+  }
+
+  private addSurviving(storyId: u64, author: Uint8Array, amount: u64): void {
+    const key = this.idAddrKey(storyId, author);
+    const total = this.survivingTotals.get(key)!;
+    total.value = SafeMath.add(total.value, amount);
+    this.survivingTotals.put(key, total);
+  }
+
+  private foldHash(prev: Uint8Array | null, seq: u64, mode: u8, textHash: Uint8Array): Uint8Array {
+    const p = prev != null ? prev! : new Uint8Array(0);
+    const buf = new Uint8Array(p.length + 8 + 1 + textHash.length);
+    memory.copy(buf.dataStart, p.dataStart, p.length);
+    const seqBytes = this.u64Key(seq);
+    memory.copy(buf.dataStart + p.length, seqBytes.dataStart, 8);
+    buf[p.length + 8] = mode;
+    memory.copy(buf.dataStart + p.length + 9, textHash.dataStart, textHash.length);
+    return this.sha256(buf);
+  }
+
+  private closeReady(st: stories.story): bool {
+    const min = st.kind == stories.story_kind.KIND_BOOK ? BOOK_MIN : SHORT_MIN;
+    return st.used_chars >= min || SafeMath.add(st.used_chars, CLOSE_SLACK) >= st.max_chars;
+  }
+
+  private decrementOpen(opener: Uint8Array): void {
+    const open = this.openCount.get(opener)!;
+    if (open.value > 0) open.value = open.value - 1;
+    this.openCount.put(opener, open);
+  }
+
+  // ===================================================================
+  // Shop reads
+  // ===================================================================
+
+  private isActiveWriter(account: Uint8Array): bool {
+    const shopId = this.requireAddress(this.config.get()!.shop, "STORIES: Shop contract is not set");
+    const call = new stories.shop_account_call(account);
+    const raw = this.readCall(shopId, SHOP_MEMBERSHIP_ENTRY, Protobuf.encode(call, stories.shop_account_call.encode), "STORIES: could not read membership");
+    if (raw.length == 0) return false;
+    const m = Protobuf.decode<stories.shop_membership>(raw, stories.shop_membership.decode);
+    return m.tier == SHOP_TIER_WRITER && m.paid_until > this.now();
+  }
+
+  private promoClaimed(account: Uint8Array): bool {
+    const shopId = this.requireAddress(this.config.get()!.shop, "STORIES: Shop contract is not set");
+    const call = new stories.shop_account_call(account);
+    const raw = this.readCall(shopId, SHOP_PROMO_ENTRY, Protobuf.encode(call, stories.shop_account_call.encode), "STORIES: could not read promo status");
+    if (raw.length == 0) return false;
+    return Protobuf.decode<stories.uint64>(raw, stories.uint64.decode).value != 0;
+  }
+
+  // ===================================================================
+  // Calls out
+  // ===================================================================
+
+  // Field 1, wire type 0, value 0: the protobuf encoding of `bool value = false`.
+  private resultIsFalse(raw: Uint8Array): bool {
+    return raw.length >= 2 && raw[0] == 8 && raw[1] == 0;
+  }
+
+  // Every write to Ink or Shop must exit with code 0 AND must not answer
+  // "false". The exact bytes sent are published in an event.
+  private callOut(contractId: Uint8Array, entryPoint: u32, payload: Uint8Array, impacted: Uint8Array[], message: string): void {
+    const res = System.call(contractId, entryPoint, payload);
+    System.require(res.code == 0, message);
+    const raw = res.res.object;
+    if (raw != null && this.resultIsFalse(raw!)) System.require(false, message);
+    const ev = new stories.external_call_event(contractId, entryPoint, payload);
+    System.event("stories.external_call_event", Protobuf.encode(ev, stories.external_call_event.encode), impacted);
+  }
+
+  private readCall(contractId: Uint8Array, entryPoint: u32, payload: Uint8Array, message: string): Uint8Array {
+    const res = System.call(contractId, entryPoint, payload);
+    System.require(res.code == 0, message);
+    const raw = res.res.object;
+    return raw != null ? raw! : new Uint8Array(0);
+  }
+
+  // ===================================================================
+  // Text rules
+  // ===================================================================
+
+  // Returns the Ink cost (UTF-16 code units) or stops with the reason.
+  private requireText(text: string, allowNewline: bool): i32 {
+    const n = text.length;
+    System.require(n > 0, "STORIES: text is empty");
+    let visible = false;
+    let run = 0;
+    for (let i = 0; i < n; i++) {
+      const c = text.charCodeAt(i);
+      if (c == 0x0a) {
+        System.require(allowNewline, "STORIES: line breaks are not allowed here");
+        run++;
+        System.require(run <= MAX_NEWLINE_RUN, "STORIES: too many line breaks in a row (max 3)");
+        continue;
+      }
+      run = 0;
+      System.require(c >= 0x20 && !(c >= 0x7f && c <= 0x9f), "STORIES: control characters are not allowed");
+      if (c >= 0xd800 && c <= 0xdbff) {
+        System.require(i + 1 < n, "STORIES: broken character in text");
+        const d = text.charCodeAt(i + 1);
+        System.require(d >= 0xdc00 && d <= 0xdfff, "STORIES: broken character in text");
+        i++;
+        visible = true;
+        continue;
+      }
+      System.require(!(c >= 0xdc00 && c <= 0xdfff) && c != 0xfffd, "STORIES: broken character in text");
+      System.require(
+        !(c == 0x200b || c == 0xfeff || c == 0x2028 || c == 0x2029 ||
+          (c >= 0x2060 && c <= 0x2064) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069)),
+        "STORIES: invisible or direction-control characters are not allowed"
+      );
+      if (!(c == 0x20 || c == 0xa0 || c == 0x3000 || (c >= 0x2000 && c <= 0x200a) ||
+            c == 0x200c || c == 0x200d || c == 0xfe0e || c == 0xfe0f)) {
+        visible = true;
+      }
+    }
+    System.require(visible, "STORIES: text has no visible characters");
+    return n;
+  }
+
+  private requireTextIn(text: string, max: i32, message: string): void {
+    System.require(text.length >= 1 && text.length <= max, message);
+    this.requireText(text, false);
+  }
+
+  private requireTitle(value: string | null): string {
+    const title = this.text(value);
+    this.requireTextIn(title, MAX_TITLE, "STORIES: title must be 1 to 100 characters");
+    return title;
+  }
+
+  private requireCode(value: string | null): string {
+    const code = this.text(value);
+    System.require(code.length >= MIN_CODE && code.length <= MAX_CODE && this.isPlainAscii(code), "STORIES: invite code must be 8 to 64 plain characters");
+    return code;
+  }
+
+  private isPlainAscii(value: string): bool {
+    for (let i = 0; i < value.length; i++) {
+      const c = value.charCodeAt(i);
+      if (c < 0x21 || c > 0x7e) return false;
+    }
+    return true;
+  }
+
+  private requireCategories(c1: u32, c2: u32): void {
+    System.require(this.isActiveCategory(c1), "STORIES: pick an active category");
+    if (c2 != 0) {
+      System.require(c2 != c1, "STORIES: the two categories must be different");
+      System.require(this.isActiveCategory(c2), "STORIES: second category is not active");
+    }
+  }
+
+  private isActiveCategory(id: u32): bool {
+    if (id == 0) return false;
+    const found = this.categories.get(this.u32Key(id));
+    return found != null && found!.active;
+  }
+
+  private requireVisibility(v: stories.visibility): void {
+    System.require(
+      v == stories.visibility.VISIBILITY_PUBLIC || v == stories.visibility.VISIBILITY_UNLISTED || v == stories.visibility.VISIBILITY_PRIVATE,
+      "STORIES: visibility must be Public, Unlisted or Private"
+    );
+  }
+
+  // ===================================================================
+  // Access helpers
+  // ===================================================================
+
+  private requireStory(storyId: u64): stories.story {
+    const found = this.stories.get(this.u64Key(storyId));
+    System.require(found != null, "STORIES: unknown story");
+    return found!;
+  }
+
+  private putStory(storyId: u64, st: stories.story): void {
+    this.stories.put(this.u64Key(storyId), st);
+  }
+
+  private requireActiveSegment(key: Uint8Array): stories.segment {
+    const seg = this.segments.get(key);
+    System.require(seg != null, "STORIES: unknown segment");
+    System.require(seg!.status == stories.segment_status.SEGMENT_ACTIVE, "STORIES: segment was already removed");
+    return seg!;
+  }
+
+  private requireOpener(st: stories.story, account: Uint8Array): void {
+    System.require(Arrays.equal(account, st.opener!), "STORIES: only the opener may do this");
+  }
+
+  private isPrivileged(storyId: u64, st: stories.story, account: Uint8Array): bool {
+    if (Arrays.equal(account, st.opener!)) return true;
+    return this.editors.get(this.idAddrKey(storyId, account))!.value;
+  }
+
+  private requireJoinable(st: stories.story): void {
+    System.require(
+      st.status != stories.story_status.STATUS_FINALIZED && st.status != stories.story_status.STATUS_ARCHIVED,
+      "STORIES: story is not accepting new writers"
+    );
+  }
+
+  // The finalizer is either the opener (after close_story) or whoever is
+  // admin at the time of the call (after admin_take_over), so handing
+  // admin to a new wallet does not strand a book mid-edit.
+  private requireFinalizer(st: stories.story, finalizer: Uint8Array): void {
+    if (st.finalizer_is_admin) {
+      System.require(Arrays.equal(finalizer, this.getAdmin()), "STORIES: only the admin may finalize this story");
+      this.requireAdmin();
+    } else {
+      System.require(Arrays.equal(finalizer, st.opener!), "STORIES: only the opener may finalize this story");
+      this.requireSigner(finalizer, "STORIES: finalizer has not authorized this");
+    }
+  }
+
+  // Until set_admin is called, the contract's own address is the admin.
+  // checkAuthority still requires a signature from that address.
+  private getAdmin(): Uint8Array {
+    const stored = this.config.get()!.admin;
+    if (stored != null && stored.length > 0) return stored;
+    return this.contractId;
+  }
+
+  private requireAdmin(): void {
+    System.require(
+      System.checkAuthority(authority.authorization_type.contract_call, this.getAdmin()),
+      "STORIES: admin authority required"
+    );
+  }
+
+  private requireSigner(account: Uint8Array, message: string): void {
+    System.require(System.checkAuthority(authority.authorization_type.contract_call, account), message);
+  }
+
+  private requireNotPaused(): void {
+    System.require(!this.config.get()!.paused, "STORIES: stories are paused");
+  }
+
+  private saveConfig(cfg: stories.config): void {
+    if (cfg.admin == null || cfg.admin!.length == 0) cfg.admin = this.contractId;
+    this.config.put(cfg);
+  }
+
+  // Held across the whole call, so a token, Shop, Ink or authority
+  // contract cannot call back into Stories mid-transaction.
+  private enter(): void {
+    const flag = this.lock.get()!;
+    System.require(!flag.value, "STORIES: reentrant call");
+    flag.value = true;
+    this.lock.put(flag);
+  }
+
+  private leave(): void {
+    const flag = this.lock.get()!;
+    flag.value = false;
+    this.lock.put(flag);
+  }
+
+  private emitStatus(storyId: u64, status: stories.story_status, why: string, by: Uint8Array): void {
+    const ev = new stories.status_event(storyId, status, why, by);
+    System.event("stories.status_event", Protobuf.encode(ev, stories.status_event.encode), []);
+  }
+
+  private emitChange(storyId: u64, seq: u64, by: Uint8Array, oldCost: u64, newCost: u64, refund: u64, removed: bool, finalPass: bool, author: Uint8Array): void {
+    const ev = new stories.segment_changed_event(storyId, seq, by, oldCost, newCost, refund, removed, finalPass);
+    System.event("stories.segment_changed_event", Protobuf.encode(ev, stories.segment_changed_event.encode), [author]);
+  }
+
+  // ===================================================================
+  // Small helpers
+  // ===================================================================
+
+  private now(): u64 {
+    // head_block_time is in milliseconds.
+    return System.getHeadInfo().head_block_time / 1000;
+  }
+
+  private text(value: string | null): string {
+    return value != null ? value! : "";
+  }
+
+  private isAddress(account: Uint8Array | null): bool {
+    return account != null && account.length == ADDRESS_LENGTH;
+  }
+
+  private requireAddress(account: Uint8Array | null, message: string): Uint8Array {
+    System.require(account != null && account.length == ADDRESS_LENGTH, message);
+    return account!;
+  }
+
+  private listLimit(limit: u32): u32 {
+    return limit == 0 || limit > MAX_LIST ? MAX_LIST : limit;
+  }
+
+  private appendOpener(opener: Uint8Array, storyId: u64): void {
+    const count = this.openerCount.get(opener)!;
+    this.openerList.put(this.addrIdxKey(opener, count.value), new stories.uint64(storyId));
+    count.value = count.value + 1;
+    this.openerCount.put(opener, count);
+  }
+
+  // Each story enters a category list once, however often it is re-tagged.
+  private addToCategory(categoryId: u32, storyId: u64): void {
+    const memberKey = this.u32IdKey(categoryId, storyId);
+    if (this.categoryMember.get(memberKey)!.value) return;
+    this.categoryMember.put(memberKey, new stories.boole(true));
+    const countKey = this.u32Key(categoryId);
+    const count = this.categoryCount.get(countKey)!;
+    this.categoryList.put(this.u32IdxKey(categoryId, count.value), new stories.uint64(storyId));
+    count.value = count.value + 1;
+    this.categoryCount.put(countKey, count);
+  }
+
+  private u64Key(value: u64): Uint8Array {
+    const key = new Uint8Array(8);
+    let v = value;
+    for (let i = 7; i >= 0; i--) {
+      key[i] = <u8>(v & 0xff);
+      v = v >> 8;
+    }
+    return key;
+  }
+
+  private u32Key(value: u32): Uint8Array {
+    const key = new Uint8Array(4);
+    key[0] = <u8>(value >> 24);
+    key[1] = <u8>(value >> 16);
+    key[2] = <u8>(value >> 8);
+    key[3] = <u8>value;
+    return key;
+  }
+
+  private join(a: Uint8Array, b: Uint8Array): Uint8Array {
+    const key = new Uint8Array(a.length + b.length);
+    memory.copy(key.dataStart, a.dataStart, a.length);
+    memory.copy(key.dataStart + a.length, b.dataStart, b.length);
+    return key;
+  }
+
+  private pairKey(a: u64, b: u64): Uint8Array {
+    return this.join(this.u64Key(a), this.u64Key(b));
+  }
+
+  private idAddrKey(storyId: u64, account: Uint8Array): Uint8Array {
+    return this.join(this.u64Key(storyId), account);
+  }
+
+  private addrIdxKey(account: Uint8Array, index: u64): Uint8Array {
+    return this.join(account, this.u64Key(index));
+  }
+
+  private u32IdxKey(categoryId: u32, index: u64): Uint8Array {
+    return this.join(this.u32Key(categoryId), this.u64Key(index));
+  }
+
+  private u32IdKey(categoryId: u32, storyId: u64): Uint8Array {
+    return this.join(this.u32Key(categoryId), this.u64Key(storyId));
+  }
+
+  // System.hash returns a multihash (code, length, digest). Keep the raw
+  // 32-byte sha256.
+  private sha256(data: Uint8Array): Uint8Array {
+    const wrapped = System.hash(Crypto.multicodec.sha2_256, data);
+    System.require(wrapped != null, "STORIES: could not hash");
+    const bytes = wrapped!;
+    let i = 0;
+    while (i < bytes.length) {
+      const bite = bytes[i];
+      i++;
+      if ((bite & 0x80) == 0) break;
+    }
+    let size: u64 = 0;
+    let shift: u8 = 0;
+    while (i < bytes.length) {
+      const bite = bytes[i];
+      i++;
+      size = size | ((<u64>(bite & 0x7f)) << shift);
+      if ((bite & 0x80) == 0) break;
+      shift = <u8>(shift + 7);
+    }
+    System.require(size == 32 && i + 32 <= bytes.length, "STORIES: unexpected hash");
+    return bytes.slice(i, i + 32);
+  }
+}

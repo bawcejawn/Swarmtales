@@ -6,29 +6,29 @@ SwarmTales is a group-story project for the Koinos blockchain. People subscribe,
 
 ## What you can do today, and what is still a plan
 
-Two contracts exist in this repository and have passing tests: **Ink** and **Shop**.
+Three contracts exist in this repository and have passing tests: **Ink**, **Shop**, and **Stories**. Stories is new and has not been uploaded anywhere yet.
 
 | Piece | Status |
 |---|---|
-| Ink, the non-transferable writing allowance | Built and tested (42 checks) |
-| Shop, the cash register for memberships, packs, story fees, and promo codes | Built and tested (39 checks) |
+| Ink, the non-transferable writing allowance | Built and tested (48 checks) |
+| Shop, the cash register for memberships, packs, story fees, and promo codes | Built and tested (51 checks) |
 | A practice stablecoin inside this repo | Not included. On testnet, deploy the official Koinos token and point Shop at it |
-| Stories (the books themselves, trials, the 3-project limit, archive, refunds) | Planned |
-| Sponsor (paying Mana for someone else) | Planned |
+| Stories (the books themselves, trials, the 3-project limit, archive, refunds) | Built and tested in the mock chain (61 checks). Not on testnet yet |
+| Sponsor (paying Mana for someone else) | Optional, later, a separate contract, OFF by default. Not in Stories |
 | Books NFT | Planned |
 | Website | Planned |
 
-The prices and rules in the next sections are the design Carl confirmed. Shop can charge those prices, but the numbers are **not hardcoded**. An admin enters them after upload. Stories rules such as character limits are **not enforced yet**, because the Stories contract does not exist.
+The prices and rules in the next sections are the design Carl confirmed. Shop can charge those prices, but the numbers are **not hardcoded**. An admin enters them after upload. Stories rules such as character limits are enforced by the Stories contract once it is uploaded and wired to Ink and Shop. Until then nothing on chain enforces them.
 
 ## How it works
 
 A reader pays for a month and can read. A reader does not receive Ink.
 
-A writer pays for a month and receives Ink. The token a wallet shows is **SwarmTales Ink**. That name is final. Ink is not money. It cannot be sent to someone else, sold, or traded. Spending it means a future Stories contract burns it when that person adds or edits text. That burn is not built yet.
+A writer pays for a month and receives Ink. The token a wallet shows is **SwarmTales Ink**. That name is final. Ink is not money. It cannot be sent to someone else, sold, or traded. Spending it means the Stories contract burns it when that person adds text. If an editor shortens or removes that text, Stories refunds the difference to the original author.
 
-Story text will be charged per UTF-16 code unit. A normal letter costs 1 Ink. A typical emoji costs 2 Ink, because it is stored as two code units. Some combined emoji are longer and cost more: a flag, or a family sequence, is several code units, not two. Stories does not exist yet, so this is the written rule for that contract, not code in Ink or Shop. Ink's own public note is a separate limit of 64 UTF-16 code units.
+Story text is charged per UTF-16 code unit ("text unit"). A normal letter costs 1 Ink. Most emoji cost 2 Ink, because each is stored as two code units. A few older emoji such as ⭐ cost 1. A skin-tone emoji such as 👍🏽 or a flag such as 🇺🇸 costs 4. A family such as 👨‍👩‍👧 costs 8. The Stories contract counts this itself and refuses the text if the website's preview (`expected_ink`) disagrees, so nobody is charged a surprise amount. Ink's own public note is a separate limit of 64 UTF-16 code units.
 
-Public stories are the ones any allowed writer can add to. Private books are invite-only. Both of those live in the planned Stories contract. Shop only collects the open and close fees when Stories asks it to.
+Public stories are the ones any allowed writer can add to. Private books are invite-only. Both of those live in the Stories contract. Shop only collects the open and close fees when Stories asks it to.
 
 ### A payment, in one transaction
 
@@ -57,16 +57,17 @@ Both use 8 decimal places, so **$1.00 = 100,000,000** base units. Read `decimals
 | Pack S, Writers only | $2 | 5,000 | Shop, built. Mint reason PURCHASE |
 | Pack M | $5 | 15,000 | Shop, built |
 | Pack L | $12 | 45,000 | Shop, built |
-| Open a Book | $20 | 20,000 starter Ink | Shop collects this only when Stories calls it. Stories is planned |
+| Open a Book | $20 | 20,000 starter Ink | Shop collects this only when Stories calls it |
 | Close a Book | $5 | none | Same |
 | Open a Short Story | $10 | 10,000 starter Ink | Same |
 | Close a Short Story | $2 | none | Same |
-| Book length | 100,000 to 1,000,000 characters | — | Planned, in Stories |
-| Short Story length | 10,000 to 99,999 characters | — | Planned, in Stories |
+| Book length | 100,000 to 1,000,000 characters | — | Stories, built |
+| Short Story length | 10,000 to 99,999 characters | — | Stories, built. Can close from 10,000 |
 | Promo campaign | free Ink, for example 1,000 | reason PROMO | Shop, built. No public "claim" button |
-| Trial writing | about 1,000 characters | — | Planned, in Stories. Shop only records whether a wallet has claimed a promo |
-| Open projects | 3 per wallet | — | Planned, in Stories |
-| Auto-archive | 60 days | — | Planned, in Stories |
+| Trial writing | 1,000 characters per wallet, ever | — | Stories, built. Needs a claimed promo. Shop only records the claim |
+| Open projects | 3 per wallet | — | Stories, built |
+| Auto-archive | 60 days | — | Stories, built. One free revive |
+| Per-submission cap | 2,000 to start | — | Stories, built. Admin can set 100 to 4,000 after testnet Mana measurements |
 
 Writer claims are allowed every **30 days** (2,592,000 seconds). That wait is part of the contract, so an admin cannot shorten it. One purchase can be at most **24 months**. The Ink amount is locked when the Writer term starts. Changing the catalog later does not shrink months already paid for. When `paid_until` has passed, unclaimed months from that term are gone. An active Writer term cannot be replaced by a Reader purchase.
 
@@ -84,8 +85,8 @@ flowchart TD
   site[Website - planned]
   shop[Shop - built]
   ink[Ink - built]
-  stories[Stories - planned]
-  sponsor[Sponsor - planned]
+  stories[Stories - built, not uploaded]
+  sponsor[Sponsor - optional, later, off by default]
   nft[Books NFT - planned]
   token[vUSDT or vUSDC, or a testnet KCS-4 token]
   treasury[Treasury address]
@@ -98,11 +99,11 @@ flowchart TD
   token -->|1 percent| founder
   shop -->|asks the token to move the payment| token
   shop -->|mint PURCHASE, MEMBERSHIP, STARTER, PROMO| ink
-  stories -->|planned: pay_open_fee and pay_close_fee| shop
-  stories -->|planned: burn when text is added| ink
-  stories -->|planned: mint REFUND only| ink
+  stories -->|pay_open_fee and pay_close_fee| shop
+  stories -->|burn when text is added| ink
+  stories -->|mint REFUND only| ink
   nft -->|planned: points at a finished book| stories
-  sponsor -->|planned: not built, Shop does not pay Mana| person
+  sponsor -->|later, separate contract: not built, Stories and Shop do not pay Mana| person
 ```
 
 Shop does not mint Ink by itself. It calls Ink, and Ink checks that Shop was allowed that reason. Nobody, including the admin, can mint by calling Ink directly.
@@ -112,8 +113,8 @@ Shop does not mint Ink by itself. It calls Ink, and Ink checks that Shop was all
 | Ink | Balances, supply, mint reasons, burn. No transfers |
 | Shop | Prices, the payment split, memberships, packs, promo, and the calls that mint Ink |
 | Test stablecoin | Not in this repo. Use the official Koinos KCS-4 token on testnet. SDK 1.0.0 cannot build a safe token, because it lacks the allowance check a real token needs |
-| Sponsor | Planned. Would pay Mana for a user. Shop does not do this |
-| Stories | Planned. Books, chapters, the trial, the 3-open limit, the 60-day archive, private invites, and refunds |
+| Sponsor | Optional and later. A separate contract, OFF by default, that could pay Mana for a user. Kept out of Stories so a bug in it can never reach Ink or refunds |
+| Stories | Built (`stories/`), not uploaded. Books, chapters, the trial, the 3-open limit, the 60-day archive, private invites, editing, the final edit, and refunds |
 | Books NFT | Planned. A collectible for a finished book. Not a way to transfer Ink |
 | Website | Planned. The pages a reader or writer would use |
 
@@ -121,7 +122,7 @@ Shop does not mint Ink by itself. It calls Ink, and Ink checks that Shop was all
 
 Ink cannot be transferred. There is no transfer, approve, or allowance function on Ink.
 
-**Who can mint.** Only a contract the Ink admin has approved, and only for the reasons in its mask. The Shop mask is **30**, which is PURCHASE (1), MEMBERSHIP (2), STARTER (3), and PROMO (4). Stories, when it exists, should be approved for REFUND (5) only. A direct call from a wallet has no calling contract, so it cannot mint.
+**Who can mint.** Only a contract the Ink admin has approved, and only for the reasons in its mask. The Shop mask is **30**, which is PURCHASE (1), MEMBERSHIP (2), STARTER (3), and PROMO (4). Stories is approved for REFUND (5) only: mask **32**. The deploy script's `wire-stories` sets exactly that. A direct call from a wallet has no calling contract, so it cannot mint.
 
 **Who can burn.** An approved burner contract, and the Ink owner's signature on that same transaction. The only valid reason is contribution (1), which is text added to a story. Reason 2 is reserved. A burn that uses it fails with `INK: invalid burn reason`. Shop does not burn. The admin cannot burn someone's Ink. Pause blocks mint and burn. It does not block the admin, so the admin can unpause. A future way to spend Ink has to add a new, clearly named reason in a contract upgrade. It cannot reuse 2.
 
@@ -129,7 +130,7 @@ Ink cannot be transferred. There is no transfer, approve, or allowance function 
 
 **Admin.** Until `set_admin`, the contract's own address is the admin, and every admin action needs that address's signature. The admin of Ink can appoint minters and burners, pause, and hand admin on. The admin of Shop can change future prices, the fee from 0% to 5%, the treasury and founder addresses, the Ink and Stories addresses, and promo campaigns. The admin cannot take back a payment that already split.
 
-**Payment addresses are configuration, not code.** vUSDT and vUSDC above are the mainnet values to type in. A testnet uses different token addresses. Carl's testnet wallet `1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW` is in `deploy/testnet.env.example` only. It is not inside either contract.
+**Payment addresses are configuration, not code.** vUSDT and vUSDC above are the mainnet values to type in. A testnet uses different token addresses. Carl's testnet wallet `18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6` is in `deploy/testnet.env.example` only. It is not inside either contract.
 
 **Upgrades.** Koinos stores a contract at an address. Uploading again to that same address replaces the code and keeps the storage. These contracts do not have a separate proxy. Leave the three upload overrides **false** (`upload file.wasm file.abi false false false`). That leaves future uploads, and contract-call authority, with the key of the contract address. `set_admin` does not remove that key's power to replace the wasm. If the storage layout changes in a later version, old data can be read wrong. Do not turn the authorize override on unless a reviewed `authorize` function exists. Turning it on without one can freeze the contract.
 
@@ -145,17 +146,21 @@ Ink cannot be transferred. There is no transfer, approve, or allowance function 
 | `shop/assembly/Shop.ts` | The Shop contract |
 | `shop/assembly/proto/shop.proto` | Shop's functions and events |
 | `shop/assembly/__tests__/Shop.spec.ts` | Shop tests |
+| `stories/assembly/Stories.ts` | The Stories contract |
+| `stories/assembly/proto/stories.proto` | Stories' functions and events |
+| `stories/assembly/__tests__/Stories.spec.ts` | Stories tests |
+| `docs/STORIES_DESIGN.md` | The Stories design and Carl's decisions |
 | `deploy/testnet.env.example` | Public testnet addresses. Copy to `deploy/testnet.env` to edit |
 | `deploy/prepare-testnet.js` | Builds release files and prints upload steps. It does not upload |
 | `scripts/patch-protoc-stdin.js` | A small fix so the code generators work on Node.js 20 and later |
 
-Each contract folder has its own `package.json` and `yarn.lock`. This is not a Yarn workspace. The project names are `ink` and `shop` because the Koinos tool only allows lowercase letters, numbers, and underscores.
+Each contract folder has its own `package.json` and `yarn.lock`. This is not a Yarn workspace. The project names are `ink`, `shop` and `stories` because the Koinos tool only allows lowercase letters, numbers, and underscores.
 
 These files are recreated by the build. Do not edit them, and they are not stored in git.
 
-- `assembly/proto/ink.ts`, `shop/assembly/proto/shop.ts`
-- `assembly/Ink.boilerplate.ts`, `shop/assembly/Shop.boilerplate.ts`
-- `assembly/index.ts`, `shop/assembly/index.ts`
+- `assembly/proto/ink.ts`, `shop/assembly/proto/shop.ts`, `stories/assembly/proto/stories.ts`
+- `assembly/Ink.boilerplate.ts`, `shop/assembly/Shop.boilerplate.ts`, `stories/assembly/Stories.boilerplate.ts`
+- `assembly/index.ts`, `shop/assembly/index.ts`, `stories/assembly/index.ts`
 - `abi/*.abi`, `abi/*-abi.json`
 - `build/`
 
@@ -204,7 +209,7 @@ yarn test
 
 `yarn build:debug` is `koinos-sdk-as-cli build-all debug 0 ink.proto`. The `0` is not a version. Leaving it out makes the tool print help and stop. `yarn install` runs `scripts/patch-protoc-stdin.js`, which keeps the code generators from crashing with `EAGAIN` on Node.js 20 and later.
 
-Success means `build/debug/contract.wasm` exists and the test report ends with **42 pass** and **0 fail**.
+Success means `build/debug/contract.wasm` exists and the test report ends with **48 pass** and **0 fail**.
 
 ### Shop
 
@@ -215,15 +220,26 @@ yarn build:debug
 yarn test
 ```
 
-Success means `shop/build/debug/contract.wasm` exists and the test report ends with **39 pass** and **0 fail**.
+Success means `shop/build/debug/contract.wasm` exists and the test report ends with **51 pass** and **0 fail**.
 
-`yarn build:release` in either folder makes the smaller wasm used for an upload. Tests use the debug build.
+### Stories
+
+```bash
+cd stories
+yarn install
+yarn build:release
+yarn test
+```
+
+Success means `stories/build/release/contract.wasm` exists and the test report ends with **61 pass** and **0 fail**.
+
+`yarn build:release` in any of the three folders makes the smaller wasm used for an upload. Tests use the debug build.
 
 ## Testnet
 
 You do not need testnet coins to build or to run the tests. Do not run a testnet node next to production nodes.
 
-The admin wallet in the example config is `1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW`. Copy `deploy/testnet.env.example` to `deploy/testnet.env` if you want to change a public address. Never put a private key, seed phrase, or password in that file. The prepare script stops if it sees one.
+The admin wallet in the example config is `18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6`. Copy `deploy/testnet.env.example` to `deploy/testnet.env` if you want to change a public address. Never put a private key, seed phrase, or password in that file. The prepare script stops if it sees one.
 
 On Koinos, the address you upload from **becomes** the contract. Do not upload Ink or Shop onto the admin wallet. Create a new wallet for Ink and another for Shop. Keep those seeds yourself. After each upload, while that new wallet is open, call `set_admin` with the admin address.
 
@@ -247,20 +263,20 @@ This is the network named in the deploy file. It was answering on 19 October 202
 You have to request the coins yourself. Open the bot, send `/start`, then send one address per message:
 
 ```text
-/faucet 1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW
+/faucet 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
 ```
 
 The bot's guide says each claim sends **100 vKOIN**, with a 24-hour cooldown per Telegram user and per address, and a daily cap of 10,000. Check with `/balance`. Source: [koinos/koinos-testnet faucet](https://github.com/koinos/koinos-testnet/blob/main/docs/faucet.md).
 
-The upload spends mana on the contract wallet, not on the admin wallet. Practical order: claim to the new Ink address and upload Ink, claim to the new Shop address the next day and upload Shop, then claim to `1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW` so the admin wallet can call `set_minter` and `set_addresses`. If the bot is silent, ask in [https://t.me/koinos_community](https://t.me/koinos_community).
+The upload spends mana on the contract wallet, not on the admin wallet. Practical order: claim to the new Ink address and upload Ink, claim to the new Shop address the next day and upload Shop, then claim to `18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6` so the admin wallet can call `set_minter` and `set_addresses`. If the bot is silent, ask in [https://t.me/koinos_community](https://t.me/koinos_community).
 
 ### Harbinger is a different chain
 
 [Harbinger](https://docs.koinos.io/developers/testnet/) is the Koinos Group testnet. Its docs say to join [https://discord.gg/gMGMADsmfk](https://discord.gg/gMGMADsmfk), open `#faucet` under Developers, and send:
 
 ```text
-!faucet 1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW
-!balance 1MQ3RLVouWSJQ6RYkvHHxfBkwmi4j2WCEW
+!faucet 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
+!balance 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
 ```
 
 The documented reply is 100 tKOIN. Those coins do not appear on the Foundation testnet, and Foundation vKOIN does not appear on Harbinger. On 19 October 2026 the public Harbinger APIs did not answer from the machine that checked. If the Discord bot is silent, ask in that server.
@@ -272,9 +288,12 @@ Do not point Shop at mainnet vUSDT while you are on a testnet. Those contracts a
 1. Ink. Done and tested.
 2. Shop. Done and tested.
 3. Testnet rehearsal. Not started. Needs faucet coins, two fresh contract wallets, and a practice KCS-4 token. Carl does the wallet steps.
-4. Stories. Not started. This is the contract that would enforce the trial, the 3-open limit, character ranges, private invites, the 60-day archive, refunds, and the UTF-16 Ink charge (a typical emoji costs 2).
+4. Stories. Built and tested in the mock chain. Enforces the trial, the 3-open limit, character ranges, private invites, the 60-day archive, refunds, and the UTF-16 Ink charge (most emoji cost 2). Next: testnet upload, wiring, and Mana measurements.
 5. Website. Not started.
-6. Sponsor and Books NFT. Not started. They are not required for the first public story.
+6. Books NFT. Not started. Not required for the first public story.
+6a. Sponsor. Optional, later, a separate contract that is OFF by default. Not required.
+6b. Reactions and reports. A separate small contract, later.
+6c. Keepsake and tip items. A later Shop upgrade.
 7. An independent audit, then a mainnet upload. Not started.
 
 Nothing here has been audited. Nothing has been uploaded to testnet or mainnet by this repository's tooling.
@@ -285,7 +304,7 @@ Nothing here has been audited. Nothing has been uploaded to testnet or mainnet b
 
 1. **No maximum supply.** Ink stays uncapped. An approved minter can mint until the admin pauses, or until the amount would overflow a 64-bit total. There is no supply-cap setting to turn on later.
 2. **Display name.** Wallets show **SwarmTales Ink**. That name is final. The symbol stays `INK`.
-3. **Emoji cost, for the planned Stories contract.** Story text is charged per UTF-16 code unit. A typical emoji costs 2 Ink. Some combined emoji, such as flags or family sequences, are more than one emoji character and cost more than 2. This is a specification for Stories. Stories is not built, and Ink does not count story text.
+3. **Emoji cost.** Story text is charged per UTF-16 code unit. Most emoji cost 2 Ink; a few older ones such as ⭐ cost 1; skin tones and flags cost 4; a three-person family costs 8. Stories counts it; Ink does not count story text. Ink's on-chain description for the **mainnet** upload says "1 INK per text unit; most emoji cost 2". The Ink already on testnet keeps its older description.
 4. **License.** Changed on 19 October 2026. An earlier commit used the Apache License 2.0. That choice is withdrawn. The project is now all rights reserved. The notice is in `LICENSE`. `package.json` and `shop/package.json` say `"license": "UNLICENSED"`, so a package tool will not treat this as open source.
 5. **`BURN_OTHER` is removed.** The only valid burn reason is contribution (1). Value 2 is reserved in the proto, including the old name, so it cannot be reused by accident. A later feature that spends Ink adds a new name and a new number, then the contract is upgraded.
 

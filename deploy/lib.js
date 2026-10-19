@@ -30,6 +30,75 @@ const SECRET_ENV = "SWARMTALES_DEPLOY_SECRET";
 // Bit n is reason n, so the mask is 2+4+8+16 = 30. REFUND(5) is not included.
 const SHOP_MINT_MASK = 30;
 
+// Ink mint reasons Stories may use: REFUND(5) only, so the mask is 2^5 = 32.
+// Stories can never mint purchase, membership, starter or promo Ink.
+const STORIES_MINT_MASK = 32;
+
+// Categories `wire-stories` creates, in this order (ids 1 to 11).
+const STORY_CATEGORIES = [
+  "Fantasy",
+  "Sci-Fi",
+  "Mystery & Thriller",
+  "Romance",
+  "Horror",
+  "Comedy",
+  "Adventure",
+  "Drama",
+  "Historical",
+  "Poetry & Experimental",
+  "Other",
+];
+
+// Text sizes `measure` dry-runs, in Ink (UTF-16 code units).
+const MEASURE_SIZES = [100, 500, 1000, 2000, 4000];
+
+// Story kinds and visibility from stories.proto (koilib needs numbers).
+const STORY_KIND = { BOOK: 1, SHORT: 2 };
+const STORY_VISIBILITY = { PUBLIC: 1, UNLISTED: 2, PRIVATE: 3 };
+
+/** UTF-16 code units: exactly what Stories charges for text. */
+function inkCost(text) {
+  return String(text).length;
+}
+
+/**
+ * Text for `measure` that costs exactly `units` Ink. Plain mode is
+ * ordinary words. Emoji mode mixes in 😀 (2 units) so the dry run shows
+ * the cost of surrogate pairs. Never starts or ends with a space, never
+ * has line breaks, so Stories accepts it.
+ */
+function measurementText(units, emoji) {
+  const n = Number(units);
+  if (!Number.isInteger(n) || n < 1) fail("measurement size must be a whole number of at least 1");
+  const word = emoji ? "story\uD83D\uDE00 " : "story ";
+  let out = "";
+  while (out.length + word.length <= n) out += word;
+  while (out.length < n) out += "a";
+  if (out.endsWith(" ")) out = out.slice(0, -1) + "a";
+  if (inkCost(out) !== n) fail("internal: measurement text has the wrong length");
+  return out;
+}
+
+/**
+ * shop.set_addresses replaces all four addresses at once. Build its
+ * arguments from what the Shop has on chain now, changing only `stories`.
+ * Refuses if the chain disagrees with what the user said, or if a
+ * different Stories contract is already set.
+ */
+function shopAddressesForStories(onChain, wanted) {
+  const cfg = onChain || {};
+  const treasury = cfg.treasury || "";
+  const founder = cfg.founder || "";
+  const ink = cfg.ink || "";
+  const current = cfg.stories || "";
+  if (!isAddress(treasury) || !isAddress(founder)) fail("Shop has no treasury or founder set yet. Run wire first.");
+  if (ink !== wanted.ink) fail("Shop points at Ink " + (ink || "(none)") + " but you gave --ink " + wanted.ink + ". Nothing was changed.");
+  if (wanted.treasury && wanted.treasury !== treasury) fail("Shop treasury on chain is " + treasury + " but you gave --treasury " + wanted.treasury + ". Nothing was changed.");
+  if (wanted.founder && wanted.founder !== founder) fail("Shop founder on chain is " + founder + " but you gave --founder " + wanted.founder + ". Nothing was changed.");
+  if (current && current !== wanted.stories) fail("Shop already points at a different Stories contract (" + current + "). Nothing was changed.");
+  return { treasury, founder, ink, stories: wanted.stories };
+}
+
 // Ink amounts used by `wire` unless overridden (writer month, packs S/M/L,
 // starter for a book, starter for a short story).
 const DEFAULT_INK_AMOUNTS = {
@@ -255,6 +324,14 @@ function isConfirmation(answer) {
 }
 
 module.exports = {
+  STORIES_MINT_MASK,
+  STORY_CATEGORIES,
+  MEASURE_SIZES,
+  STORY_KIND,
+  STORY_VISIBILITY,
+  inkCost,
+  measurementText,
+  shopAddressesForStories,
   NETWORKS,
   MAINNET_FLAG,
   SECRET_ENV,

@@ -3,7 +3,8 @@ syntax = "proto3";
 // =====================================================================
 // SwarmTales Ink — interface definition
 //
-// Ink is a NON-TRANSFERABLE writing allowance. 1 INK = 1 character.
+// Ink is a NON-TRANSFERABLE writing allowance. 1 INK per text unit (UTF-16
+// code unit): a letter costs 1, most emoji cost 2.
 // There is deliberately NO transfer, approve, allowance or transfer_from.
 // Read-only function names follow the KCS-4 token standard so wallets
 // and explorers can display balances.
