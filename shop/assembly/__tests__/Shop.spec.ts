@@ -146,8 +146,10 @@ function callAs(account: Uint8Array): void {
   MockVM.setCaller(new chain.caller_data(account, chain.privilege.user_mode));
 }
 
+// `at` is in seconds. The chain reports head_block_time in milliseconds,
+// so the mock does too. This keeps the tests honest about the unit.
 function setTime(at: u64): void {
-  MockVM.setHeadInfo(new chain.head_info(null, at, 0));
+  MockVM.setHeadInfo(new chain.head_info(null, at * 1000, 0));
 }
 
 function okCall(): system_calls.exit_arguments {

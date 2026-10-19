@@ -845,8 +845,10 @@ export class Shop {
     return value != null ? value! : "";
   }
 
+  // Koinos head_block_time is in milliseconds. Every period, day and
+  // campaign time in this contract is in seconds, so convert here.
   private now(): u64 {
-    return System.getHeadInfo().head_block_time;
+    return System.getHeadInfo().head_block_time / 1000;
   }
 
   private addPeriods(start: u64, months: u32): u64 {
