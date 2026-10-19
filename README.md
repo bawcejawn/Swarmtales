@@ -6,19 +6,19 @@ SwarmTales is a group-story project for the Koinos blockchain. People subscribe,
 
 ## What you can do today, and what is still a plan
 
-Three contracts exist in this repository and have passing tests: **Ink**, **Shop**, and **Stories**. Stories is new and has not been uploaded anywhere yet.
+Three contracts exist in this repository and have passing tests: **Ink**, **Shop**, and **Stories**. All three are on the Koinos Foundation testnet. They are not on mainnet. The website in `web/` reads those testnet contracts from a browser. How to run it is in [docs/UI.md](docs/UI.md).
 
 | Piece | Status |
 |---|---|
 | Ink, the non-transferable writing allowance | Built and tested (48 checks) |
 | Shop, the cash register for memberships, packs, story fees, and promo codes | Built and tested (51 checks) |
 | A practice stablecoin inside this repo | Not included. On testnet, deploy the official Koinos token and point Shop at it |
-| Stories (the books themselves, trials, the 3-project limit, archive, refunds) | Built and tested in the mock chain (61 checks). Not on testnet yet |
+| Stories (the books themselves, trials, the 3-project limit, archive, refunds) | Built, tested in the mock chain (61 checks), and uploaded to the Foundation testnet |
 | Sponsor (paying Mana for someone else) | Optional, later, a separate contract, OFF by default. Not in Stories |
 | Books NFT | Planned |
-| Website | Planned |
+| Website | Static pages in `web/`. Reads the testnet. GitHub Pages publishing needs one repo setting (see docs/UI.md) |
 
-The prices and rules in the next sections are the design Carl confirmed. Shop can charge those prices, but the numbers are **not hardcoded**. An admin enters them after upload. Stories rules such as character limits are enforced by the Stories contract once it is uploaded and wired to Ink and Shop. Until then nothing on chain enforces them.
+The prices and rules in the next sections are the design Carl confirmed. Shop can charge those prices, but the numbers are **not hardcoded**. An admin enters them. On the Foundation testnet, Stories is uploaded and wired to Ink and Shop, so the chain enforces those rules there. Mainnet is still not deployed.
 
 ## How it works
 
@@ -82,10 +82,10 @@ A code sent in an admin transaction is public, because the chain is public.
 ```mermaid
 flowchart TD
   person[Reader or writer]
-  site[Website - planned]
-  shop[Shop - built]
-  ink[Ink - built]
-  stories[Stories - built, not uploaded]
+  site[Website - static pages in web/]
+  shop[Shop - built, on testnet]
+  ink[Ink - built, on testnet]
+  stories[Stories - built, on testnet]
   sponsor[Sponsor - optional, later, off by default]
   nft[Books NFT - planned]
   token[vUSDT or vUSDC, or a testnet KCS-4 token]
@@ -114,9 +114,9 @@ Shop does not mint Ink by itself. It calls Ink, and Ink checks that Shop was all
 | Shop | Prices, the payment split, memberships, packs, promo, and the calls that mint Ink |
 | Test stablecoin | Not in this repo. Use the official Koinos KCS-4 token on testnet. SDK 1.0.0 cannot build a safe token, because it lacks the allowance check a real token needs |
 | Sponsor | Optional and later. A separate contract, OFF by default, that could pay Mana for a user. Kept out of Stories so a bug in it can never reach Ink or refunds |
-| Stories | Built (`stories/`), not uploaded. Books, chapters, the trial, the 3-open limit, the 60-day archive, private invites, editing, the final edit, and refunds |
+| Stories | On the Foundation testnet (`stories/`). Books, chapters, the trial, the 3-open limit, the 60-day archive, private invites, editing, the final edit, and refunds |
 | Books NFT | Planned. A collectible for a finished book. Not a way to transfer Ink |
-| Website | Planned. The pages a reader or writer would use |
+| Website | Static files in `web/`. A browser talks to the public testnet node. See [docs/UI.md](docs/UI.md) |
 
 ## Security model
 
@@ -153,6 +153,7 @@ Ink cannot be transferred. There is no transfer, approve, or allowance function 
 | `deploy/testnet.env.example` | Public testnet addresses. Copy to `deploy/testnet.env` to edit |
 | `deploy/prepare-testnet.js` | Builds release files and prints upload steps. It does not upload |
 | `scripts/patch-protoc-stdin.js` | A small fix so the code generators work on Node.js 20 and later |
+| `web/` | The static website. No server. See [docs/UI.md](docs/UI.md) |
 
 Each contract folder has its own `package.json` and `yarn.lock`. This is not a Yarn workspace. The project names are `ink`, `shop` and `stories` because the Koinos tool only allows lowercase letters, numbers, and underscores.
 
@@ -287,16 +288,16 @@ Do not point Shop at mainnet vUSDT while you are on a testnet. Those contracts a
 
 1. Ink. Done and tested.
 2. Shop. Done and tested.
-3. Testnet rehearsal. Not started. Needs faucet coins, two fresh contract wallets, and a practice KCS-4 token. Carl does the wallet steps.
-4. Stories. Built and tested in the mock chain. Enforces the trial, the 3-open limit, character ranges, private invites, the 60-day archive, refunds, and the UTF-16 Ink charge (most emoji cost 2). Next: testnet upload, wiring, and Mana measurements.
-5. Website. Not started.
+3. Testnet rehearsal. The three contracts are on the Foundation testnet and wired together. Mana for a real write was measured outside this page (about 0.09 to 0.58). A signed write from the website still needs Kondor on a computer.
+4. Stories. Built, tested in the mock chain, and uploaded to the Foundation testnet. Enforces the trial, the 3-open limit, character ranges, private invites, the 60-day archive, refunds, and the UTF-16 Ink charge (most emoji cost 2).
+5. Website. A first static site is in `web/`. It can read the testnet. Publishing it is a GitHub Pages setting. See [docs/UI.md](docs/UI.md).
 6. Books NFT. Not started. Not required for the first public story.
 6a. Sponsor. Optional, later, a separate contract that is OFF by default. Not required.
 6b. Reactions and reports. A separate small contract, later.
 6c. Keepsake and tip items. A later Shop upgrade.
 7. An independent audit, then a mainnet upload. Not started.
 
-Nothing here has been audited. Nothing has been uploaded to testnet or mainnet by this repository's tooling.
+Nothing here has been audited. Nothing has been uploaded to mainnet. The Foundation testnet copies were uploaded separately from this website.
 
 ## Decisions
 
