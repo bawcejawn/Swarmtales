@@ -29,6 +29,16 @@ module.exports = {
   imports(memory, createImports, instantiateSync, binary) {
     let instance; // Imports can reference this
     const mockVM = new MockVM();
+    // The mock database stores protobuf bytes fields as views into wasm
+    // memory. AssemblyScript's GC later reuses that memory, so a long
+    // suite reads corrupted stories. Copy each value as it is stored.
+    const putObject = mockVM.db.putObject.bind(mockVM.db);
+    mockVM.db.putObject = (space, key, obj) => putObject(
+      space,
+      key,
+      // Buffer.from(Uint8Array) copies. Buffer.from(ArrayBuffer, ...) does not.
+      obj ? Buffer.from(obj) : obj
+    );
 
     const myImports = {
       wasi_snapshot_preview1: {
