@@ -456,3 +456,10 @@ dialog.sheet::backdrop { background: rgba(27, 31, 42, 0.45); }
 .listen-bar select { width: auto; min-height: 40px; padding: 6px 10px; font-size: 14px; }
 .listen-opt { display: inline-flex; }
 .seg.reading { background: var(--honey-bg); border-radius: 10px; box-shadow: 0 0 0 8px var(--honey-bg); }
+
+/* My stories and sharing */
+.mine-section { margin-top: 48px; }
+.mine-section > .h2 { margin-bottom: 16px; }
+.share-panel .share-link { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; overflow-wrap: anywhere; }
+.share-panel form, .share-panel .editor-form { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.writing-help { margin: 0 0 8px; }
