@@ -144,9 +144,9 @@ them, and you merge that PR.
 9. **Copy checker:** on GitHub, open **Actions → Copy checker → Run workflow**. Its summary lists
    anything it hid. After that it runs every hour by itself.
 
-## Optional: web search for copied text (free)
+## Optional: search books and the web for copied text (free)
 
-Sign up for the free Brave Search API plan (2,000 searches a month) at
-https://brave.com/search/api/ and add its key as the GitHub secret `BRAVE_API_KEY`. The
-checker then also searches the web for three exact phrases from longer parts and hides a part
-when two of them are found. Without the key, it compares with everything on SwarmTales only.
+Brave dropped its free plan in 2026, so the checker now works with free services instead.
+See `docs/COPY_CHECKER_SEARCH.md`: Google Books (searches inside books) and Tavily (web).
+Both are free with no card. Without any key, the checker compares with everything on
+SwarmTales only.

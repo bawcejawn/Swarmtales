@@ -73,3 +73,33 @@ test("the monthly search budget resets each month", () => {
   const next = budget(state, new Date("2026-11-01T00:00:00Z"), 3);
   assert.equal(next.left(), 3);
 });
+
+test("search answers from each service become the same shape", async () => {
+  const { normalizeResults } = await import("../lib.mjs");
+  const phrase = "the lighthouse keeper counted every wave that broke against the northern rocks";
+  const books = normalizeResults("books", {
+    items: [{ id: "abc", volumeInfo: { title: "Sea Stories", authors: ["A. Writer"], infoLink: "https://books.google.com/books?id=abc" },
+      searchInfo: { textSnippet: "&quot;...<b>the lighthouse keeper counted every wave that broke against the northern rocks</b>, and..." } }],
+  });
+  assert.equal(books.length, 1);
+  assert.equal(books[0].label, "the book “Sea Stories” by A. Writer");
+  assert.equal(resultMatches(phrase, books[0], []), true);
+  const tavily = normalizeResults("tavily", { results: [{ url: "https://example.com/a", title: "A page", content: "Once the lighthouse keeper counted every wave that broke against the northern rocks." }] });
+  assert.equal(resultMatches(phrase, tavily[0], []), true);
+  const brave = normalizeResults("brave", { web: { results: [{ url: "https://example.org", title: "t", description: "nothing alike" }] } });
+  assert.equal(resultMatches(phrase, brave[0], []), false);
+  assert.deepEqual(normalizeResults("books", {}), []);
+  assert.deepEqual(normalizeResults("tavily", null), []);
+});
+
+test("each search service keeps its own monthly budget", () => {
+  const state = {};
+  const now = new Date("2026-10-20T00:00:00Z");
+  const books = budget(state, now, 2, "search_books");
+  const tavily = budget(state, now, 1, "search_tavily");
+  books.spend();
+  tavily.spend();
+  assert.equal(books.left(), 1);
+  assert.equal(tavily.left(), 0);
+  assert.equal(budget(state, now, 1800).left(), 1800); // the original Brave budget is untouched
+});

@@ -4,8 +4,11 @@
  * public repositories). Each run:
  *   1. reads every story part added since the last run;
  *   2. compares it with all other writers' text on SwarmTales (fingerprints);
- *   3. optionally, if BRAVE_API_KEY is set, searches the web for three exact
- *      phrases from longer parts (free plan: about 2,000 searches a month);
+ *   3. optionally, searches for three exact phrases from longer parts, using
+ *      whichever free search keys are set (all optional, all free, no card):
+ *        GOOGLE_BOOKS_KEY  Google Books: searches inside millions of books
+ *        TAVILY_API_KEY    Tavily web search (free: 1,000 searches a month)
+ *        BRAVE_API_KEY     Brave web search (Brave now needs a card; kept for anyone who has a key)
  *   4. hides a part on a high-confidence match, signing with the MODERATOR key,
  *      which can only hide and unhide. Every hide is a public event with a note.
  *   5. when a story fills up or enters its final edit, checks all of it once
@@ -16,16 +19,20 @@
  *   RPC               node URL (default: the Foundation testnet)
  *   MODERATOR_WIF     the moderator's private key (secret). Without it the
  *                     checker only reports what it would hide.
- *   BRAVE_API_KEY     optional, enables the web phrase check
- *   SEARCH_MONTHLY    searches per month to stay under (default 1800)
- *   SEARCH_PER_RUN    searches per run (default 40)
+ *   GOOGLE_BOOKS_KEY  optional, book phrase check (stays under BOOKS_MONTHLY, default 25000;
+ *                     Google's free quota is 1,000 a day)
+ *   TAVILY_API_KEY    optional, web phrase check (stays under TAVILY_MONTHLY, default 950)
+ *   BRAVE_API_KEY     optional, web phrase check (stays under SEARCH_MONTHLY, default 1800)
+ *   SEARCH_PER_RUN    searches per run, all services together (default 40)
+ *   TEST_PHRASE       if set: only search this phrase with every service that has a key,
+ *                     print what each one found, and stop (to check the keys work)
  *   IGNORE_HOSTS      comma list of hosts never counted as a source
  *   STATE_FILE        where progress is kept between runs (default checker-state.json)
  *   DRY_RUN=1         never send anything
  */
 import fs from "fs";
 import { createRequire } from "module";
-import { Index, REASON, WEB_MATCHES_TO_HIDE, WEB_MIN_CHARS, budget, fingerprint, isDuplicate, pickPhrases, resultMatches } from "./lib.mjs";
+import { Index, REASON, WEB_MATCHES_TO_HIDE, WEB_MIN_CHARS, budget, fingerprint, isDuplicate, normalizeResults, pickPhrases, resultMatches } from "./lib.mjs";
 
 const require = createRequire(new URL("../web/package.json", import.meta.url));
 const { Contract, Provider, Signer, Transaction } = require("koilib");
@@ -37,6 +44,8 @@ const RPC = env.RPC || "https://testnet.koinosfoundation.org";
 const STATE_FILE = env.STATE_FILE || "checker-state.json";
 const DRY_RUN = env.DRY_RUN === "1";
 const MONTHLY = Number(env.SEARCH_MONTHLY || 1800);
+const BOOKS_MONTHLY = Number(env.BOOKS_MONTHLY || 25000);
+const TAVILY_MONTHLY = Number(env.TAVILY_MONTHLY || 950);
 const PER_RUN = Number(env.SEARCH_PER_RUN || 40);
 const IGNORE = ["bawcejawn.github.io", "koinosblocks.com", "koiner.app", "kollection.app"]
   .concat(String(env.IGNORE_HOSTS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
@@ -69,32 +78,129 @@ function writeSummary(actions) {
   fs.appendFileSync(file, "## SwarmTales copy checker\n\n| story | part | why | note | action |\n|---|---|---|---|---|\n" + rows + "\n\n```\n" + log.join("\n") + "\n```\n");
 }
 
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** One search service: how to ask it for an exact phrase. */
+const SERVICES = [
+  {
+    name: "books",
+    label: "Google Books",
+    key: () => env.GOOGLE_BOOKS_KEY,
+    monthly: BOOKS_MONTHLY,
+    async ask(phrase) {
+      const url = "https://www.googleapis.com/books/v1/volumes?maxResults=5&q=" + encodeURIComponent('"' + phrase + '"') +
+        "&key=" + encodeURIComponent(env.GOOGLE_BOOKS_KEY.trim());
+      const res = await fetch(url, { headers: { Accept: "application/json" } });
+      return res;
+    },
+  },
+  {
+    name: "tavily",
+    label: "Tavily",
+    key: () => env.TAVILY_API_KEY,
+    monthly: TAVILY_MONTHLY,
+    async ask(phrase) {
+      return fetch("https://api.tavily.com/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.TAVILY_API_KEY.trim() },
+        body: JSON.stringify({ query: '"' + phrase + '"', search_depth: "basic", max_results: 5 }),
+      });
+    },
+  },
+  {
+    name: "brave",
+    budgetName: "search",
+    label: "Brave",
+    key: () => env.BRAVE_API_KEY,
+    monthly: MONTHLY,
+    async ask(phrase) {
+      const url = "https://api.search.brave.com/res/v1/web/search?count=5&q=" + encodeURIComponent('"' + phrase + '"');
+      const res = await fetch(url, { headers: { Accept: "application/json", "X-Subscription-Token": env.BRAVE_API_KEY.trim() } });
+      await pause(1100); // Brave allows 1 request a second
+      return res;
+    },
+  },
+];
+
+/** Search one phrase with one service. Returns the matching result, null, or "failed". */
+async function searchOnce(service, phrase) {
+  try {
+    const res = await service.ask(phrase);
+    if (!res.ok) {
+      note("  " + service.label + " search failed (" + res.status + "); it is skipped for the rest of this run");
+      return "failed";
+    }
+    const results = normalizeResults(service.name, await res.json());
+    return results.find((r) => resultMatches(phrase, r, IGNORE)) || null;
+  } catch (error) {
+    note("  " + service.label + " search failed (" + (error && error.message ? error.message : String(error)) + ")");
+    return "failed";
+  }
+}
+
+/**
+ * A phrase counts as found when any service finds it. Books are asked first
+ * (the free quota is large and copied book text is the main risk), then the web.
+ */
 async function webCheck(text, spendable) {
   const phrases = pickPhrases(text);
   if (phrases.length < WEB_MATCHES_TO_HIDE) return null;
   let matched = 0;
   let where = "";
   for (const phrase of phrases) {
-    if (!spendable.ok()) return null;
-    spendable.spend();
-    const url = "https://api.search.brave.com/res/v1/web/search?count=5&q=" + encodeURIComponent('"' + phrase + '"');
-    const res = await fetch(url, { headers: { Accept: "application/json", "X-Subscription-Token": env.BRAVE_API_KEY } });
-    await new Promise((r) => setTimeout(r, 1100)); // the free plan allows 1 request a second
-    if (!res.ok) {
-      note("  web search failed (" + res.status + "); skipping the web check for this part");
-      return null;
+    let hit = null;
+    for (const service of spendable.services()) {
+      if (!spendable.ok(service)) continue;
+      spendable.spend(service);
+      const found = await searchOnce(service, phrase);
+      if (found === "failed") {
+        spendable.disable(service);
+        continue;
+      }
+      if (found) {
+        hit = found;
+        break;
+      }
     }
-    const body = await res.json();
-    const hit = ((body.web && body.web.results) || []).find((r) => resultMatches(phrase, r, IGNORE));
     if (hit) {
       matched += 1;
-      if (!where) where = new URL(hit.url).host;
+      if (!where) where = hit.label || new URL(hit.url).host;
     }
+    if (!spendable.any()) break;
   }
   return matched >= WEB_MATCHES_TO_HIDE ? { matched, of: phrases.length, where } : null;
 }
 
+async function testPhrase(phrase) {
+  const active = SERVICES.filter((s) => s.key());
+  if (!active.length) {
+    note("No search key is set (GOOGLE_BOOKS_KEY, TAVILY_API_KEY or BRAVE_API_KEY). Nothing to test.");
+    return;
+  }
+  note('Testing the search keys with: "' + phrase + '"');
+  for (const service of active) {
+    try {
+      const res = await service.ask(phrase);
+      if (!res.ok) {
+        note("  " + service.label + ": FAILED with status " + res.status + ". Check the key.");
+        continue;
+      }
+      const results = normalizeResults(service.name, await res.json());
+      const hit = results.find((r) => resultMatches(phrase, r, IGNORE));
+      note("  " + service.label + ": key works. " + results.length + " result(s); " +
+        (hit ? "the phrase was FOUND in " + (hit.label || new URL(hit.url).host) + "." : "no exact match among them."));
+    } catch (error) {
+      note("  " + service.label + ": FAILED (" + (error && error.message ? error.message : String(error)) + ")");
+    }
+  }
+}
+
 async function main() {
+  if (env.TEST_PHRASE && env.TEST_PHRASE.trim()) {
+    await testPhrase(env.TEST_PHRASE.trim());
+    writeSummary([]);
+    return;
+  }
   if (!STORIES) throw new Error("Set STORIES_ADDRESS.");
   const provider = new Provider([RPC]);
   const stories = new Contract({ id: STORIES, abi: abis.stories, provider });
@@ -116,12 +222,20 @@ async function main() {
   state.checked = state.checked || {};
   state.swept = state.swept || {};
   const index = Index.fromJSON(state.index);
-  const search = budget(state, new Date(), MONTHLY);
+  const now = new Date();
+  const budgets = {};
+  for (const s of SERVICES) budgets[s.name] = budget(state, now, s.monthly, s.budgetName || "search_" + s.name);
+  const disabled = new Set();
   let searchesThisRun = 0;
   const spendable = {
-    ok: () => !!env.BRAVE_API_KEY && searchesThisRun < PER_RUN && search.left() > 0,
-    spend: () => { searchesThisRun += 1; search.spend(); },
+    services: () => SERVICES.filter((s) => s.key() && !disabled.has(s.name)),
+    ok: (s) => searchesThisRun < PER_RUN && budgets[s.name].left() > 0,
+    any: () => spendable.services().some((s) => spendable.ok(s)),
+    spend: (s) => { searchesThisRun += 1; budgets[s.name].spend(); },
+    disable: (s) => disabled.add(s.name),
   };
+  const searchKeys = SERVICES.filter((s) => s.key()).map((s) => s.label);
+  note(searchKeys.length ? "Phrase search with: " + searchKeys.join(", ") + "." : "No search key set: only SwarmTales' own text is compared.");
   const actions = [];
 
   async function hide(storyId, seq, reason, why) {
@@ -157,10 +271,10 @@ async function main() {
       await hide(storyId, seq, REASON.DUPLICATE, "matches story " + srcStory + " part " + srcSeq + " (" + Math.round(match.ratio * 100) + "% of its text)");
       return false;
     }
-    if (alsoWeb && String(seg.text).length >= WEB_MIN_CHARS && spendable.ok()) {
+    if (alsoWeb && String(seg.text).length >= WEB_MIN_CHARS && spendable.any()) {
       const web = await webCheck(seg.text, spendable);
       if (web) {
-        await hide(storyId, seq, REASON.COPYRIGHT, "web match: " + web.matched + " of " + web.of + " phrases found, e.g. on " + web.where);
+        await hide(storyId, seq, REASON.COPYRIGHT, "copy match: " + web.matched + " of " + web.of + " phrases found, e.g. in " + web.where);
         return false;
       }
     }
@@ -206,7 +320,8 @@ async function main() {
   }
 
   saveState(state, index);
-  note("Done. " + actions.length + " part(s) flagged. Web searches this run: " + searchesThisRun + "; left this month: " + search.left() + ".");
+  note("Done. " + actions.length + " part(s) flagged. Searches this run: " + searchesThisRun + "." +
+    SERVICES.filter((s) => s.key()).map((s) => " " + s.label + " left this month: " + budgets[s.name].left() + ".").join(""));
   writeSummary(actions);
 }
 
