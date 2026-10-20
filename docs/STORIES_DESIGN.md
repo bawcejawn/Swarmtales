@@ -149,8 +149,8 @@ Every action takes the acting wallet as an argument and requires that wallet's s
 | `update_story(opener, story, title, category_1, category_2, visibility, free_chapters)` | Opener; not FINALIZED | Free (Mana only) | Settings. Opener activity |
 | `set_editor(opener, story, wallet, allowed)` | Opener; not FINALIZED | Free | At most 10 editors |
 | `set_allowed(actor, story, wallets[≤20], allowed)` | Opener or editor | Free | Private allow-list |
-| `create_invite(story, code, max_uses, expires_at)`, `revoke_invite` | Opener | Free | Stores only the **hash** of the invite code (same pattern as Shop promo codes) |
-| `join_with_invite(wallet, story, invite_id, code)` | Anyone with the code | Free | Adds the caller to the allow-list if the code matches, isn't revoked or expired, and has uses left |
+| `create_invite(story, link_signer, max_uses, expires_at)`, `revoke_invite` | Opener | Free | Stores only the **public address** of a per-link key. The private key lives in the invite link, never on chain (fix H2) |
+| `join_with_invite(wallet, story, invite_id, signature)` | Anyone with the link | Free | Adds the caller if the link key's signature over (contract, story, invite, **this wallet**) checks out, and the invite isn't revoked or expired and has uses left. A copied signature can't be reused for another wallet |
 
 The wallet signs the opening as two operations in one transaction, the same pattern Shop already uses: (1) `approve` **Shop** (not Stories) to spend the open fee in the stablecoin, then (2) `Stories.open_story`. Shop is the contract that moves the stablecoin, so Shop is the one that needs the allowance.
 
@@ -245,7 +245,7 @@ So "an emoji costs 2" is true for typical emoji. A few older ones cost 1, and co
    - more than 3 newlines in a row,
    - text with nothing visible (only spaces, no-break spaces, joiners or variation selectors).
 
-   Titles, category names and invite codes also refuse line breaks. Invite codes and PDF links are plain ASCII only.
+   Titles and category names also refuse line breaks. PDF links are plain ASCII only.
 
    The zero-width joiner (U+200D, needed for family and profession emoji) and ZWNJ (U+200C, needed for Persian and other scripts) stay allowed.
 4. **Capacity uses the same units.** `max_chars`, `used_chars`, the trial limit, the per-contribution cap, and surviving totals are all in Ink units, so there's one number everywhere.
@@ -355,7 +355,7 @@ Ink's own `mint_event` and `burn_event` also fire for every burn and refund, wit
 
 - **NFTs, the First Edition, and Contributor Edition claims.** These go in the Books contract later, which reads `surviving_totals` and `contributor_edition_min`. Keeping them out keeps Stories smaller.
 - **Reactions and reports.** Decided (question 4): a small separate contract, later. Stories can mint Ink refunds, so it stays as small as possible.
-- **Wallet-signed invite links.** Decided (question 5): v1 uses hashed invite codes (use limit plus expiry) plus a direct allow-list. Simpler, and security comes first.
+- **Wallet-signed invite links.** Implemented after the October 2026 security review (fix H2): an invite stores only the public address of a per-link key; joining needs that key's signature over the joiner's own wallet, so nothing secret is on chain and a copied signature cannot be replayed. A direct allow-list remains.
 - **Keepsakes and tips.** Decided (19 October 2026): these are a **later Shop upgrade**. They are new Shop items, they don't involve Stories, and nothing for them is built now.
 - **Sponsorship.** Decided (question 6): offered later as a **separate Sponsor contract, OFF by default**. There is no sponsor code inside Stories. See question 6 for why.
 - **Pending or approval queues** (you chose open by default), and **authors editing their own text**.
@@ -372,7 +372,7 @@ Ink's own `mint_event` and `burn_event` also fire for every burn and refund, wit
 2. **Close fee when a story fills up: yes.** The opener pays the $5 / $2 close fee to start the final edit even when the story auto-locked at its maximum. The admin take-over path stays free.
 3. **Per-contribution cap: 2,000 to start.** Admin-adjustable with `set_limits`, bounded 100 to 4,000 in code. The final number comes from real testnet Mana measurements (`deploy.js measure`).
 4. **Reactions and reports: a separate contract, later.** Not in Stories v1.
-5. **Private-book invites: invite codes plus direct adds.** A code has a use limit (1–1,000) and an expiry (at most 365 days). Only a sha256 hash of the code is stored. The opener or an editor can also add wallets directly. "Keep it simple, security is the priority."
+5. **Private-book invites: signed links plus direct adds.** An invite has a use limit (1–1,000) and an expiry (at most 365 days). Only the public address of a per-link key is stored; the private key travels in the link and signs a join bound to the joiner's wallet (fix H2). The opener or an editor can also add wallets directly.
 6. **Sponsorship: available later as a separate Sponsor contract, OFF by default.** Carl asked for whichever of "a disabled-by-default switch inside Stories" or "a separate Sponsor contract" is safer and simpler. **The separate contract is both:**
    - *Isolation.* Paying someone's Mana on Koinos means a contract's `authorize()` approves being the payer, and that contract must hold KOIN for Mana. Inside Stories, a bug in that code would sit next to the Ink burn and REFUND mint powers. In its own contract, the worst a bug can do is spend the sponsor's own Mana. It can never mint Ink or touch refunds.
    - *Simpler Stories.* Stories needs no `authorize()` override, holds no KOIN, and keeps its upload flags all false (as Ink and Shop do). An "off" switch in Stories would still ship that code to mainnet, ready to be switched on by mistake or by a stolen admin key.

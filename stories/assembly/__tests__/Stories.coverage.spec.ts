@@ -7,6 +7,11 @@
 import { Base58, MockVM, System, authority, chain, Protobuf, system_calls } from "@koinos/sdk-as";
 import { Stories } from "../Stories";
 import { stories } from "../proto/stories";
+import { LINK_ADDRESSES, inviteSig } from "./linkFixtures";
+
+function linkKey(key: i32): Uint8Array {
+  return Base58.decode(LINK_ADDRESSES[key]);
+}
 
 const STORIES = Base58.decode("16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt");
 const INK = Base58.decode("13Qrdvv3cXys9aryjZho6vHxDW3PRgX5pm");
@@ -167,6 +172,10 @@ function configure(): void {
   authorize(STORIES);
   const c = new Stories();
   c.set_addresses(new stories.set_addresses_arguments(INK, SHOP));
+  // These suites check exact Ink arithmetic with short sample texts, so
+  // they lower the new-text minimum to 1. The 20-character default is
+  // tested on its own in "Stories: security fixes".
+  c.set_min_contribution(new stories.set_min_contribution_arguments(1));
   c.add_category(new stories.add_category_arguments("Fantasy"));
   c.add_category(new stories.add_category_arguments("Sci-Fi"));
   c.add_category(new stories.add_category_arguments("Mystery & Thriller"));
@@ -462,12 +471,12 @@ describe("Stories: private stories, allow-list and invites", () => {
     expect(new Stories().is_allowed(new stories.is_allowed_arguments(1, many[0])).value).toBe(true);
   });
 
-  it("accepts invite codes, uses and expiries on the boundary", () => {
+  it("accepts invite uses and expiries on the boundary", () => {
     authorize(ALICE);
-    const shortCode = new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, "12345678", 1, START + 1)).value;
+    const shortCode = new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, linkKey(0), 1, START + 1)).value;
     checkpoint();
     authorize(ALICE);
-    const longCode = new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, "c".repeat(64), 1000, START + 365 * DAY)).value;
+    const longCode = new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, linkKey(1), 1000, START + 365 * DAY)).value;
     checkpoint();
     expect(shortCode).toBe(1);
     expect(longCode).toBe(2);
@@ -477,7 +486,7 @@ describe("Stories: private stories, allow-list and invites", () => {
     expect(inv.expires_at).toBe(START + 365 * DAY);
     expect(inv.revoked).toBe(false);
     authorize(BOB);
-    new Stories().join_with_invite(new stories.join_with_invite_arguments(BOB, 1, 1, "12345678"));
+    new Stories().join_with_invite(new stories.join_with_invite_arguments(BOB, 1, 1, inviteSig(0, 1, 1)));
     checkpoint();
     expect(new Stories().get_invite(new stories.get_invite_arguments(1, 1)).uses).toBe(1);
     expect(new Stories().is_allowed(new stories.is_allowed_arguments(1, BOB)).value).toBe(true);
@@ -668,7 +677,7 @@ describe("Stories: reads", () => {
     expect(inv.max_uses).toBe(0);
     expect(inv.uses).toBe(0);
     expect(inv.revoked).toBe(false);
-    expect(inv.code_hash).toBeNull();
+    expect(inv.link_signer).toBeNull();
     expect(c.get_trial_used(new stories.get_trial_used_arguments(null)).value).toBe(0);
     expect(c.get_trial_used(new stories.get_trial_used_arguments(bad)).value).toBe(0);
     expect(c.get_open_count(new stories.get_open_count_arguments(bad)).value).toBe(0);
@@ -744,7 +753,7 @@ describe("Stories: gaps the main suite does not reach", () => {
     new Stories().set_paused(new stories.set_paused_arguments(true));
     checkpoint();
     fails(() => { authorize(ALICE); new Stories().update_story(new stories.update_story_arguments(ALICE, 1, "New", 1, 0, PUBLIC, 0)); }, "STORIES: stories are paused");
-    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, "PAUSE-CODE", 5, START + DAY)); }, "STORIES: stories are paused");
+    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, linkKey(0), 5, START + DAY)); }, "STORIES: stories are paused");
     fails(() => { authorize(ALICE); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(ALICE, 1, USDT)); }, "STORIES: stories are paused");
     fails(() => { new Stories().archive_if_stale(new stories.archive_if_stale_arguments(1)); }, "STORIES: stories are paused");
     expect(story(1).status).toBe(stories.story_status.STATUS_OPEN);
@@ -765,7 +774,7 @@ describe("Stories: gaps the main suite does not reach", () => {
   it("refuses an unknown invite id", () => {
     openAs(ALICE, SHORT, 10000, PRIVATE, "Hi");
     authorize(ALICE);
-    new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, "FIRST-CODE", 5, START + DAY));
+    new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, linkKey(0), 5, START + DAY));
     checkpoint();
     fails(() => { authorize(ALICE); new Stories().revoke_invite(new stories.revoke_invite_arguments(ALICE, 1, 9)); }, "STORIES: unknown invite");
   });

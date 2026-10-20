@@ -4,6 +4,33 @@
  */
 "use strict";
 
+const crypto = require("crypto");
+
+// ---- Signed invite/promo links (fixes H2 and H3) ----
+// Build the exact message the Shop and Stories contracts recover a
+// signature against. Callers pass raw address bytes (from koilib's
+// decodeBase58), so this file stays free of network and heavy deps.
+const PROMO_DOMAIN = "swarmtales/promo/v1";
+const INVITE_DOMAIN = "swarmtales/invite/v1";
+
+function u64BE(value) {
+  const out = Buffer.alloc(8);
+  out.writeBigUInt64BE(BigInt(value));
+  return out;
+}
+
+function promoMessage(shopBytes, campaignId, accountBytes) {
+  return Buffer.concat([Buffer.from(PROMO_DOMAIN), Buffer.from(shopBytes), u64BE(campaignId), Buffer.from(accountBytes)]);
+}
+
+function inviteMessage(storiesBytes, storyId, inviteId, accountBytes) {
+  return Buffer.concat([Buffer.from(INVITE_DOMAIN), Buffer.from(storiesBytes), u64BE(storyId), u64BE(inviteId), Buffer.from(accountBytes)]);
+}
+
+function sha256(bytes) {
+  return new Uint8Array(crypto.createHash("sha256").update(Buffer.from(bytes)).digest());
+}
+
 // Networks this script knows. The chain id is checked against the node
 // before anything is signed, so a wrong or swapped URL stops the run.
 const NETWORKS = {
@@ -257,7 +284,6 @@ const TIER_WRITER = 2;
 
 // Test promo used by `test-promo` and `claim-promo` (testnet only).
 const TEST_PROMO = {
-  code: "SWARMTEST",
   amount: "500",
   budget_total: "5000",
   daily_cap: "1000",
@@ -488,4 +514,9 @@ module.exports = {
   rcLimitFor,
   isConfirmation,
   toKoilibAbi,
+  PROMO_DOMAIN,
+  INVITE_DOMAIN,
+  promoMessage,
+  inviteMessage,
+  sha256,
 };

@@ -162,7 +162,6 @@ test("negative checks: contract rejections pass, infrastructure errors do not", 
 
 test("test promo fits the Shop's own rules", () => {
   const p = lib.TEST_PROMO;
-  assert.ok(p.code.length > 0 && p.code.length <= 64);
   assert.ok(BigInt(p.amount) > 0n);
   assert.ok(BigInt(p.budget_total) >= BigInt(p.amount));
   assert.ok(BigInt(p.daily_cap) >= BigInt(p.amount));
@@ -373,4 +372,26 @@ test("shop.set_addresses arguments refuse anything that does not match the chain
   assert.throws(() => lib.shopAddressesForStories(onChain, { ink: onChain.ink, stories, founder: other }), lib.UserError);
   assert.throws(() => lib.shopAddressesForStories(Object.assign({ stories: other }, onChain), { ink: onChain.ink, stories }), lib.UserError);
   assert.throws(() => lib.shopAddressesForStories({}, { ink: onChain.ink, stories }), lib.UserError);
+});
+
+test("promo and invite link messages match the contract byte layout", () => {
+  // Fixed 25-byte address stand-ins.
+  const shop = new Uint8Array(25).fill(1);
+  const stories = new Uint8Array(25).fill(2);
+  const account = new Uint8Array(25).fill(3);
+
+  const promo = lib.promoMessage(shop, "3", account);
+  assert.strictEqual(promo.length, 19 + 25 + 8 + 25);
+  assert.strictEqual(Buffer.from(promo.slice(0, 19)).toString(), "swarmtales/promo/v1");
+  // campaign id 3 as 8 big-endian bytes.
+  assert.deepStrictEqual([...promo.slice(44, 52)], [0, 0, 0, 0, 0, 0, 0, 3]);
+
+  const invite = lib.inviteMessage(stories, "12", "4", account);
+  assert.strictEqual(invite.length, 20 + 25 + 8 + 8 + 25);
+  assert.strictEqual(Buffer.from(invite.slice(0, 20)).toString(), "swarmtales/invite/v1");
+  assert.deepStrictEqual([...invite.slice(45, 53)], [0, 0, 0, 0, 0, 0, 0, 12]);
+  assert.deepStrictEqual([...invite.slice(53, 61)], [0, 0, 0, 0, 0, 0, 0, 4]);
+
+  // sha256 returns 32 bytes.
+  assert.strictEqual(lib.sha256(promo).length, 32);
 });

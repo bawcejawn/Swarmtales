@@ -99,9 +99,10 @@ test("writer month and promo checks", () => {
   assert.equal(assessWriterBuy({ price: "5", balance: "5", paused: false }).ok, true);
   assert.equal(assessWriterBuy({ price: "5", balance: "4", paused: false }).ok, false);
   assert.equal(assessWriterBuy({ price: "0", balance: "5", paused: false }).ok, false);
-  assert.equal(assessPromo({ campaignId: "1", code: "SWARMTEST", alreadyClaimed: false, paused: false, promoEnabled: true }).ok, true);
-  assert.equal(assessPromo({ campaignId: "1", code: "SWARMTEST", alreadyClaimed: true, paused: false, promoEnabled: true }).ok, false);
-  assert.equal(assessPromo({ campaignId: "0", code: "", alreadyClaimed: false, paused: false, promoEnabled: false }).ok, false);
+  assert.equal(assessPromo({ campaignId: "1", hasLinkKey: true, alreadyClaimed: false, paused: false, promoEnabled: true }).ok, true);
+  assert.equal(assessPromo({ campaignId: "1", hasLinkKey: true, alreadyClaimed: true, paused: false, promoEnabled: true }).ok, false);
+  assert.equal(assessPromo({ campaignId: "1", hasLinkKey: false, alreadyClaimed: false, paused: false, promoEnabled: true }).ok, false);
+  assert.equal(assessPromo({ campaignId: "0", hasLinkKey: true, alreadyClaimed: false, paused: false, promoEnabled: false }).ok, false);
 });
 
 test("writer membership needs tier 2 and a future paid_until", () => {

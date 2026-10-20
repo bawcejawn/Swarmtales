@@ -116,7 +116,9 @@ message membership {
 }
 
 message campaign {
-  bytes code_hash = 1;
+  // Public address of the shared link key. Empty for single-use campaigns,
+  // whose link keys are added one by one.
+  bytes link_signer = 1 [(koinos.btype) = ADDRESS];
   uint64 amount = 2 [jstype = JS_STRING];
   uint64 budget_total = 3 [jstype = JS_STRING];
   uint64 budget_used = 4 [jstype = JS_STRING];
@@ -182,6 +184,14 @@ message get_promo_claimed_arguments {
   bytes account = 1 [(koinos.btype) = ADDRESS];
 }
 
+// @description Single-use link key status: 0 unknown, 1 waiting, 2 already claimed
+// @read-only true
+// @result uint32
+message get_single_use_status_arguments {
+  uint64 campaign_id = 1 [jstype = JS_STRING];
+  bytes signer = 2 [(koinos.btype) = ADDRESS];
+}
+
 // ---------- Payments ----------
 
 // @description Buy Reader or Writer membership for 1 to 24 months
@@ -237,12 +247,13 @@ message set_promo_enabled_arguments {
   bool enabled = 1;
 }
 
-// @description Create a promo campaign. Shared campaigns pass the code.
-// Single-use campaigns leave code empty and add codes afterwards.
+// @description Create a promo campaign. A shared campaign passes the PUBLIC address
+// of its link key. A single-use campaign leaves it empty and adds keys afterwards.
+// No secret is ever sent to the chain.
 // @read-only false
 // @result uint64
 message create_campaign_arguments {
-  string code = 1;
+  bytes link_signer = 1 [(koinos.btype) = ADDRESS];
   uint64 amount = 2 [jstype = JS_STRING];
   uint64 budget_total = 3 [jstype = JS_STRING];
   uint64 daily_cap = 4 [jstype = JS_STRING];
@@ -270,21 +281,25 @@ message set_campaign_limits_arguments {
   uint64 ends_at = 4 [jstype = JS_STRING];
 }
 
-// @description Add one-time codes to a single-use campaign (max 20 per call)
+// @description Add single-use link keys (public addresses only, max 20 per call)
 // @read-only false
 // @result empty_object
-message add_single_use_codes_arguments {
+message add_single_use_signers_arguments {
   uint64 campaign_id = 1 [jstype = JS_STRING];
-  repeated string codes = 2;
+  repeated bytes signers = 2 [(koinos.btype) = ADDRESS];
 }
 
-// @description Claim promo Ink with a code. One claim per wallet, ever.
+// @description Claim promo Ink with a signed link. One claim per wallet, ever.
+// signature = the link key's signature over
+//   sha256("swarmtales/promo/v1" || shop address || campaign id (8 bytes, big-endian) || account)
+// signer = the link key's address (needed for single-use campaigns, ignored otherwise).
 // @read-only false
 // @result empty_object
 message claim_promo_arguments {
   bytes account = 1 [(koinos.btype) = ADDRESS];
   uint64 campaign_id = 2 [jstype = JS_STRING];
-  string code = 3;
+  bytes signer = 3 [(koinos.btype) = ADDRESS];
+  bytes signature = 4;
 }
 
 // ---------- Admin ----------

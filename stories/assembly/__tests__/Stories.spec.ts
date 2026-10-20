@@ -10,6 +10,7 @@
 import { Base58, MockVM, System, authority, chain, Protobuf, system_calls } from "@koinos/sdk-as";
 import { Stories } from "../Stories";
 import { stories } from "../proto/stories";
+import { LINK_ADDRESSES, inviteSig } from "./linkFixtures";
 
 const STORIES = Base58.decode("16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt");
 const INK = Base58.decode("13Qrdvv3cXys9aryjZho6vHxDW3PRgX5pm");
@@ -164,6 +165,10 @@ function configure(): void {
   authorize(STORIES);
   const c = new Stories();
   c.set_addresses(new stories.set_addresses_arguments(INK, SHOP));
+  // These suites check exact Ink arithmetic with short sample texts, so
+  // they lower the new-text minimum to 1. The 20-character default is
+  // tested on its own in "Stories: security fixes".
+  c.set_min_contribution(new stories.set_min_contribution_arguments(1));
   c.add_category(new stories.add_category_arguments("Fantasy"));
   c.add_category(new stories.add_category_arguments("Sci-Fi"));
   c.add_category(new stories.add_category_arguments("Mystery & Thriller"));
@@ -317,6 +322,33 @@ function setLimits(cap: u32, trial: u32): void {
   authorize(STORIES);
   new Stories().set_limits(new stories.set_limits_arguments(cap, trial, 3, 60, 30));
   checkpoint();
+}
+
+// ---------- signed invite links (fix H2) ----------
+// Link keys 0..3 and their signatures over (story 1, invite 1..3, wallet)
+// come from linkFixtures.ts, made with koilib by scripts/gen-link-fixtures.mjs.
+
+function linkKey(key: i32): Uint8Array {
+  return Base58.decode(LINK_ADDRESSES[key]);
+}
+
+function who(account: Uint8Array): i32 {
+  if (same(account, ALICE)) return 0;
+  if (same(account, BOB)) return 1;
+  if (same(account, CARA)) return 2;
+  return 3;
+}
+
+function invite(key: i32, uses: u32, expires: u64): u64 {
+  authorize(ALICE);
+  const id = new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, linkKey(key), uses, expires)).value;
+  checkpoint();
+  return id;
+}
+
+// `account` joins invite `inviteId` with a signature from link key `key`, made for wallet `forWho`.
+function joinArgs(account: Uint8Array, inviteId: u64, key: i32, forWho: Uint8Array): stories.join_with_invite_arguments {
+  return new stories.join_with_invite_arguments(account, 1, inviteId, inviteSig(key, <i32>inviteId, who(forWho)));
 }
 
 function config(): stories.config {
@@ -781,56 +813,66 @@ describe("Stories: private stories, allow-list and invites", () => {
     expect(story(1).editor_count).toBe(9);
   });
 
-  it("joins with a valid invite code, counting uses, and refuses the rest", () => {
-    authorize(ALICE);
-    const inviteId = new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, "SWARM-2026", 2, START + DAY)).value;
-    checkpoint();
+  it("joins with a valid signed invite link, counting uses, and refuses the rest", () => {
+    const inviteId = invite(0, 2, START + DAY);
     expect(inviteId).toBe(1);
-    // Only a hash of the code is stored.
+    // Only the public address of the link key is stored.
     const inv = new Stories().get_invite(new stories.get_invite_arguments(1, 1));
-    expect(inv.code_hash!.length).toBe(32);
-    fails(() => { authorize(BOB); new Stories().join_with_invite(new stories.join_with_invite_arguments(BOB, 1, 1, "SWARM-2025")); }, "STORIES: invite code rejected");
-    fails(() => { authorize(BOB); new Stories().join_with_invite(new stories.join_with_invite_arguments(BOB, 1, 1, "x")); }, "STORIES: invite code rejected");
-    fails(() => { authorize(MALLORY); new Stories().join_with_invite(new stories.join_with_invite_arguments(BOB, 1, 1, "SWARM-2026")); }, "STORIES: wallet has not authorized this");
+    expect(same(inv.link_signer, linkKey(0))).toBe(true);
+    // Signed by the wrong link key.
+    fails(() => { authorize(BOB); new Stories().join_with_invite(joinArgs(BOB, 1, 1, BOB)); }, "STORIES: invite link rejected");
+    // No signature, or a damaged one.
+    fails(() => { authorize(BOB); new Stories().join_with_invite(new stories.join_with_invite_arguments(BOB, 1, 1, new Uint8Array(0))); }, "STORIES: invite link rejected");
+    // Someone else's signature for Bob, sent by Mallory's own wallet: Bob did not sign the transaction.
+    fails(() => { authorize(MALLORY); new Stories().join_with_invite(joinArgs(BOB, 1, 0, BOB)); }, "STORIES: wallet has not authorized this");
     authorize(BOB);
-    new Stories().join_with_invite(new stories.join_with_invite_arguments(BOB, 1, 1, "SWARM-2026"));
+    new Stories().join_with_invite(joinArgs(BOB, 1, 0, BOB));
     checkpoint();
     expect(new Stories().is_allowed(new stories.is_allowed_arguments(1, BOB)).value).toBe(true);
-    fails(() => { authorize(BOB); new Stories().join_with_invite(new stories.join_with_invite_arguments(BOB, 1, 1, "SWARM-2026")); }, "STORIES: already on the allow-list");
+    fails(() => { authorize(BOB); new Stories().join_with_invite(joinArgs(BOB, 1, 0, BOB)); }, "STORIES: already on the allow-list");
     authorize(CARA);
-    new Stories().join_with_invite(new stories.join_with_invite_arguments(CARA, 1, 1, "SWARM-2026"));
+    new Stories().join_with_invite(joinArgs(CARA, 1, 0, CARA));
     checkpoint();
-    fails(() => { authorize(MALLORY); new Stories().join_with_invite(new stories.join_with_invite_arguments(MALLORY, 1, 1, "SWARM-2026")); }, "STORIES: invite has no uses left");
-    writeAsWriter(BOB, 1, "Invited text");
+    fails(() => { authorize(MALLORY); new Stories().join_with_invite(joinArgs(MALLORY, 1, 0, MALLORY)); }, "STORIES: invite has no uses left");
+    writeAsWriter(BOB, 1, "Invited text, long enough.");
+  });
+
+  it("will not let a copied invite signature work for a different wallet (front-running)", () => {
+    invite(0, 5, START + DAY);
+    // Mallory sees Bob's join in the mempool and copies the signature into her own join.
+    fails(() => { authorize(MALLORY); new Stories().join_with_invite(joinArgs(MALLORY, 1, 0, BOB)); }, "STORIES: invite link rejected");
+    expect(new Stories().is_allowed(new stories.is_allowed_arguments(1, MALLORY)).value).toBe(false);
+    // A signature made for invite 1 does not open invite 2.
+    invite(1, 5, START + DAY);
+    fails(() => { authorize(BOB); new Stories().join_with_invite(new stories.join_with_invite_arguments(BOB, 1, 2, inviteSig(0, 1, 1))); }, "STORIES: invite link rejected");
+    authorize(BOB);
+    new Stories().join_with_invite(joinArgs(BOB, 2, 1, BOB));
+    checkpoint();
+    expect(new Stories().is_allowed(new stories.is_allowed_arguments(1, BOB)).value).toBe(true);
   });
 
   it("refuses expired and revoked invites", () => {
-    authorize(ALICE);
-    new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, "FIRST-CODE", 5, START + DAY));
-    checkpoint();
-    authorize(ALICE);
-    new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, "SECOND-CODE", 5, START + DAY));
-    checkpoint();
+    invite(0, 5, START + DAY);
+    invite(1, 5, START + DAY);
     authorize(ALICE);
     new Stories().revoke_invite(new stories.revoke_invite_arguments(ALICE, 1, 2));
     checkpoint();
-    fails(() => { authorize(BOB); new Stories().join_with_invite(new stories.join_with_invite_arguments(BOB, 1, 2, "SECOND-CODE")); }, "STORIES: invite was revoked");
-    fails(() => { authorize(BOB); new Stories().join_with_invite(new stories.join_with_invite_arguments(BOB, 1, 9, "SECOND-CODE")); }, "STORIES: unknown invite");
+    fails(() => { authorize(BOB); new Stories().join_with_invite(joinArgs(BOB, 2, 1, BOB)); }, "STORIES: invite was revoked");
+    fails(() => { authorize(BOB); new Stories().join_with_invite(new stories.join_with_invite_arguments(BOB, 1, 9, inviteSig(1, 2, 1))); }, "STORIES: unknown invite");
     setTime(START + DAY);
-    fails(() => { authorize(BOB); new Stories().join_with_invite(new stories.join_with_invite_arguments(BOB, 1, 1, "FIRST-CODE")); }, "STORIES: invite has expired");
+    fails(() => { authorize(BOB); new Stories().join_with_invite(joinArgs(BOB, 1, 0, BOB)); }, "STORIES: invite has expired");
     fails(() => { authorize(MALLORY); new Stories().revoke_invite(new stories.revoke_invite_arguments(MALLORY, 1, 1)); }, "STORIES: only the opener may do this");
   });
 
   it("checks invite settings", () => {
-    const codeMsg = "STORIES: invite code must be 8 to 64 plain characters";
-    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, "SHORT", 5, START + DAY)); }, codeMsg);
-    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, "has a space", 5, START + DAY)); }, codeMsg);
-    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, "c".repeat(65), 5, START + DAY)); }, codeMsg);
-    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, "GOOD-CODE", 0, START + DAY)); }, "STORIES: invite uses must be 1 to 1000");
-    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, "GOOD-CODE", 1001, START + DAY)); }, "STORIES: invite uses must be 1 to 1000");
-    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, "GOOD-CODE", 5, START)); }, "STORIES: invite expiry must be in the future");
-    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, "GOOD-CODE", 5, START + 366 * DAY)); }, "STORIES: invite expiry can be at most 365 days away");
-    fails(() => { authorize(BOB); new Stories().create_invite(new stories.create_invite_arguments(BOB, 1, "GOOD-CODE", 5, START + DAY)); }, "STORIES: only the opener may do this");
+    const keyMsg = "STORIES: invite needs a link key address";
+    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, new Uint8Array(0), 5, START + DAY)); }, keyMsg);
+    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, new Uint8Array(24), 5, START + DAY)); }, keyMsg);
+    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, linkKey(0), 0, START + DAY)); }, "STORIES: invite uses must be 1 to 1000");
+    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, linkKey(0), 1001, START + DAY)); }, "STORIES: invite uses must be 1 to 1000");
+    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, linkKey(0), 5, START)); }, "STORIES: invite expiry must be in the future");
+    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, linkKey(0), 5, START + 366 * DAY)); }, "STORIES: invite expiry can be at most 365 days away");
+    fails(() => { authorize(BOB); new Stories().create_invite(new stories.create_invite_arguments(BOB, 1, linkKey(0), 5, START + DAY)); }, "STORIES: only the opener may do this");
   });
 });
 
@@ -1117,7 +1159,7 @@ describe("Stories: the final edit", () => {
     batch(ALICE, 1, [keep(1), keep(2), keep(4), keep(5), keep(6), keep(7)]);
     finalizeAs(ALICE, 1);
     fails(() => { authorize(ALICE); new Stories().update_story(new stories.update_story_arguments(ALICE, 1, "New", 1, 0, PUBLIC, 0)); }, "STORIES: a finalized story cannot be changed");
-    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, "LATE-CODE", 5, START + DAY)); }, "STORIES: story is not accepting new writers");
+    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, linkKey(0), 5, START + DAY)); }, "STORIES: story is not accepting new writers");
     fails(() => { authorize(ALICE); new Stories().set_editor(new stories.set_editor_arguments(ALICE, 1, CARA, true)); }, "STORIES: a finalized story cannot be changed");
     fails(() => { authorize(ALICE); new Stories().finalize(new stories.finalize_arguments(ALICE, 1, "ipfs://x", pdfHash())); }, "STORIES: story is not in the final edit");
     fails(() => { authorize(ALICE); new Stories().request_admin_finalize(new stories.request_admin_finalize_arguments(ALICE, 1, true)); }, "STORIES: story is not active");
@@ -1188,7 +1230,7 @@ describe("Stories: archive and revive", () => {
     expect(new Stories().get_open_count(new stories.get_open_count_arguments(ALICE)).value).toBe(0);
     fWho = ALICE; fId = 1; fText = "x"; fExpected = 1; fResults = [okCall()];
     fails(failContribute, "STORIES: story is not open for writing");
-    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, "LATE-CODE", 5, START + 61 * DAY)); }, "STORIES: story is not accepting new writers");
+    fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, linkKey(0), 5, START + 61 * DAY)); }, "STORIES: story is not accepting new writers");
     fails(() => { authorize(BOB); new Stories().revive(new stories.revive_arguments(BOB, 1)); }, "STORIES: only the opener may do this");
     authorize(ALICE);
     new Stories().revive(new stories.revive_arguments(ALICE, 1));

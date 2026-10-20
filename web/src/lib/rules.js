@@ -186,9 +186,8 @@ export function assessWriterBuy(input) {
 export function assessPromo(input) {
   const problems = [];
   const id = String(input.campaignId ?? "").trim();
-  if (!/^[1-9][0-9]*$/.test(id)) problems.push("Campaign id must be a whole number, usually 1.");
-  const code = String(input.code ?? "");
-  if (code.length < 1 || code.length > 64) problems.push("The promo code must be 1 to 64 characters.");
+  if (!/^[1-9][0-9]*$/.test(id)) problems.push("This promo link is missing a campaign.");
+  if (!input.hasLinkKey) problems.push("This promo link is missing its key. Open the full link you were given.");
   if (input.alreadyClaimed) problems.push("This wallet has already claimed a promo. A wallet can claim once, ever.");
   if (input.paused) problems.push("The Shop is paused.");
   if (input.promoEnabled === false) problems.push("Promo claims are turned off.");
