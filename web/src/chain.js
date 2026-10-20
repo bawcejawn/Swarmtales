@@ -111,6 +111,8 @@ export async function loadAccount(address) {
   ]);
   // Older Stories contracts have no account status: treat as not blocked.
   const status = await read("stories", "get_account_status", { account: address }).catch(() => null);
+  // Older Stories contracts have no doubling price: treat as normal price.
+  const mult = await read("stories", "get_open_multiplier", { account: address }).catch(() => null);
   return {
     blocked: !!(status && status.blocked),
     strikes: status && status.strikes ? Number(status.strikes) : 0,
@@ -120,6 +122,7 @@ export async function loadAccount(address) {
     membership: membership || {},
     promo: promo && promo.value ? promo.value : "0",
     openCount: openCount && openCount.value ? Number(openCount.value) : 0,
+    openMultiplier: mult && mult.value ? Number(mult.value) : 1,
     trial: trial && trial.value ? trial.value : "0",
     now,
   };

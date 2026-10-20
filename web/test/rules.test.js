@@ -29,8 +29,12 @@ test("writing is refused for cost, space, membership, and privacy", () => {
   assert.match(assessWrite({ ...openStory, usedChars: "9998", text: "abcd" }).problems.join(" "), /left/);
   assert.match(assessWrite({ ...openStory, balance: "2" }).problems.join(" "), /balance/);
   assert.match(assessWrite({ ...openStory, writerActive: false, promoClaimed: false }).problems.join(" "), /Writer/);
-  assert.match(assessWrite({ ...openStory, visibility: 3, writerActive: true }).problems.join(" "), /private/);
-  assert.equal(assessWrite({ ...openStory, visibility: 3, privileged: true }).ok, true);
+  assert.match(assessWrite({ ...openStory, visibility: 3, writerActive: true }).problems.join(" "), /invites/);
+  assert.match(assessWrite({ ...openStory, visibility: 2, writerActive: true }).problems.join(" "), /invites/);
+  // Opener: no Writer month needed. Editor: needs one (no trial here).
+  assert.equal(assessWrite({ ...openStory, visibility: 3, privileged: true, isOpener: true }).ok, true);
+  assert.match(assessWrite({ ...openStory, visibility: 3, privileged: true, writerActive: false, promoClaimed: true }).problems.join(" "), /Writer month/);
+  assert.equal(assessWrite({ ...openStory, visibility: 3, allowed: true, writerActive: true }).ok, true);
   assert.equal(assessWrite({ ...openStory, status: 4 }).ok, false);
 });
 
@@ -135,4 +139,38 @@ test("books use the book length range", () => {
 test("writing and opening need the rights confirmation, and a blocked wallet is told why", () => {
   assert.match(assessWrite({ ...openStory, rightsConfirmed: false }).problems.join(" "), /I wrote this myself/);
   assert.match(assessWrite({ ...openStory, blocked: true }).problems.join(" "), /can no longer write/);
+});
+
+test("the writers' pool pays for parts in invite-only stories", () => {
+  const base = {
+    text: "Twenty characters ok", cap: "10000", maxChars: "99999", usedChars: "100", status: 1,
+    rightsConfirmed: true, allowed: true, writerActive: true, visibility: 3, balance: "0",
+  };
+  const paid = assessWrite({ ...base, fund: "500" });
+  assert.equal(paid.ok, true);
+  assert.equal(paid.fundPays, true);
+  const low = assessWrite({ ...base, fund: "5" });
+  assert.equal(low.ok, false);
+  assert.match(low.problems.join(" "), /writers' pool has 5 Ink left/);
+  assert.equal(assessWrite({ ...base, fund: "5", balance: "20" }).ok, true);
+});
+
+test("opening an invite-only story needs a writers' pool and enough Ink", () => {
+  const base = {
+    title: "T", openingText: "An opening part that is long enough.", kind: 2, category1: 1, visibility: 3,
+    freeChapters: 1, editionMin: "0", cap: "10000", inkBalance: "0", starter: "1000", price: "100", tokenBalance: "1000",
+    rightsConfirmed: true,
+  };
+  assert.match(assessOpen({ ...base, fund: "9999" }).problems.join(" "), /at least 10,000 Ink/);
+  const short = assessOpen({ ...base, fund: "10000" });
+  assert.match(short.problems.join(" "), /You need 10036 Ink/);
+  const ok = assessOpen({ ...base, fund: "10000", inkBalance: "9100" });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.fund, "10000");
+  assert.equal(ok.maxChars, "0");
+  // Public stories have no pool; the price follows the multiplier.
+  const pub = assessOpen({ ...base, visibility: 1, fund: "10000", multiplier: 4 });
+  assert.equal(pub.fund, "0");
+  assert.equal(pub.price, "400");
+  assert.equal(pub.ok, true);
 });

@@ -24,7 +24,7 @@ import {
 import { explainFailure } from "./lib/errors.js";
 import { KIND, STORY_STATUS, TIER, VISIBILITY, label } from "./lib/labels.js";
 import { VAULT_MANA_CEILING, formatMana, formatUnits, formatUtc, kondorManaNote, shortAddress } from "./lib/money.js";
-import { assessOpen, assessPromo, assessWrite, assessWriterBuy, isActiveWriter } from "./lib/rules.js";
+import { KIND_BOOK, assessOpen, assessPromo, assessWrite, assessWriterBuy, isActiveWriter } from "./lib/rules.js";
 import { MAX_CHARS_PER_SIGNATURE, MAX_PARTS_PER_SIGNATURE, checkStoryText, inkCost, normalizePasted, splitIntoParts } from "./lib/text.js";
 import {
   kondorHint,
@@ -149,16 +149,47 @@ function storyCategories(story) {
   return [categoryName(story.category_1), categoryName(story.category_2)].filter(Boolean);
 }
 
-function percent(story) {
+// Stories opened with no fixed size get their kind's maximum. They can be
+// finished once they reach their kind's minimum.
+function kindMin(story) {
+  return Number(story.kind) === KIND_BOOK ? 100000 : 10000;
+}
+
+function openEnded(story) {
   const max = Number(story.max_chars || 0);
+  return max === (Number(story.kind) === KIND_BOOK ? 1000000 : 99999);
+}
+
+function inviteOnly(story) {
+  const v = Number(story.visibility || 0);
+  return v === 2 || v === 3;
+}
+
+function percent(story) {
   const used = Number(story.used_chars || 0);
+  // Open-ended stories show progress towards the length where they can be finished.
+  const max = openEnded(story) ? kindMin(story) : Number(story.max_chars || 0);
   if (!max) return 0;
   return Math.max(0, Math.min(100, Math.round((used / max) * 100)));
+}
+
+function sizeText(story) {
+  const used = Number(story.used_chars || 0);
+  if (!openEnded(story)) return num(story.used_chars) + " of " + num(story.max_chars) + " characters";
+  if (Number(story.status) !== 1) return num(used) + " characters";
+  return used >= kindMin(story)
+    ? num(used) + " characters · long enough to finish"
+    : num(used) + " characters · " + num(kindMin(story) - used) + " more until it can be finished";
 }
 
 function statusPill(story) {
   const status = Number(story.status || 0);
   if (status === 1) {
+    if (openEnded(story)) {
+      return Number(story.used_chars || 0) >= kindMin(story)
+        ? h("span", { class: "pill pill-almost" }, ["Open · can be finished"])
+        : h("span", { class: "pill pill-open" }, ["Open to writers"]);
+    }
     return percent(story) >= 85
       ? h("span", { class: "pill pill-almost" }, ["Almost full"])
       : h("span", { class: "pill pill-open" }, ["Open to writers"]);
@@ -187,7 +218,7 @@ function progressBar(story, labelText) {
 }
 
 function charsLine(story) {
-  return [h("span", {}, [num(story.used_chars) + " of " + num(story.max_chars) + " characters"]), h("span", {}, [plural(story.contributor_count, "writer")])];
+  return [h("span", {}, [sizeText(story)]), h("span", {}, [plural(story.contributor_count, "writer")])];
 }
 
 const AVATAR_TINTS = [
@@ -765,7 +796,9 @@ function renderReader(page, id) {
       storyId: id,
       story,
       canEdit: storyOpen && !!me && (story.opener === me || flags.editor),
-      canAdd: storyOpen,
+      // Unlisted and private stories: only the opener, editors and invited writers.
+      canAdd: storyOpen && (!inviteOnly(story) || (!!me && (story.opener === me || flags.editor || flags.allowed))),
+      flags,
       lastSeq: active.length ? active[active.length - 1].seq : 0,
       active,
     };
@@ -810,7 +843,7 @@ function renderReader(page, id) {
         ]),
       ]),
       h("div", { class: "head-side" }, [
-        progressBar(story, [h("span", {}, [num(story.used_chars) + " of " + num(story.max_chars) + " characters"]), h("span", {}, [percent(story) + "%"])]),
+        progressBar(story, [h("span", {}, [sizeText(story)]), h("span", {}, [percent(story) + "%"])]),
         isOpen ? h("button", { type: "button", class: "btn btn-primary btn-block", onClick: goWrite }, ["Write the next part"]) : null,
       ]),
     ]);
@@ -852,7 +885,7 @@ function renderReader(page, id) {
       article,
       composeAnchor
     );
-    append(composeAnchor, composer(id, story, active));
+    append(composeAnchor, composer(id, story, active, 0, flags));
 
     const aside = h("aside", { class: "reader-aside", "aria-label": "About this story" }, [
       sharePanel(id, story, me, flags),
@@ -925,9 +958,12 @@ function segmentView(block, story, storyId, ctx) {
   } else {
     body = h("p", { class: "seg-text" }, [segment.text || ""]);
     if (edited) {
-      notes.push(h("span", { class: "edit-note" }, [
-        "Edited by " + shortAddress(segment.last_edited_by) + (formatUtc(segment.last_edited_at) ? " on " + formatUtc(segment.last_edited_at).split(",")[0] : "") +
-          ". Credit stays with " + shortAddress(author) + "; the first version is kept on the public record.",
+      notes.push(h("details", { class: "edit-note" }, [
+        h("summary", { title: "Show who edited this part" }, ["edited"]),
+        h("span", {}, [
+          " by " + shortAddress(segment.last_edited_by) + (formatUtc(segment.last_edited_at) ? " on " + formatUtc(segment.last_edited_at).split(",")[0] : "") +
+            ". Credit stays with " + shortAddress(author) + "; the first version is kept on the public record.",
+        ]),
       ]));
     }
     if (segment.ai_assisted) notes.push(h("span", { class: "tag-ai" }, ["Written with AI help"]));
@@ -949,7 +985,7 @@ function segmentView(block, story, storyId, ctx) {
     if (ctx.canAdd && block.seq !== ctx.lastSeq) {
       append(tools, h("button", { type: "button", class: "text-button tool" }, ["+ Add text here"]));
       tools.lastChild.title = "Write new text that appears right below this part";
-      tools.lastChild.addEventListener("click", () => toggle("add", () => composer(storyId, story, ctx.active, block.seq)));
+      tools.lastChild.addEventListener("click", () => toggle("add", () => composer(storyId, story, ctx.active, block.seq, ctx.flags)));
     }
     if (ctx.canEdit && !segment.hidden) {
       append(tools, h("button", { type: "button", class: "text-button tool", title: "Fix typos or tidy this part (opener and editors)" }, ["Edit"]));
@@ -1142,7 +1178,7 @@ function termsVersion() {
 }
 
 let composerCount = 0;
-function composer(id, story, active, insertAfter) {
+function composer(id, story, active, insertAfter, flags) {
   const after = Number(insertAfter || 0);
   composerCount += 1;
   const uid = "compose-" + composerCount;
@@ -1155,7 +1191,9 @@ function composer(id, story, active, insertAfter) {
   const status = Number(story.status);
   if (status !== 1) {
     append(box, h("p", { class: "body-2" }, [
-      status === 4 ? "This story is finished. Thank you to everyone who wrote it." : "This story is full and no longer takes new parts. It is moving through its final edit.",
+      status === 4 ? "This story is finished. Thank you to everyone who wrote it."
+        : status === 5 ? "This story was archived after a long quiet spell. It can still be read."
+        : "This story is closed for new parts. It is moving through its final edit.",
     ]));
     return box;
   }
@@ -1176,6 +1214,22 @@ function composer(id, story, active, insertAfter) {
   }
   if (!state.overview || !state.account) {
     append(box, state.accountError ? notice("bad", h("p", {}, [state.accountError])) : loadingLine("Reading your Ink…"));
+    return box;
+  }
+  const invited = story.opener === address || !!(flags && (flags.editor || flags.allowed));
+  if (inviteOnly(story) && !invited) {
+    append(box, h("p", { class: "body-2" }, [
+      "Only people the opener invites can write in this story. If you'd like to join, ask the opener for an invite link. Anyone can read it.",
+    ]));
+    return box;
+  }
+  if (inviteOnly(story) && story.opener !== address && !isActiveWriter(state.account.membership, state.account.now)) {
+    append(box,
+      h("p", { class: "body-2" }, [
+        "You're invited. To write here you need an active Writer month. The opener can pay for it from the Share & invite panel, or you can buy one yourself. Your parts are paid from the writers' pool while it lasts.",
+      ]),
+      h("div", { class: "actions" }, [h("a", { class: "btn btn-secondary", href: "#/membership" }, ["See Writer months"])])
+    );
     return box;
   }
   if (state.account.blocked) {
@@ -1231,8 +1285,10 @@ function composer(id, story, active, insertAfter) {
     field("Your part", area),
     h("div", { class: "counter", id: uid + "-count" }, [
       costText,
-      h("span", {}, ["You have " + num(state.account.ink) + " Ink"]),
-      h("span", {}, [num(space) + " characters left in this story"]),
+      inviteOnly(story)
+        ? h("span", {}, ["Paid from the writers' pool (" + num(story.fund || 0) + " Ink left) while it has enough; then from your own " + num(state.account.ink) + " Ink"])
+        : h("span", {}, ["You have " + num(state.account.ink) + " Ink"]),
+      openEnded(story) ? null : h("span", {}, [num(space) + " characters left in this story"]),
       h("span", { "aria-live": "polite" }, [shortText]),
       h("span", { "aria-live": "polite" }, [splitNote]),
     ]),
@@ -1266,6 +1322,7 @@ function composer(id, story, active, insertAfter) {
       // Check each part in order, as the contract will.
       let used = BigInt(story.used_chars || "0");
       let balance = BigInt(state.account.ink || "0");
+      let pool = BigInt(story.fund || "0");
       let trialUsed = BigInt(state.account.trial || "0");
       const plans = [];
       for (const part of parts.length ? parts : [""]) {
@@ -1278,7 +1335,9 @@ function composer(id, story, active, insertAfter) {
           status: story.status,
           visibility: story.visibility,
           privileged: story.opener === address || flags.editor,
+          isOpener: story.opener === address,
           allowed: flags.allowed,
+          fund: pool.toString(),
           writerActive: isActiveWriter(state.account.membership, state.account.now),
           promoClaimed: state.account.promo !== "0",
           trialUsed: trialUsed.toString(),
@@ -1298,7 +1357,8 @@ function composer(id, story, active, insertAfter) {
         plans.push(plan);
         const cost = BigInt(plan.cost);
         used += cost;
-        balance -= cost;
+        if (plan.fundPays) pool -= cost;
+        else balance -= cost;
         if (plan.usesTrial) trialUsed += cost;
       }
       status2.textContent = "Checking the Ink count with the story contract…";
@@ -1409,12 +1469,23 @@ function renderOpen(page) {
     append(body, loadingLine(state.chainError ? "Prices will appear when the network answers." : "Reading prices…"));
     return;
   }
+  const multiplier = state.account && state.account.openMultiplier ? state.account.openMultiplier : 1;
+  const basePrice = BigInt(state.overview[kindInfo.priceKey] || "0");
+  const fullPrice = Number(state.overview.storiesCfg.full_price_projects || 3);
+  const ceiling = Number(state.overview.storiesCfg.max_price_multiplier || 4);
   const facts = h("div", { class: "card" }, [
     h("h2", { class: "h3" }, ["What opening includes"]),
     h("dl", { class: "facts" }, [
-      h("div", {}, [h("dt", {}, ["Price"]), h("dd", {}, [tokenAmount(state.overview[kindInfo.priceKey])])]),
+      h("div", {}, [h("dt", {}, ["Price"]), h("dd", {}, [
+        tokenAmount((basePrice * BigInt(multiplier)).toString()),
+        multiplier > 1 ? h("span", { class: "meta" }, [" (" + multiplier + "× the normal " + tokenAmount(basePrice.toString()) + ")"]) : null,
+      ])]),
       h("div", {}, [h("dt", {}, ["Starter Ink"]), h("dd", {}, [num(state.overview.shopCfg[kindInfo.starterKey]) + " Ink"])]),
-      h("div", {}, [h("dt", {}, ["Length"]), h("dd", {}, [num(kindInfo.min) + " to " + num(kindInfo.max) + " characters"])]),
+      h("div", {}, [h("dt", {}, ["Length"]), h("dd", {}, ["No fixed length. It can be finished once it reaches " + num(kindInfo.min) + " characters, and it can grow to " + num(kindInfo.max) + "."])]),
+    ]),
+    h("p", { class: "body-2 small" }, [
+      "Your first " + fullPrice + " open projects cost the normal price. Each one after that doubles it, up to " + ceiling +
+        "× the normal price. Finishing or archiving a story frees its slot.",
     ]),
     h("p", { class: "body-2 small" }, [
       "One confirmation in your wallet does two things: it lets the Shop take exactly the price above, then opens the story. The starter Ink pays for your first part.",
@@ -1436,14 +1507,13 @@ function renderOpen(page) {
     return;
   }
   const title = h("input", { type: "text", maxlength: "100", required: true, autocomplete: "off" });
-  const length = h("input", { type: "number", min: String(kindInfo.min), max: String(kindInfo.max), value: String(kindInfo.min), inputmode: "numeric" });
   const categories = state.overview.categories.filter((item) => item.active);
   const cat1 = h("select", {}, [h("option", { value: "" }, ["Choose one"]), ...categories.map((item) => h("option", { value: String(item.id) }, [item.name]))]);
   const cat2 = h("select", {}, [h("option", { value: "0" }, ["None"]), ...categories.map((item) => h("option", { value: String(item.id) }, [item.name]))]);
   const visibility = h("select", {}, [
     h("option", { value: "1" }, ["Public: listed, anyone can write"]),
-    h("option", { value: "2" }, ["Unlisted: only people with the link find it"]),
-    h("option", { value: "3" }, ["Private: only people you invite can write"]),
+    h("option", { value: "2" }, ["Unlisted: not listed, invited writers only"]),
+    h("option", { value: "3" }, ["Private: not listed, invited writers only"]),
   ]);
   const free = h("select", {}, [
     h("option", { value: "0" }, ["None: members only"]),
@@ -1454,6 +1524,14 @@ function renderOpen(page) {
     h("option", { value: "5" }, ["The first 5 chapters"]),
   ]);
   const edition = h("input", { type: "number", min: "0", value: "1000", step: "100", inputmode: "numeric" });
+  const pool = h("input", { type: "number", min: String(kindInfo.min), value: String(kindInfo.min), step: "1000", inputmode: "numeric" });
+  const poolNote = h("p", { class: "meta" });
+  const poolField = field("Writers' pool (Ink)", pool,
+    "Unlisted and private stories are invite-only. You set Ink aside for the writers you invite: their parts are paid from this pool, " +
+      "so they don't spend their own Ink while it lasts. At least " + num(kindInfo.min) + " Ink, enough for the story to reach the length where it can be finished. " +
+      "You can add more later, and whatever is left comes back to you when the story is finished or archived. " +
+      "Invited writers also need an active Writer month; you can give them one from the story's Share & invite panel.");
+  const poolBox = h("div", { hidden: true }, [poolField, poolNote]);
   const opening = h("textarea", { rows: "8", spellcheck: "true" });
   const costLine = h("p", { class: "counter" }, ["0 Ink"]);
   const openRights = rightsBox();
@@ -1464,10 +1542,25 @@ function renderOpen(page) {
       opening.dispatchEvent(new Event("input"));
     }
   }, 0));
+  const refreshPool = () => {
+    const invite = visibility.value !== "1";
+    poolBox.hidden = !invite;
+    const first = opening.value && checkStoryText(opening.value, true).ok ? inkCost(opening.value) : 0;
+    const fund = invite ? Number(pool.value || 0) : 0;
+    const have = Number(state.account.ink || 0) + Number(state.overview.shopCfg[kindInfo.starterKey] || 0);
+    poolNote.textContent = invite
+      ? "Ink needed: " + num(first) + " for the first part + " + num(fund) + " for the pool = " + num(first + fund) +
+        ". You have " + num(state.account.ink) + ", plus " + num(state.overview.shopCfg[kindInfo.starterKey]) + " starter Ink with this open" +
+        (first + fund > have ? ". Buy an Ink pack on the Membership page first." : ".")
+      : "";
+  };
   opening.addEventListener("input", () => {
     const check = checkStoryText(opening.value, true);
     costLine.textContent = !opening.value ? "0 Ink" : check.ok ? num(inkCost(opening.value)) + " Ink, paid from your starter Ink" : check.reason;
+    refreshPool();
   });
+  visibility.addEventListener("change", refreshPool);
+  pool.addEventListener("input", refreshPool);
   const aiBox = aiToggle();
   const ai = aiBox.input;
   const list = h("div");
@@ -1480,8 +1573,8 @@ function renderOpen(page) {
       field("Category", cat1),
       field("Second category", cat2, "Optional"),
       field("Who can write", visibility),
-      field("Length", length, "In characters, " + num(kindInfo.min) + " to " + num(kindInfo.max)),
     ]),
+    poolBox,
     field("The first part", opening, "At least " + (Number(minContribution()) || 1) + " characters. Readers see this first."),
     costLine,
     aiBox.node,
@@ -1509,7 +1602,9 @@ function renderOpen(page) {
       const plan = assessOpen({
         title: title.value,
         openingText: opening.value,
-        maxChars: length.value,
+        maxChars: "0",
+        fund: pool.value,
+        multiplier,
         category1: cat1.value,
         category2: cat2.value,
         visibility: visibility.value,
@@ -1543,7 +1638,7 @@ function renderOpen(page) {
         opener: address,
         kind: kindInfo.kind,
         title: title.value,
-        max_chars: String(length.value),
+        max_chars: "0",
         category_1: Number(cat1.value),
         category_2: Number(cat2.value || 0),
         visibility: Number(visibility.value),
@@ -1555,6 +1650,7 @@ function renderOpen(page) {
         token: contracts.paymentToken,
         rights_confirmed: true,
         terms_version: termsVersion(),
+        fund: plan.fund,
       });
       const sent = await send([approve, open], status);
       if (sent) {
@@ -1592,7 +1688,7 @@ function renderMembership(page) {
   append(container, 
     h("p", { class: "eyebrow" }, ["Membership"]),
     h("h1", { class: "title" }, ["Ink for writing"]),
-    h("p", { class: "lede" }, ["Reading is always free. To write, you need Ink: from a promo link, an invite to a private story, or a Writer membership."])
+    h("p", { class: "lede" }, ["Reading is always free. To write, you need Ink: from a promo link, a Writer membership, or an invited story whose opener pays from a writers' pool."])
   );
   const grid = h("div", { class: "card-grid" });
   grid.style.marginTop = "40px";
@@ -1746,7 +1842,7 @@ function renderMembership(page) {
     h("h2", { class: "h3", id: "free-title" }, ["Free ways to start"]),
     h("ul", { class: "how-list" }, [
       h("li", {}, [h("b", {}, ["Promo links."]), " SwarmTales sometimes shares a link on Discord, Telegram or X. Open it and claim free Ink. One claim per wallet, ever."]),
-      h("li", {}, [h("b", {}, ["Invites."]), " A story's opener can invite you to a private story. Joining is free."]),
+      h("li", {}, [h("b", {}, ["Invites."]), " A story's opener can invite you to an unlisted or private story. Joining is free, and the opener's writers' pool pays for your parts while it lasts. You need a Writer month there, which the opener can pay for."]),
       h("li", {}, [h("b", {}, ["Open your own."]), " Opening a story comes with starter Ink for your first part."]),
     ]),
     h("p", {}, [h("a", { class: "link-arrow", href: "#/how" }, ["How Ink works", icons.arrow()])]),
@@ -1898,7 +1994,7 @@ function renderJoin(page, storyId, inviteId) {
     replace(card, 
       h("p", { class: "eyebrow" }, ["You're invited to write in"]),
       h("h1", { class: "title" }, [story.title || "Untitled"]),
-      h("p", { class: "lede" }, [shortAddress(story.opener) + " invited you to this " + (Number(story.visibility) === 3 ? "private " : "") + "story. Only invited writers can add to it."]),
+      h("p", { class: "lede" }, [shortAddress(story.opener) + " invited you to this " + (Number(story.visibility) === 3 ? "private " : "unlisted ") + "story. Only invited writers can add to it."]),
       opening ? h("blockquote", { class: "excerpt" }, ["“" + clip(opening, 220) + "”"]) : null,
       landingSteps("Join with one confirmation", "Your wallet asks you to approve. Joining is free.")
     );
@@ -1907,7 +2003,7 @@ function renderJoin(page, storyId, inviteId) {
       append(facts, 
         h("div", {}, [h("dt", {}, ["Invites left"]), h("dd", {}, [num(left) + " of " + num(invite.max_uses)])]),
         h("div", {}, [h("dt", {}, ["Link expires"]), h("dd", {}, [formatUtc(invite.expires_at) || "Never"])]),
-        h("div", {}, [h("dt", {}, ["Writing needs"]), h("dd", {}, ["Ink, 1 per letter"])])
+        h("div", {}, [h("dt", {}, ["Writing needs"]), h("dd", {}, ["An active Writer month (the opener may pay for it). Your parts are paid from the opener's writers' pool (" + num(story.fund || 0) + " Ink left) while it lasts."])])
       );
       if (invite.revoked) append(card, notice("warn", h("p", {}, ["The opener has switched this invite off. Ask them for a new link."])));
     }
@@ -2051,8 +2147,8 @@ function siteBase() {
 
 const VISIBILITY_HELP = {
   1: "Public: listed in Discover. Anyone with Ink and a Writer month (or a promo trial) can write.",
-  2: "Unlisted: not in Discover. Anyone who has the link can read it and, with Ink, write in it.",
-  3: "Private: anyone can read it if they find it, but only you, your editors and people you invite can write.",
+  2: "Unlisted: not in Discover. Anyone with the link can read it. Only you, your editors and people you invite can write, paid from the writers' pool while it lasts. Invited writers need a Writer month.",
+  3: "Private: not in Discover. Only you, your editors and people you invite can write, paid from the writers' pool while it lasts. Invited writers need a Writer month. The words are still public on the blockchain.",
 };
 
 /** Share & invite: shown to the opener (and, partly, to editors). */
@@ -2072,7 +2168,9 @@ function sharePanel(id, story, me, flags) {
   }
   if (!(isOpener || isEditor) || Number(story.status) >= 4) return panel;
 
-  if (vis === 3 && isOpener) {
+  if (vis !== 1 && isOpener) append(panel, poolSection(id, story, me), giftSection(me));
+
+  if (vis !== 1 && isOpener) {
     const uses = h("input", { type: "number", min: "1", max: "1000", value: "5", inputmode: "numeric" });
     const days = h("input", { type: "number", min: "1", max: "365", value: "14", inputmode: "numeric" });
     const out = h("div");
@@ -2113,7 +2211,7 @@ function sharePanel(id, story, me, flags) {
       }
     } }, [
       h("h3", { class: "h3" }, ["Invite writers"]),
-      h("p", { class: "meta small" }, ["Each person who opens the link joins with one confirmation. They still use their own Ink to write."]),
+      h("p", { class: "meta small" }, ["Each person who opens the link joins with one confirmation. Their parts are paid from the writers' pool while it has enough Ink; after that they use their own."]),
       h("div", { class: "form-grid" }, [field("People", uses), field("Days it works", days)]),
       h("div", { class: "actions" }, [make]),
       status,
@@ -2136,7 +2234,9 @@ function sharePanel(id, story, me, flags) {
     };
     append(panel, h("div", { class: "editor-form" }, [
       h("h3", { class: "h3" }, ["Editors"]),
-      h("p", { class: "meta small" }, ["Editors can fix and remove parts like you can, and write without a Writer month. They still use their own Ink. Up to 10."]),
+      h("p", { class: "meta small" }, [vis === 1
+        ? "Editors can fix and remove parts like you can, and write without a Writer month. They use their own Ink. Up to 10."
+        : "Editors can fix and remove parts like you can. In this story they write like invited writers: from the pool, with a Writer month. Up to 10."]),
       field("Editor's wallet", who),
       h("div", { class: "row" }, [
         h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: act(true) }, ["Add editor"]),
@@ -2146,6 +2246,90 @@ function sharePanel(id, story, me, flags) {
     ]));
   }
   return panel;
+}
+
+/** The opener's writers' pool: balance and top-up. */
+function poolSection(id, story, me) {
+  const amount = h("input", { type: "number", min: "1", value: "5000", step: "1000", inputmode: "numeric" });
+  const status = statusBox();
+  const add = h("button", { type: "submit", class: "btn btn-secondary btn-small" }, ["Add to the pool"]);
+  const open = Number(story.status) === 1;
+  return h("form", { class: "pool-form", onSubmit: async (event) => {
+    event.preventDefault();
+    add.disabled = true;
+    try {
+      const n = amount.value.trim();
+      if (!/^[1-9][0-9]*$/.test(n)) throw new Error("Enter a whole number of Ink, 1 or more.");
+      if (BigInt(n) > BigInt(state.account && state.account.ink ? state.account.ink : "0")) {
+        throw new Error("You have " + num(state.account ? state.account.ink : 0) + " Ink. Buy an Ink pack on the Membership page first.");
+      }
+      const op = await encode("stories", "top_up_fund", { opener: me, story_id: String(id), amount: n });
+      if (await send([op], status)) {
+        await refreshAccount();
+        renderPage();
+      }
+    } catch (error) {
+      failure(status, error);
+    } finally {
+      add.disabled = false;
+    }
+  } }, [
+    h("h3", { class: "h3" }, ["Writers' pool"]),
+    h("p", { class: "body-2" }, [h("b", {}, [num(story.fund || 0) + " Ink left"]), " of " + num(story.fund_added || 0) + " you've put in."]),
+    h("p", { class: "meta small" }, [
+      "Parts in this story are paid from the pool while it has enough Ink for them; after that, writers pay with their own Ink. " +
+        "When a part is shortened or removed, its Ink goes back to the pool. Whatever is left returns to you when the story is finished or archived.",
+    ]),
+    open ? h("div", { class: "form-grid" }, [field("Ink to add", amount, "You have " + num(state.account ? state.account.ink : 0) + " Ink")]) : null,
+    open ? h("div", { class: "actions" }, [add, h("a", { href: "#/membership", class: "meta" }, ["Buy an Ink pack"])]) : null,
+    status,
+  ]);
+}
+
+/** Pay for someone else's Writer month (their membership and Ink go to them). */
+function giftSection(me) {
+  const who = h("input", { type: "text", placeholder: "Writer's wallet address (starts with 1)", autocomplete: "off", spellcheck: "false" });
+  const status = statusBox();
+  const give = h("button", { type: "submit", class: "btn btn-secondary btn-small" }, ["Pay for their Writer month"]);
+  const price = state.overview ? state.overview.writerPrice : "0";
+  return h("form", { class: "gift-form", onSubmit: async (event) => {
+    event.preventDefault();
+    give.disabled = true;
+    try {
+      const account = who.value.trim();
+      if (!/^1[1-9A-HJ-NP-Za-km-z]{25,34}$/.test(account)) throw new Error("That doesn't look like a wallet address.");
+      const plan = assessWriterBuy({ price, balance: state.account ? state.account.token : "0", paused: state.overview && state.overview.shopCfg.paused });
+      if (!plan.ok) {
+        replace(status, problemsNotice(plan.problems));
+        return;
+      }
+      const theirs = await read("shop", "get_membership", { account });
+      const active = isActiveWriter(theirs || {}, state.account ? state.account.now : 0);
+      status.textContent = active
+        ? "They already have a Writer month until " + (formatUtc(theirs.paid_until) || "later") + ". This adds one more month."
+        : "";
+      const approve = await encode("token", "approve", { owner: me, spender: contracts.shop, value: plan.price });
+      const buy = await encode("shop", "buy_membership", { payer: me, tier: 2, months: 1, token: contracts.paymentToken, beneficiary: account });
+      if (await send([approve, buy], status)) {
+        who.value = "";
+        append(status, notice("ok", h("p", {}, ["Done. " + shortAddress(account) + " has a Writer month, and its Ink went to them."])));
+        await refreshAccount();
+      }
+    } catch (error) {
+      failure(status, error);
+    } finally {
+      give.disabled = false;
+    }
+  } }, [
+    h("h3", { class: "h3" }, ["Give a Writer month"]),
+    h("p", { class: "meta small" }, [
+      "Invited writers need an active Writer month to write here. You can pay for theirs: " + tokenAmount(price) +
+        " from your wallet. The month and its Ink go to them. This is optional; they can also buy their own.",
+    ]),
+    field("Writer's wallet", who),
+    h("div", { class: "actions" }, [give]),
+    status,
+  ]);
 }
 
 /** A short guide shown above the writing box. */
@@ -2158,7 +2342,7 @@ function writingHelp() {
       h("li", {}, [h("b", {}, ["Edit."]), " Only the story's opener and editors can edit, and only lightly: fix typos, tidy a sentence. A part can grow by about 10% at most. Shortening returns Ink to the writer. The part stays credited to its writer and shows “Edited by”."]),
       h("li", {}, [h("b", {}, ["Remove."]), " Opener and editors can remove a part. The writer gets their Ink back, unless the part was hidden as possible copying."]),
       h("li", {}, [h("b", {}, ["Want to change someone else's part?"]), " Add your own text after it instead, or ask the opener. Bigger rewrites happen in the final edit, once the story is full."]),
-      h("li", {}, [h("b", {}, ["Ink."]), " Every writer pays for their own words: 1 Ink per letter. Long text is split into parts automatically."]),
+      h("li", {}, [h("b", {}, ["Ink."]), " 1 Ink per letter. In public stories every writer pays for their own words. In unlisted and private stories the opener's writers' pool pays while it has enough. Long text is split into parts automatically."]),
     ]),
   ]);
 }

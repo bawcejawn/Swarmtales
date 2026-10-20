@@ -44,7 +44,7 @@ export const HOW_SECTIONS = [
     title: "5. Three ways to get Ink",
     list: [
       ["A promo link.", "Sometimes SwarmTales shares a link on Discord, Telegram or X. Open it, connect your wallet, and claim free Ink. Each wallet can claim one promo, ever."],
-      ["An invite to a private story.", "A story's opener can send you an invite link. Joining is free and lets you write in that story."],
+      ["An invite to an unlisted or private story.", "A story's opener can send you an invite link. Joining is free. The opener's writers' pool pays for your parts while it lasts. You need an active Writer month there; the opener can pay for it."],
       ["A Writer membership.", "A Writer month comes with a set amount of Ink. Open the Membership page to see the price and the Ink included."],
     ],
   },
@@ -54,14 +54,14 @@ export const HOW_SECTIONS = [
     body: [
       "Read to the end of a story, then write what happens next in the box below it. A part needs at least 20 characters, so every turn adds something. Only the very last part of a story may be shorter.",
       "You can start a new chapter, and you should tick “Written with AI help” if a tool wrote any of it. Readers see that label.",
-      "Every story has a size, for example 10,000 characters. When it fills up, writing stops and the story moves on to its final edit.",
+      "Stories have no fixed size. Once a short story reaches 10,000 characters (a book: 100,000), its opener can close it for the final edit whenever they're ready. A short story can grow to 99,999 characters and a book to 1,000,000.",
     ],
   },
   {
     id: "edits",
     title: "7. Edits and credit",
     body: [
-      "A story's opener and its editors can tidy a part. When that happens, the part says who edited it. Credit stays with the person who wrote it, and the first version stays on the public record.",
+      "A story's opener and its editors can tidy a part. An edited part shows a small “edited” note; tap it to see who edited it and when. Credit stays with the person who wrote it, and the first version stays on the public record.",
       "If a part is removed, it is listed as removed at the bottom of the story, so the record stays complete.",
     ],
   },
@@ -69,7 +69,7 @@ export const HOW_SECTIONS = [
     id: "finish",
     title: "8. Finishing a story",
     body: [
-      "When a story is full, the opener gives it a final polish. Then it is marked finished and becomes a book. Every writer whose words survive is in the credits.",
+      "When a story is long enough, the opener closes it and gives it a final polish. Then it is marked finished and becomes a book. Every writer whose words survive is in the credits.",
       "A story nobody touches for a long time can be archived. Archived stories can still be read.",
     ],
   },
@@ -77,8 +77,9 @@ export const HOW_SECTIONS = [
     id: "open",
     title: "9. Opening your own story",
     body: [
-      "Anyone with a wallet can open a short story. You choose a title, a length, a category, and who may write: anyone (public), anyone with the link (unlisted), or only people you invite (private).",
-      "Opening has a small price, paid from your wallet, and comes with starter Ink so you can write the first part. Private only limits who can write. The words themselves are still public on the blockchain.",
+      "Anyone with a wallet can open a story. You choose a title, a category, and who may write: anyone (public), or only people you invite (unlisted or private; neither appears in Discover).",
+      "Opening has a small price, paid from your wallet, and comes with starter Ink so you can write the first part. Your first 3 open stories cost the normal price; each one after that doubles it, up to 4×. Finishing or archiving a story frees its slot.",
+      "Unlisted and private stories have a writers' pool: Ink you set aside (at least 10,000 for a short story, 100,000 for a book) that pays for your invited writers' parts. You can add more any time, and whatever is left comes back to you at the end. Invited writers need an active Writer month, and you can pay for theirs. The words themselves are still public on the blockchain.",
       "Two optional settings are saved with every story. Free preview: how many chapters visitors without a membership can read before being asked to join. Keepsake copy: how many characters a writer needs in the finished story to receive a free Contributor Edition, a keepsake copy with their name in the credits. Both switch on when memberships and finished books launch; for now every story is free to read.",
     ],
   },

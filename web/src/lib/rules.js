@@ -79,18 +79,27 @@ export function assessWrite(input) {
   if (textCheck.ok && minimum > 0n && cost < minimum && !closesStory) {
     problems.push("A part must be at least " + minimum + " characters, so each turn adds something. Only the very last part of a story may be shorter.");
   }
-  if (textCheck.ok && balance != null && cost > balance) {
-    problems.push("Ink balance is " + balance + " and this text costs " + cost + ".");
-  }
-
   const privileged = !!input.privileged;
   const visibility = Number(input.visibility || 0);
-  if (visibility === VIS_PRIVATE && !privileged && !input.allowed) {
-    problems.push("This story is private. Only the opener, an editor, or an invited wallet can write.");
+  // Unlisted and private stories are invite-only, and paid from the
+  // writers' pool while it has enough.
+  const inviteOnly = visibility === VIS_PRIVATE || visibility === VIS_UNLISTED;
+  const fund = whole(input.fund, "writers' pool", 0n);
+  const fundPays = inviteOnly && textCheck.ok && fund >= cost;
+  if (textCheck.ok && !fundPays && balance != null && cost > balance) {
+    problems.push(inviteOnly
+      ? "The writers' pool has " + fund + " Ink left, so you pay for this part yourself. Your Ink balance is " + balance + " and this text costs " + cost + "."
+      : "Ink balance is " + balance + " and this text costs " + cost + ".");
+  }
+  if (inviteOnly && !privileged && !input.allowed) {
+    problems.push("Only people the opener invites can write in this story. Ask the opener for an invite link.");
+  }
+  if (inviteOnly && !input.isOpener && !input.writerActive) {
+    problems.push("An active Writer month is needed to write in an unlisted or private story. The opener can give you one, or you can buy one on the Membership page.");
   }
 
   let usesTrial = false;
-  if (!privileged && !input.writerActive) {
+  if (!inviteOnly && !privileged && !input.writerActive) {
     if (!input.promoClaimed) {
       problems.push("An active Writer month is required, unless you opened this story or you are an editor.");
     } else {
@@ -110,6 +119,7 @@ export function assessWrite(input) {
     problems,
     spaceLeft: space == null ? "" : space.toString(),
     usesTrial,
+    fundPays,
   };
 }
 
@@ -127,9 +137,12 @@ export function assessOpen(input) {
   const lo = isBook ? BOOK_MIN : SHORT_MIN;
   const hi = isBook ? BOOK_MAX : SHORT_MAX;
   const range = lo.toLocaleString("en-US") + " to " + hi.toLocaleString("en-US");
+  // No length (or 0) means open-ended: the story may grow to the kind's
+  // maximum and can be finished once it reaches the minimum.
   let maxChars = null;
+  const openEnded = input.maxChars == null || input.maxChars === "" || String(input.maxChars) === "0";
   try {
-    maxChars = asWhole(input.maxChars, "length");
+    maxChars = openEnded ? BigInt(hi) : asWhole(input.maxChars, "length");
   } catch {
     problems.push("Length must be a whole number from " + range + ".");
   }
@@ -179,20 +192,45 @@ export function assessOpen(input) {
     problems.push("You already have the maximum number of open projects (" + openLimit + ").");
   }
 
-  const balance = whole(input.inkBalance, "Ink balance", 0n);
-  const starter = whole(input.starter, "starter Ink", 0n);
-  if (textCheck.ok && cost > balance + starter) {
-    problems.push("The opening text costs " + cost + " Ink. You have " + balance + ", and this open mints " + starter + " starter Ink.");
+  const inviteOnly = visibility === VIS_UNLISTED || visibility === VIS_PRIVATE;
+  let fund = 0n;
+  try {
+    fund = inviteOnly ? asWhole(input.fund == null || input.fund === "" ? "0" : input.fund, "writers' pool") : 0n;
+  } catch {
+    problems.push("The writers' pool must be a whole number of Ink.");
+  }
+  if (inviteOnly && fund < BigInt(lo)) {
+    problems.push("An unlisted or private " + (isBook ? "book" : "short story") + " needs a writers' pool of at least " +
+      lo.toLocaleString("en-US") + " Ink, enough for the story to reach the length where it can be finished.");
   }
 
-  const price = whole(input.price, "price", null);
+  const balance = whole(input.inkBalance, "Ink balance", 0n);
+  const starter = whole(input.starter, "starter Ink", 0n);
+  const inkNeeded = cost + fund;
+  if (textCheck.ok && inkNeeded > balance + starter) {
+    problems.push(fund > 0n
+      ? "You need " + inkNeeded + " Ink: " + cost + " for the first part and " + fund + " for the writers' pool. You have " + balance +
+        ", and this open adds " + starter + " starter Ink. Buy an Ink pack on the Membership page, then come back."
+      : "The opening text costs " + cost + " Ink. You have " + balance + ", and this open mints " + starter + " starter Ink.");
+  }
+
+  const basePrice = whole(input.price, "price", null);
+  const multiplier = BigInt(Math.max(1, Number(input.multiplier || 1)));
+  const price = basePrice == null ? null : basePrice * multiplier;
   const tokenBalance = whole(input.tokenBalance, "token balance", null);
   if (price == null || price === 0n) problems.push("Opening " + (isBook ? "a book" : "a short story") + " has no price in this token yet.");
   if (price != null && tokenBalance != null && tokenBalance < price) {
     problems.push("Your token balance is below the open price.");
   }
 
-  return { ok: problems.length === 0, cost: cost.toString(), problems, price: price == null ? "0" : price.toString() };
+  return {
+    ok: problems.length === 0,
+    cost: cost.toString(),
+    problems,
+    price: price == null ? "0" : price.toString(),
+    fund: fund.toString(),
+    maxChars: openEnded ? "0" : maxChars == null ? "0" : maxChars.toString(),
+  };
 }
 
 export function assessWriterBuy(input) {

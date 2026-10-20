@@ -18,9 +18,12 @@
  *
  * Commands (run from the repository root, after building both contracts):
  *   node deploy/deploy.js status   --ink <addr> --shop <addr> --admin <addr> [--user <addr>] [--stories <addr>] [--story <id>]
- *   node deploy/deploy.js upload   ink|shop|stories --expect <contract wallet address>
+ *   node deploy/deploy.js upload   ink|shop|stories --expect <contract wallet address> [--upgrade]
+ *       (--upgrade, testnet only: replace the code of a contract that is already there; its stored data is kept)
  *   node deploy/deploy.js set-admin ink|shop|stories --contract <addr> --admin <addr>
- *   node deploy/deploy.js wire     --admin <addr> --ink <addr> --shop <addr> --treasury <addr> --founder <addr>
+ *   node deploy/deploy.js wire     --admin <addr> --ink <addr> --shop <addr> --treasury <addr> --founder <addr> [--replace-shop <old addr>]
+ *       (--replace-shop retires an older Shop: it loses its Ink mint rights in the same transaction.
+ *        Memberships live in the Shop, so on a new Shop everyone starts without one)
  *   node deploy/deploy.js test-asset --admin <addr> --shop <addr> [--token <addr>] [--symbol tKOIN] [--decimals 8]
  *   node deploy/deploy.js test-buy --user <addr> --shop <addr> [--tier writer|reader] [--token <addr>]
  *   node deploy/deploy.js test-promo --admin <addr> --shop <addr>
@@ -34,9 +37,10 @@
  *        shop.set_addresses with the treasury and founder READ FROM THE CHAIN, and the 11 categories.
  *        --replace-stories retires an older Stories contract: Shop moves to the new one and the old one
  *        loses its Ink burn and mint rights, all in the same transaction)
- *   node deploy/deploy.js test-open --user <addr> --shop <addr> --stories <addr> [--token <addr>] [--private]
- *       (testnet: approve the Shop for the Short Story open price, then open a Short Story.
- *        --private makes it invite-only, for the invite rehearsal)
+ *   node deploy/deploy.js test-open --user <addr> --shop <addr> --stories <addr> [--token <addr>] [--private] [--fund <ink>]
+ *       (testnet: approve the Shop for the Short Story open price (times this wallet's open-price
+ *        multiplier), then open a Short Story with no fixed size. --private makes it invite-only, with a
+ *        writers' pool of --fund Ink (default and minimum 10000), for the invite rehearsal)
  *   node deploy/deploy.js test-invite --opener <addr> --stories <addr> --story <id> [--uses 5] [--days 7]
  *       (testnet: the opener creates a signed invite link. Only the link key's PUBLIC address
  *        goes on chain; the private key is printed once, for the share link)
@@ -50,7 +54,9 @@
  *        --user must be the opener, unless you add --not-opener (then the chain checks
  *        Writer membership, the promo trial, and a private story's allow-list). Default is 100 units of plain text. Size is lowered to the
  *        per-submission cap and the space left. Stops if the Ink balance is too low.)
- *   node deploy/deploy.js stories-limits --admin <addr> --stories <addr> [--cap <100-10000>] [--open-limit <1-10>]
+ *   node deploy/deploy.js stories-limits --admin <addr> --stories <addr> [--cap <100-10000>] [--open-limit <1-10>] [--full-price <1-10>] [--price-ceiling <1-1024>]
+ *       (--full-price: open projects at the normal price (default 3); each one after doubles the price,
+ *        up to --price-ceiling times the normal price (default 4))
  *
  * Moderation (Stories, October 2026):
  *   node deploy/deploy.js set-terms --admin <addr> --stories <addr> --version <n> --file <terms.md> --uri <https link>
@@ -307,7 +313,13 @@ async function cmdUpload(args) {
 
   const meta = await provider.call("contract_meta_store.get_contract_meta", { contract_id: expected }).catch(() => ({}));
   if (meta && meta.meta) {
-    lib.fail(expected + " already has a contract on this network. This script does not overwrite contracts.");
+    // Testnet only: --upgrade replaces the code and keeps the contract's stored data
+    // (stories, memberships, settings). Mainnet contracts are never overwritten by this script.
+    if (args.flags.upgrade !== true || net.mainnet) {
+      lib.fail(expected + " already has a contract on this network. This script does not overwrite contracts" +
+        (net.mainnet ? "." : " unless you add --upgrade (testnet only: new code, same address, stored data kept)."));
+    }
+    console.log("UPGRADE (testnet): the code at " + expected + " will be replaced. Its stored data is kept.");
   }
 
   const signer = await getSigner(provider, expected, "the " + target + " contract wallet");
@@ -363,12 +375,19 @@ async function cmdWire(args) {
     await shopC.encodeOperation({ name: "set_addresses", args: { treasury, founder, ink, stories: "" } }),
     await shopC.encodeOperation({ name: "set_ink_amounts", args: lib.DEFAULT_INK_AMOUNTS }),
   ];
+  let retiring = "";
+  if (f["replace-shop"] !== undefined) {
+    retiring = lib.requireAddress(f["replace-shop"], "replace-shop");
+    if (retiring === shop) lib.fail("--replace-shop is the OLD Shop address, not the new one.");
+    console.log("Retiring the old Shop " + retiring + ": its Ink mint rights are removed.");
+    ops.push(await inkC.encodeOperation({ name: "set_minter", args: { account: retiring, reasons_mask: 0 } }));
+  }
   const txId = await dryRunThenSend(
     signer,
     provider,
     net,
     ops,
-    "ink.set_minter(Shop, mask 30) + shop.set_addresses + shop.set_ink_amounts, in one transaction"
+    "ink.set_minter(Shop, mask 30) + shop.set_addresses + shop.set_ink_amounts" + (retiring ? " + ink.set_minter(old Shop, 0)" : "") + ", in one transaction"
   );
   console.log("Send back: the transaction id (" + txId + ").");
 }
@@ -609,7 +628,10 @@ async function cmdWireStories(args) {
   });
   // Retiring an older Stories contract: it loses its Ink burn and mint rights
   // in the same transaction, so only the new one can ever touch Ink.
-  const retiring = shopCfg.stories && shopCfg.stories !== stories ? shopCfg.stories : "";
+  // With a brand-new Shop, the old Stories is named only by --replace-stories.
+  const replaceFlag = f["replace-stories"] === undefined ? "" : lib.requireAddress(f["replace-stories"], "replace-stories");
+  const retiring = shopCfg.stories && shopCfg.stories !== stories ? shopCfg.stories
+    : replaceFlag && replaceFlag !== stories ? replaceFlag : "";
   const storiesCfg = await readOnly(provider, "stories", stories, "get_config");
   if (storiesCfg.admin !== admin) {
     lib.fail("Stories admin is " + (storiesCfg.admin || "(not readable)") + ", not " + admin + ". Run set-admin stories first.");
@@ -667,8 +689,16 @@ async function cmdTestOpen(args) {
   const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
   const termsVersion = Number((await readOnly(provider, "stories", stories, "get_config")).terms_version || 0);
   const { result: priceRes } = await shopC.functions.get_price({ item: lib.SHOP_ITEMS.ITEM_OPEN_SHORT, token });
-  const price = priceRes && priceRes.value ? priceRes.value : "0";
-  if (price === "0") lib.fail("Opening a Short Story has no price for that token yet. Run test-asset first.");
+  const basePrice = priceRes && priceRes.value ? priceRes.value : "0";
+  if (basePrice === "0") lib.fail("Opening a Short Story has no price for that token yet. Run test-asset first.");
+  // Beyond the normal-price projects, the price doubles (up to a ceiling).
+  const multRes = await readOnly(provider, "stories", stories, "get_open_multiplier", { account: user }).catch(() => null);
+  const multiplier = multRes && multRes.value ? Number(multRes.value) : 1;
+  const price = (BigInt(basePrice) * BigInt(multiplier)).toString();
+  if (multiplier > 1) console.log("This wallet already has open projects: the price is " + multiplier + "x the normal price.");
+  const isPrivate = f.private === true;
+  const fund = isPrivate ? String(f.fund === undefined ? 10000 : f.fund) : "0";
+  if (isPrivate && (!/^[0-9]+$/.test(fund) || BigInt(fund) < 10000n)) lib.fail("--fund must be a whole number of Ink, at least 10000.");
   const text = "The first line of a SwarmTales test story.";
   const signer = await getSigner(provider, user, "the test user wallet");
   const tokenC = new Contract({ id: token, abi: utils.tokenAbi, provider });
@@ -679,11 +709,11 @@ async function cmdTestOpen(args) {
       args: {
         opener: user,
         kind: lib.STORY_KIND.SHORT,
-        title: f.private === true ? "Testnet Private Story" : "Testnet Short Story",
-        max_chars: "10000",
+        title: isPrivate ? "Testnet Private Story" : "Testnet Short Story",
+        max_chars: "0",
         category_1: 1,
         category_2: 0,
-        visibility: f.private === true ? lib.STORY_VISIBILITY.PRIVATE : lib.STORY_VISIBILITY.PUBLIC,
+        visibility: isPrivate ? lib.STORY_VISIBILITY.PRIVATE : lib.STORY_VISIBILITY.PUBLIC,
         free_chapters: 0,
         contributor_edition_min: "0",
         opening_text: text,
@@ -692,12 +722,14 @@ async function cmdTestOpen(args) {
         token,
         rights_confirmed: true,
         terms_version: termsVersion,
+        fund,
       },
     }),
   ];
   const txId = await dryRunThenSend(
     signer, provider, net, ops,
-    "approve the Shop for " + price + " (Short Story open price), then open a 10,000-character Short Story (Shop mints the starter Ink; the opening line burns " + lib.inkCost(text) + " Ink)"
+    "approve the Shop for " + price + " (Short Story open price), then open a Short Story with no fixed size (Shop mints the starter Ink; the opening line burns " + lib.inkCost(text) + " Ink" +
+      (isPrivate ? "; " + fund + " Ink goes into the writers' pool" : "") + ")"
   );
   console.log("Send back: the transaction id (" + txId + "). The new story id is shown by status --stories --story 1 (or the next number).");
 }
@@ -894,12 +926,18 @@ async function cmdStoriesLimits(args) {
   if (!Number.isInteger(cap) || cap < 100 || cap > 10000) lib.fail("--cap must be a whole number from 100 to 10000.");
   const openLimit = f["open-limit"] === undefined ? Number(cfg.open_limit || 3) : Number(f["open-limit"]);
   if (!Number.isInteger(openLimit) || openLimit < 1 || openLimit > 10) lib.fail("--open-limit must be a whole number from 1 to 10.");
+  const fullPrice = f["full-price"] === undefined ? Number(cfg.full_price_projects || 3) : Number(f["full-price"]);
+  if (!Number.isInteger(fullPrice) || fullPrice < 1 || fullPrice > 10) lib.fail("--full-price must be a whole number from 1 to 10.");
+  const ceiling = f["price-ceiling"] === undefined ? Number(cfg.max_price_multiplier || 4) : Number(f["price-ceiling"]);
+  if (!Number.isInteger(ceiling) || ceiling < 1 || ceiling > 1024) lib.fail("--price-ceiling must be a whole number from 1 to 1024.");
   const limits = {
     contribution_cap: cap,
     trial_limit: cfg.trial_limit || 0,
     open_limit: openLimit,
     archive_days: cfg.archive_days || 60,
     inactivity_days: cfg.inactivity_days || 30,
+    full_price_projects: fullPrice,
+    max_price_multiplier: ceiling,
   };
   const signer = await getSigner(provider, admin, "the admin wallet");
   const { Contract } = koilib();
