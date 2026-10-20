@@ -26,9 +26,10 @@ on:
         required: false
         default: ""
 
+# Read-only by default. Only the keep-schedule job, which holds no secrets,
+# gets actions: write.
 permissions:
   contents: read
-  actions: write   # only to keep this schedule from being paused after 60 quiet days
 
 concurrency:
   group: copy-checker
@@ -40,19 +41,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false   # no token left in .git/config for later steps
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
       - name: Install
         working-directory: web
-        run: npm ci && npm run abi
+        # No install scripts: this job holds the moderator key and search keys.
+        run: npm ci --ignore-scripts && npm run abi
       - name: Test the checker
-        run: node --test checker/__tests__/lib.test.mjs
+        run: node --test checker/__tests__/lib.test.mjs checker/__tests__/workflows.test.mjs
       - name: Restore progress from the last run
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: checker-state.json
           key: copy-checker-${{ github.run_id }}
@@ -70,13 +74,22 @@ jobs:
         run: node checker/check.mjs
       - name: Save progress
         if: always() && hashFiles('checker-state.json') != ''
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: checker-state.json
           key: copy-checker-${{ github.run_id }}
+
+  keep-schedule:
+    # GitHub pauses scheduled workflows in repositories with no activity
+    # for 60 days. Re-enabling this workflow resets that clock. A separate
+    # job, so the write token never sits next to the moderator key.
+    if: vars.STORIES_ADDRESS != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
       - name: Keep the hourly schedule switched on
-        # GitHub pauses scheduled workflows in repositories with no activity
-        # for 60 days. Re-enabling this workflow resets that clock.
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/copy-checker.yml/enable" || true
