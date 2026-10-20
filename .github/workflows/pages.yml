@@ -28,6 +28,8 @@ jobs:
       - name: Test the website
         working-directory: web
         run: npm test
+      - name: Test the copy checker
+        run: node --test checker/__tests__/lib.test.mjs
       - name: Build the website
         working-directory: web
         run: npm run build

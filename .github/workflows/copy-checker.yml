@@ -1,0 +1,67 @@
+name: Copy checker
+
+# Checks new story parts for copied text every hour and hides
+# high-confidence matches with the moderator key (which can only hide and
+# unhide). Free for public repositories.
+#
+# Settings (repository Settings > Secrets and variables > Actions):
+#   Variables:  STORIES_ADDRESS (required), RPC (optional)
+#   Secrets:    MODERATOR_WIF (the moderator's private key; without it the
+#               checker only reports), BRAVE_API_KEY (optional web check)
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write   # only to keep this schedule from being paused after 60 quiet days
+
+concurrency:
+  group: copy-checker
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: vars.STORIES_ADDRESS != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install
+        working-directory: web
+        run: npm ci && npm run abi
+      - name: Test the checker
+        run: node --test checker/__tests__/lib.test.mjs
+      - name: Restore progress from the last run
+        uses: actions/cache/restore@v4
+        with:
+          path: checker-state.json
+          key: copy-checker-${{ github.run_id }}
+          restore-keys: copy-checker-
+      - name: Check new story parts
+        env:
+          STORIES_ADDRESS: ${{ vars.STORIES_ADDRESS }}
+          RPC: ${{ vars.RPC }}
+          MODERATOR_WIF: ${{ secrets.MODERATOR_WIF }}
+          BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+          STATE_FILE: checker-state.json
+        run: node checker/check.mjs
+      - name: Save progress
+        if: always() && hashFiles('checker-state.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: checker-state.json
+          key: copy-checker-${{ github.run_id }}
+      - name: Keep the hourly schedule switched on
+        # GitHub pauses scheduled workflows in repositories with no activity
+        # for 60 days. Re-enabling this workflow resets that clock.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/copy-checker.yml/enable" || true
