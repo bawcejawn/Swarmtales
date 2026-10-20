@@ -36,7 +36,7 @@ import {
   saveSession,
 } from "./wallet.js";
 import { fetchVaultConfig, vaultManaDecision, vaultPairingDecision } from "./lib/vaultApi.js";
-import { linkSecretFromHash, signInviteJoin, signPromoClaim } from "./lib/links.js";
+import { buildInviteLink, generateLinkKey, linkSecretFromHash, signInviteJoin, signPromoClaim } from "./lib/links.js";
 import { createTestWallet, storedTestAddress } from "./testWallet.js";
 import { append, h, icons, replace } from "./ui/dom.js";
 import { renderHowSections } from "./ui/how.js";
@@ -102,6 +102,7 @@ function route() {
   if (parts[0] === "stories" && isId(parts[1])) return { name: "story", id: parts[1] };
   if (parts[0] === "stories" || parts[0] === "discover") return { name: "discover" };
   if (parts[0] === "open") return { name: "open" };
+  if (parts[0] === "mine") return { name: "mine" };
   if (parts[0] === "how") return { name: "how" };
   if (parts[0] === "terms") return { name: "terms" };
   if (parts[0] === "report") return { name: "report" };
@@ -337,6 +338,7 @@ function renderNav() {
     ["discover", "#/stories", "Discover"],
     ["open", "#/open", "Open a story"],
     ["how", "#/how", "How it works"],
+    ["mine", "#/mine", "My stories"],
     ["membership", "#/membership", "Membership"],
   ];
   replace(nav, ...items.map(([name, href, text]) => {
@@ -469,6 +471,7 @@ function renderPage() {
   if (here.name === "discover") renderDiscover(page);
   else if (here.name === "story") renderReader(page, here.id);
   else if (here.name === "open") renderOpen(page);
+  else if (here.name === "mine") renderMine(page);
   else if (here.name === "membership") renderMembership(page);
   else if (here.name === "promo") renderPromo(page, here.campaign);
   else if (here.name === "join") renderJoin(page, here.storyId, here.inviteId);
@@ -498,7 +501,13 @@ function storyCard(row, excerptText) {
     });
   }
   return h("a", { class: "story-card", href: "#/stories/" + row.id }, [
-    h("div", { class: "card-top" }, [h("p", { class: "meta" }, [meta]), statusPill(story)]),
+    h("div", { class: "card-top" }, [
+      h("p", { class: "meta" }, [meta]),
+      h("div", { class: "pills" }, [
+        Number(story.visibility) !== 1 ? h("span", { class: "pill pill-neutral" }, [label(VISIBILITY, story.visibility)]) : null,
+        statusPill(story),
+      ]),
+    ]),
     h("h3", { class: "card-title" }, [story.title || "Untitled"]),
     line,
     progressBar(story, charsLine(story)),
@@ -846,6 +855,7 @@ function renderReader(page, id) {
     append(composeAnchor, composer(id, story, active));
 
     const aside = h("aside", { class: "reader-aside", "aria-label": "About this story" }, [
+      sharePanel(id, story, me, flags),
       chapters.length > 1
         ? h("nav", { "aria-label": "Contents" }, [
             h("h2", { class: "aside-title" }, ["Contents"]),
@@ -938,10 +948,11 @@ function segmentView(block, story, storyId, ctx) {
     };
     if (ctx.canAdd && block.seq !== ctx.lastSeq) {
       append(tools, h("button", { type: "button", class: "text-button tool" }, ["+ Add text here"]));
+      tools.lastChild.title = "Write new text that appears right below this part";
       tools.lastChild.addEventListener("click", () => toggle("add", () => composer(storyId, story, ctx.active, block.seq)));
     }
     if (ctx.canEdit && !segment.hidden) {
-      append(tools, h("button", { type: "button", class: "text-button tool" }, ["Edit"]));
+      append(tools, h("button", { type: "button", class: "text-button tool", title: "Fix typos or tidy this part (opener and editors)" }, ["Edit"]));
       tools.lastChild.addEventListener("click", () => toggle("edit", () => editPanel(storyId, block)));
     }
     if (ctx.canEdit) {
@@ -1216,6 +1227,7 @@ function composer(id, story, active, insertAfter) {
   update();
 
   const form = h("form", { onSubmit: (event) => { event.preventDefault(); go(); } }, [
+    after ? null : writingHelp(),
     field("Your part", area),
     h("div", { class: "counter", id: uid + "-count" }, [
       costText,
@@ -1553,11 +1565,13 @@ function renderOpen(page) {
           /* keep the old overview */
         }
         loadLibrary(true).catch(() => {});
+        const newest = await newestOpenedStory(address).catch(() => "");
+        const target = newest || (Number(nextId) > 0 ? nextId : "");
         append(status, notice("ok", h("p", {}, [
           "Your story is open. ",
-          nextId ? h("a", { href: "#/stories/" + nextId }, ["Read it"]) : h("a", { href: "#/stories" }, ["Find it in Discover"]),
-          Number(visibility.value) === 3 ? ". To invite writers, create an invite link (coming to this page soon; for now it's done with the SwarmTales tools)." : ".",
+          target ? "Taking you there…" : h("a", { href: "#/mine" }, ["Find it under My stories"]),
         ])));
+        if (target) setTimeout(() => { location.hash = "#/stories/" + target + "?new=1"; }, 1200);
       }
     } catch (error) {
       failure(status, error);
@@ -1934,6 +1948,219 @@ function renderJoin(page, storyId, inviteId) {
   }).catch((error) => {
     replace(card, notice("bad", h("p", {}, [explainFailure(error)])));
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* my stories, sharing and invites                                     */
+/* ------------------------------------------------------------------ */
+
+/** The id of the story this wallet opened most recently, as text. */
+async function newestOpenedStory(address) {
+  const ids = await openedStoryIds(address);
+  return ids.length ? ids[ids.length - 1] : "";
+}
+
+async function openedStoryIds(address) {
+  const ids = [];
+  for (let start = 0; start < 500; start += 50) {
+    const page = await read("stories", "get_opener_stories", { account: address, start: String(start), limit: 50 });
+    const values = page && Array.isArray(page.values) ? page.values : [];
+    ids.push(...values.map(String));
+    if (values.length < 50) break;
+  }
+  return ids;
+}
+
+async function writtenStoryIds(address) {
+  const ids = new Set();
+  for (let start = 0; start < 1000; start += 50) {
+    const page = await read("stories", "get_author_segments", { account: address, start: String(start), limit: 50 });
+    const values = page && Array.isArray(page.values) ? page.values : [];
+    for (const ref of values) ids.add(String(ref.story_id));
+    if (values.length < 50) break;
+  }
+  return Array.from(ids);
+}
+
+async function storyRows(ids) {
+  const rows = await Promise.all(ids.map(async (id) => {
+    const story = await read("stories", "get_story", { story_id: String(id) }).catch(() => null);
+    return story && Number(story.status || 0) ? { id: Number(id), story } : null;
+  }));
+  return rows.filter(Boolean).sort((a, b) => Number(b.story.last_activity_at || 0) - Number(a.story.last_activity_at || 0));
+}
+
+function renderMine(page) {
+  setMeta("My stories", "The stories you opened or write in, including unlisted and private ones.");
+  const container = h("div", { class: "container page" });
+  append(page, container);
+  append(container,
+    h("p", { class: "eyebrow" }, ["Your shelf"]),
+    h("h1", { class: "title" }, ["My stories"]),
+    h("p", { class: "lede" }, ["Every story you opened or wrote in, including unlisted and private ones that don't appear in Discover."])
+  );
+  const address = currentAddress();
+  if (!address) {
+    append(container, h("div", { class: "card", style: null }, [
+      h("p", { class: "body-2" }, ["Connect a wallet to see your stories."]),
+      connectButton(),
+    ]));
+    return;
+  }
+  const opened = h("div", { class: "card-grid" }, [loadingLine("Reading your stories…")]);
+  const written = h("div", { class: "card-grid" }, [loadingLine("Reading the stories you write in…")]);
+  append(container,
+    h("section", { class: "mine-section" }, [h("h2", { class: "h2" }, ["Opened by you"]), opened]),
+    h("section", { class: "mine-section" }, [
+      h("h2", { class: "h2" }, ["Stories you write in"]),
+      h("p", { class: "meta" }, ["Invited to a private story but haven't written yet? Open your invite link again; it brings you straight to the story."]),
+      written,
+    ])
+  );
+  (async () => {
+    const mineIds = await openedStoryIds(address);
+    const openedRows = await storyRows(mineIds);
+    replace(opened, ...(openedRows.length
+      ? openedRows.map((row) => storyCard(row))
+      : [h("div", { class: "empty" }, [h("p", { class: "serif" }, ["You haven't opened a story yet."]), h("p", {}, [h("a", { class: "link-arrow", href: "#/open" }, ["Open a story", icons.arrow()])])])]));
+    const writtenIds = (await writtenStoryIds(address)).filter((id) => !mineIds.includes(id));
+    const writtenRows = await storyRows(writtenIds);
+    replace(written, ...(writtenRows.length
+      ? writtenRows.map((row) => storyCard(row))
+      : [h("div", { class: "empty" }, [h("p", { class: "meta" }, ["You haven't written in anyone else's story yet."])])]));
+  })().catch((error) => replace(opened, notice("bad", h("p", {}, [explainFailure(error)]))));
+}
+
+function copyButton(text, labelText) {
+  const button = h("button", { type: "button", class: "btn btn-secondary btn-small" }, [labelText || "Copy link"]);
+  button.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      button.textContent = "Copied";
+      setTimeout(() => { button.textContent = labelText || "Copy link"; }, 2000);
+    } catch {
+      button.textContent = "Select the link and copy it";
+    }
+  });
+  return button;
+}
+
+function siteBase() {
+  return location.href.split("#")[0];
+}
+
+const VISIBILITY_HELP = {
+  1: "Public: listed in Discover. Anyone with Ink and a Writer month (or a promo trial) can write.",
+  2: "Unlisted: not in Discover. Anyone who has the link can read it and, with Ink, write in it.",
+  3: "Private: anyone can read it if they find it, but only you, your editors and people you invite can write.",
+};
+
+/** Share & invite: shown to the opener (and, partly, to editors). */
+function sharePanel(id, story, me, flags) {
+  const isOpener = !!me && story.opener === me;
+  const isEditor = !!me && !!(flags && flags.editor);
+  const vis = Number(story.visibility);
+  const link = siteBase() + "#/stories/" + id;
+  const panel = h("section", { class: "card share-panel", "aria-labelledby": "share-title" }, [
+    h("h2", { class: "aside-title", id: "share-title" }, [isOpener ? "Share & invite" : "Share"]),
+    h("p", { class: "body-2 small" }, [VISIBILITY_HELP[vis] || ""]),
+    h("p", { class: "mono small share-link" }, [link]),
+    h("div", { class: "row" }, [copyButton(link)]),
+  ]);
+  if (/[?&]new=1/.test(location.hash) && isOpener) {
+    panel.prepend(notice("ok", h("p", {}, ["Your story is open. It's saved under ", h("a", { href: "#/mine" }, ["My stories"]), "."])));
+  }
+  if (!(isOpener || isEditor) || Number(story.status) >= 4) return panel;
+
+  if (vis === 3 && isOpener) {
+    const uses = h("input", { type: "number", min: "1", max: "1000", value: "5", inputmode: "numeric" });
+    const days = h("input", { type: "number", min: "1", max: "365", value: "14", inputmode: "numeric" });
+    const out = h("div");
+    const status = statusBox();
+    const make = h("button", { type: "submit", class: "btn btn-primary btn-small" }, ["Create invite link"]);
+    append(panel, h("form", { class: "invite-form", onSubmit: async (event) => {
+      event.preventDefault();
+      make.disabled = true;
+      replace(out);
+      try {
+        const n = Number(uses.value);
+        const d = Number(days.value);
+        if (!Number.isInteger(n) || n < 1 || n > 1000) throw new Error("People per link must be 1 to 1,000.");
+        if (!Number.isInteger(d) || d < 1 || d > 365) throw new Error("Days must be 1 to 365.");
+        const key = generateLinkKey();
+        const expires = String(Math.floor(Date.now() / 1000) + d * 86400);
+        const op = await encode("stories", "create_invite", {
+          opener: me, story_id: String(id), link_signer: key.address, max_uses: n, expires_at: expires,
+        });
+        const before = Number((await read("stories", "get_story", { story_id: String(id) })).next_invite_id || 1);
+        if (await send([op], status)) {
+          // The invite id is the story's invite counter before this one.
+          const inviteId = before || 1;
+          const invite = buildInviteLink(siteBase(), id, inviteId, key.secret);
+          replace(out,
+            notice("ok", [
+              h("p", {}, ["Your invite link is ready. It works for " + plural(n, "person", "people") + " for " + plural(d, "day") + "."]),
+              h("p", { class: "mono small share-link" }, [invite]),
+            ]),
+            h("div", { class: "row" }, [copyButton(invite, "Copy invite link")]),
+            h("p", { class: "meta small" }, ["Copy it now: this page can't show it again. Anyone who has it can join, so send it privately."])
+          );
+        }
+      } catch (error) {
+        failure(status, error);
+      } finally {
+        make.disabled = false;
+      }
+    } }, [
+      h("h3", { class: "h3" }, ["Invite writers"]),
+      h("p", { class: "meta small" }, ["Each person who opens the link joins with one confirmation. They still use their own Ink to write."]),
+      h("div", { class: "form-grid" }, [field("People", uses), field("Days it works", days)]),
+      h("div", { class: "actions" }, [make]),
+      status,
+      out,
+    ]));
+  }
+
+  if (isOpener) {
+    const who = h("input", { type: "text", placeholder: "Wallet address (starts with 1)", autocomplete: "off", spellcheck: "false" });
+    const status = statusBox();
+    const act = (allowed) => async () => {
+      try {
+        const account = who.value.trim();
+        if (!/^1[1-9A-HJ-NP-Za-km-z]{25,34}$/.test(account)) throw new Error("That doesn't look like a wallet address.");
+        const op = await encode("stories", "set_editor", { opener: me, story_id: String(id), account, allowed });
+        if (await send([op], status)) who.value = "";
+      } catch (error) {
+        failure(status, error);
+      }
+    };
+    append(panel, h("div", { class: "editor-form" }, [
+      h("h3", { class: "h3" }, ["Editors"]),
+      h("p", { class: "meta small" }, ["Editors can fix and remove parts like you can, and write without a Writer month. They still use their own Ink. Up to 10."]),
+      field("Editor's wallet", who),
+      h("div", { class: "row" }, [
+        h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: act(true) }, ["Add editor"]),
+        h("button", { type: "button", class: "text-button", onClick: act(false) }, ["Remove editor"]),
+      ]),
+      status,
+    ]));
+  }
+  return panel;
+}
+
+/** A short guide shown above the writing box. */
+function writingHelp() {
+  return h("details", { class: "more-options writing-help" }, [
+    h("summary", {}, ["How adding and editing work"]),
+    h("ul", { class: "how-list" }, [
+      h("li", {}, [h("b", {}, ["Add at the end."]), " Use this box. Your part goes after everything written so far. Tick “Start a new chapter” to begin one."]),
+      h("li", {}, [h("b", {}, ["Add in the middle."]), " Click “+ Add text here” under any part. Your text appears directly below that part, before what came next. Anyone who can write here can do this."]),
+      h("li", {}, [h("b", {}, ["Edit."]), " Only the story's opener and editors can edit, and only lightly: fix typos, tidy a sentence. A part can grow by about 10% at most. Shortening returns Ink to the writer. The part stays credited to its writer and shows “Edited by”."]),
+      h("li", {}, [h("b", {}, ["Remove."]), " Opener and editors can remove a part. The writer gets their Ink back, unless the part was hidden as possible copying."]),
+      h("li", {}, [h("b", {}, ["Want to change someone else's part?"]), " Add your own text after it instead, or ask the opener. Bigger rewrites happen in the final edit, once the story is full."]),
+      h("li", {}, [h("b", {}, ["Ink."]), " Every writer pays for their own words: 1 Ink per letter. Long text is split into parts automatically."]),
+    ]),
+  ]);
 }
 
 /* ------------------------------------------------------------------ */
