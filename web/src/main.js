@@ -26,7 +26,7 @@ import { VAULT_MANA_CEILING, formatMana, formatUnits, formatUtc, kondorManaNote,
 import { assessOpen, assessPromo, assessWrite, assessWriterBuy, isActiveWriter } from "./lib/rules.js";
 import { checkStoryText, inkCost } from "./lib/text.js";
 import {
-  KONDOR_HINT,
+  kondorHint,
   VAULT_MANA_EXPLANATION,
   clearSavedSession,
   createKondorWallet,
@@ -1041,8 +1041,8 @@ function walletNote() {
     const decision = state.account ? vaultManaDecision(state.account.mana, VAULT_MANA_CEILING) : null;
     return h("p", { class: "meta small" }, [decision && decision.blocked ? decision.message : VAULT_MANA_EXPLANATION]);
   }
-  const low = state.account ? kondorManaNote(state.account.mana) : "";
-  return h("p", { class: "meta small" }, [low || "If Kondor refuses, tick “Use free mana” in its window and try again."]);
+  const low = state.account ? kondorManaNote(state.account.mana, network.mainnet) : "";
+  return h("p", { class: "meta small" }, [low || kondorHint(network.mainnet)]);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1600,7 +1600,7 @@ async function send(operations, status) {
   if (manaDecision && manaDecision.blocked) throw new Error(manaDecision.message);
   replace(status, notice("info", h("p", {}, [
     state.wallet.id === "testwallet" ? "Signing with the test wallet and sending…" :
-    state.wallet.id === "koinvault" ? "Sending the request to KOIN Vault…" : "Kondor should open now. Check the details, then confirm. " + KONDOR_HINT,
+    state.wallet.id === "koinvault" ? "Sending the request to KOIN Vault…" : "Kondor should open now. Check the details, then confirm. " + kondorHint(network.mainnet),
   ])));
   const sent = await state.wallet.signAndSend(operations, {
     onProgress(progress) {
@@ -1727,11 +1727,31 @@ function vaultSection() {
   return box;
 }
 
+/**
+ * Kondor's "Optimize mana" asks Kondor's mana-meter account to pay for a trial
+ * run. On the Foundation testnet that account has no mana, so the check fails
+ * and Kondor loops on "Refresh check". The way out is in Kondor's own window.
+ */
+function kondorTestnetHelp(open) {
+  return h("details", { class: "more-options", open: open || null }, [
+    h("summary", {}, ["Kondor keeps asking to “Refresh check”?"]),
+    h("p", { class: "body-2" }, [
+      "On the testnet, Kondor's automatic mana check doesn't work yet. Nothing is wrong with your wallet or the transaction. In the Kondor window, do one of these:",
+    ]),
+    h("ol", { class: "how-list" }, [
+      h("li", {}, ["Press ", h("b", {}, ["Use free mana"]), ". Kondor's free-mana service pays for the action. Or:"]),
+      h("li", {}, ["Open ", h("b", {}, ["Transaction details"]), ", then ", h("b", {}, ["Technical details"]), ", and switch off ", h("b", {}, ["Optimize mana"]), ". Your own mana then pays, and only what the action uses is spent."]),
+    ]),
+    h("p", { class: "meta" }, ["Then confirm. If Kondor still won't continue, send a screenshot of Technical details to the SwarmTales team."]),
+  ]);
+}
+
 function kondorSection() {
   const box = h("div", { class: "wallet-option" }, [
     h("h3", {}, ["Kondor"]),
     h("p", {}, ["A free browser extension for Chrome, Brave and Edge on a computer. It asks you to confirm in a small window."]),
   ]);
+  if (!network.mainnet) append(box, kondorTestnetHelp(false));
   const list = state.kondorAccounts;
   if (!list) {
     append(box, h("div", { class: "row" }, [
