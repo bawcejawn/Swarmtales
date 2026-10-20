@@ -24,6 +24,7 @@ import {
   loadSavedSession,
 } from "./wallet.js";
 import { fetchVaultConfig, vaultManaDecision, vaultPairingDecision } from "./lib/vaultApi.js";
+import { linkSecretFromHash, signPromoClaim, signInviteJoin } from "./lib/links.js";
 
 const problems = configProblems();
 const kondor = createKondorWallet();
@@ -64,11 +65,17 @@ function h(tag, attrs, children) {
 }
 
 function route() {
-  const parts = (location.hash.replace(/^#/, "") || "/").split("/").filter(Boolean);
+  const raw = location.hash.replace(/^#/, "") || "/";
+  const path = raw.split("?")[0];
+  const parts = path.split("/").filter(Boolean);
   if (parts[0] === "stories" && parts[1] && /^[1-9][0-9]*$/.test(parts[1])) return { name: "story", id: parts[1] };
   if (parts[0] === "stories") return { name: "stories" };
   if (parts[0] === "open") return { name: "open" };
   if (parts[0] === "shop") return { name: "shop" };
+  if (parts[0] === "promo" && parts[1] && /^[1-9][0-9]*$/.test(parts[1])) return { name: "shop", campaign: parts[1] };
+  if (parts[0] === "join" && parts[1] && parts[2] && /^[1-9][0-9]*$/.test(parts[1]) && /^[1-9][0-9]*$/.test(parts[2])) {
+    return { name: "join", storyId: parts[1], inviteId: parts[2] };
+  }
   return { name: "home" };
 }
 
@@ -266,7 +273,8 @@ function renderPage() {
   if (here.name === "stories") renderStories(page);
   else if (here.name === "story") renderStory(page, here.id);
   else if (here.name === "open") renderOpen(page);
-  else if (here.name === "shop") renderShop(page);
+  else if (here.name === "shop") renderShop(page, here.campaign);
+  else if (here.name === "join") renderJoin(page, here.storyId, here.inviteId);
   else renderHome(page);
   const heading = page.querySelector("h1");
   if (heading) heading.setAttribute("tabindex", "-1");
@@ -644,11 +652,11 @@ function renderOpen(page) {
   }
 }
 
-function renderShop(page) {
+function renderShop(page, campaignFromLink) {
   page.dataset.wantsAccount = "1";
   page.append(
     h("h1", {}, ["Shop"]),
-    h("p", {}, ["Buy one Writer month, or claim a promo code. The first month of a new Writer term mints Ink in the same transaction. A wallet can claim a promo once, ever. There is no admin screen here."])
+    h("p", {}, ["Buy one Writer month, or claim a promo from a link you were given. The first month of a new Writer term mints Ink in the same transaction. A wallet can claim a promo once, ever. There is no admin screen here."])
   );
   if (!state.overview) {
     page.append(h("p", {}, [state.chainError ? "Prices cannot be loaded yet." : "Reading the Shop…"]));
@@ -708,45 +716,99 @@ function renderShop(page) {
     }
   });
 
-  const campaign = h("input", { type: "number", min: "1", value: "1", inputmode: "numeric" });
-  const code = h("input", { type: "text", maxlength: "64", autocomplete: "off" });
+  const linkSecret = linkSecretFromHash(location.hash);
+  const campaignId = campaignFromLink || "";
   const promoStatus = statusBox();
-  const promoButton = h("button", { type: "button" }, ["Claim promo"]);
-  page.append(h("div", { class: "panel" }, [
-    h("h2", {}, ["Promo code"]),
-    h("p", {}, ["Enter the campaign id and the code. On this testnet the sample campaign is often id 1 and the code SWARMTEST, if that campaign is still open. The code was published in the deploy script, so it is not secret."]),
-    field("Campaign id", campaign),
-    field("Code", code),
-    h("p", { class: "hint" }, [walletHint()]),
-    h("div", { class: "row" }, [promoButton]),
-    promoStatus,
-  ]));
-  promoButton.addEventListener("click", async () => {
-    promoStatus.replaceChildren();
-    promoButton.disabled = true;
-    try {
-      const plan = assessPromo({
-        campaignId: campaign.value,
-        code: code.value,
-        alreadyClaimed: state.account.promo !== "0",
-        paused: !!cfg.paused,
-        promoEnabled: !!cfg.promo_enabled,
-      });
-      if (!plan.ok) {
-        promoStatus.append(problemsList(plan.problems));
-        return;
+  const promoButton = h("button", { type: "button" }, ["Claim free Ink"]);
+  const promoPanel = h("div", { class: "panel" }, [h("h2", {}, ["Promo link"])]);
+  if (!linkSecret || !campaignId) {
+    promoPanel.append(h("p", {}, ["Promo Ink is claimed from a link shared on Discord, Telegram or X. Open the full link you were given and this page will fill in the rest. There is nothing to type."]));
+  } else {
+    promoPanel.append(
+      h("p", {}, ["You opened a promo link for campaign " + campaignId + ". Claiming signs a request that only your wallet can use, so the link cannot be reused for anyone else. A wallet can claim once, ever."]),
+      h("p", { class: "hint" }, [walletHint()]),
+      h("div", { class: "row" }, [promoButton]),
+      promoStatus
+    );
+    promoButton.addEventListener("click", async () => {
+      promoStatus.replaceChildren();
+      promoButton.disabled = true;
+      try {
+        const plan = assessPromo({
+          campaignId,
+          hasLinkKey: !!linkSecret,
+          alreadyClaimed: state.account.promo !== "0",
+          paused: !!cfg.paused,
+          promoEnabled: !!cfg.promo_enabled,
+        });
+        if (!plan.ok) {
+          promoPanel.append(problemsList(plan.problems));
+          return;
+        }
+        promoStatus.textContent = "Signing the promo link with your wallet address…";
+        const signature = await signPromoClaim(linkSecret, contracts.shop, campaignId, address);
+        const op = await encode("shop", "claim_promo", {
+          account: address,
+          campaign_id: String(campaignId).trim(),
+          signer: "",
+          signature,
+        });
+        const sent = await send([op], promoStatus);
+        if (sent) await refreshAccount();
+      } catch (error) {
+        promoStatus.replaceChildren(h("span", { class: "note-bad" }, [explainFailure(error)]));
+      } finally {
+        promoButton.disabled = false;
       }
-      const op = await encode("shop", "claim_promo", {
+    });
+  }
+  page.append(promoPanel);
+}
+
+function renderJoin(page, storyId, inviteId) {
+  page.dataset.wantsAccount = "1";
+  page.append(
+    h("h1", {}, ["Join a private story"]),
+    h("p", {}, ["You opened an invite link for story " + storyId + ". Joining adds your wallet to this story's writers. The link signs a request only your wallet can use, so it cannot be reused for anyone else."])
+  );
+  const linkSecret = linkSecretFromHash(location.hash);
+  const address = currentAddress();
+  const status = statusBox();
+  if (!linkSecret) {
+    page.append(h("p", { class: "note-bad" }, ["This invite link is missing its key. Open the full link you were given."]));
+    return;
+  }
+  if (!address) {
+    page.append(h("p", {}, ["Connect a wallet to join."]), h("button", { type: "button", onClick: openWallet }, ["Connect a wallet"]));
+    return;
+  }
+  const joinButton = h("button", { type: "button" }, ["Join this story"]);
+  page.append(h("div", { class: "panel" }, [
+    h("p", { class: "hint" }, [walletHint()]),
+    h("div", { class: "row" }, [joinButton, h("a", { class: "button secondary", href: "#/stories/" + storyId }, ["Open the story"])]),
+    status,
+  ]));
+  joinButton.addEventListener("click", async () => {
+    status.replaceChildren();
+    joinButton.disabled = true;
+    try {
+      status.textContent = "Signing the invite with your wallet address…";
+      const signature = await signInviteJoin(linkSecret, contracts.stories, storyId, inviteId, address);
+      const op = await encode("stories", "join_with_invite", {
         account: address,
-        campaign_id: String(campaign.value).trim(),
-        code: code.value,
+        story_id: String(storyId),
+        invite_id: String(inviteId),
+        signature,
       });
-      const sent = await send([op], promoStatus);
-      if (sent) await refreshAccount();
+      const sent = await send([op], status);
+      if (sent) {
+        status.append(h("p", {}, ["You can now write in ", h("a", { href: "#/stories/" + storyId }, ["story " + storyId]), "."]));
+        await refreshAccount();
+      }
     } catch (error) {
-      promoStatus.replaceChildren(h("span", { class: "note-bad" }, [explainFailure(error)]));
+      status.replaceChildren(h("span", { class: "note-bad" }, [explainFailure(error)]));
     } finally {
-      promoButton.disabled = false;
+      joinButton.disabled = false;
     }
   });
 }

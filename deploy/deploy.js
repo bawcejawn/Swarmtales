@@ -24,7 +24,7 @@
  *   node deploy/deploy.js test-asset --admin <addr> --shop <addr> [--token <addr>] [--symbol tKOIN] [--decimals 8]
  *   node deploy/deploy.js test-buy --user <addr> --shop <addr> [--tier writer|reader] [--token <addr>]
  *   node deploy/deploy.js test-promo --admin <addr> --shop <addr>
- *   node deploy/deploy.js claim-promo --account <addr> --shop <addr> --campaign <id> [--code SWARMTEST]
+ *   node deploy/deploy.js claim-promo --account <addr> --shop <addr> --campaign <id> --link-key <wif-from-the-promo-link>
  *   node deploy/deploy.js user-checks --user <addr> --ink <addr> --shop <addr> --admin <addr>
  *       (dry runs only: each call must be REJECTED; nothing is ever sent)
  *
@@ -390,12 +390,16 @@ async function cmdTestPromo(args) {
   const shopC = new Contract({ id: shop, abi: loadAbiJson("shop"), provider });
   const now = Math.floor(Date.now() / 1000);
   const p = lib.TEST_PROMO;
+  // A fresh link key. Its PUBLIC address goes on chain; the private key is
+  // printed once, below, as part of the share link. Nothing secret is stored.
+  const { Signer } = koilib();
+  const linkKey = Signer.fromSeed("swarmtales-testnet-promo-" + Date.now() + "-" + Math.random());
   const ops = [
     await shopC.encodeOperation({ name: "set_promo_enabled", args: { enabled: true } }),
     await shopC.encodeOperation({
       name: "create_campaign",
       args: {
-        code: p.code,
+        link_signer: linkKey.getAddress(),
         amount: p.amount,
         budget_total: p.budget_total,
         daily_cap: p.daily_cap,
@@ -415,9 +419,12 @@ async function cmdTestPromo(args) {
   }
   const txId = await dryRunThenSend(
     signer, provider, net, ops,
-    "turn promos on and create campaign " + nextId + ": code " + p.code + ", " + p.amount + " Ink per wallet, budget " + p.budget_total + ", " + p.days + " days"
+    "turn promos on and create campaign " + nextId + ": " + p.amount + " Ink per wallet, budget " + p.budget_total + ", " + p.days + " days"
   );
-  console.log("Campaign id: " + nextId + "   Code: " + p.code);
+  console.log("Campaign id: " + nextId);
+  console.log("Promo link key (secret, for the share link only): " + linkKey.getPrivateKey("wif"));
+  console.log("Share link (replace the host with your site): https://YOUR-SITE/#/promo/" + nextId + "?k=" + linkKey.getPrivateKey("wif"));
+  console.log("To claim from the CLI: node deploy/deploy.js claim-promo --account <addr> --shop " + shop + " --campaign " + nextId + " --link-key " + linkKey.getPrivateKey("wif"));
   console.log("Send back: the transaction id (" + txId + ").");
 }
 
@@ -426,13 +433,17 @@ async function cmdClaimPromo(args) {
   const account = lib.requireAddress(f.account, "account");
   const shop = lib.requireAddress(f.shop, "shop");
   if (!f.campaign || !/^[1-9][0-9]*$/.test(String(f.campaign))) lib.fail("Add --campaign <id> (a number, usually 1).");
-  const code = typeof f.code === "string" ? f.code : lib.TEST_PROMO.code;
+  if (typeof f["link-key"] !== "string" || !f["link-key"]) lib.fail("Add --link-key <wif> from the promo link (the part after k=).");
   const { net, provider } = await connect(f);
   const signer = await getSigner(provider, account, "the test user wallet");
-  const { Contract } = koilib();
+  const { Contract, Signer, utils } = koilib();
   const shopC = new Contract({ id: shop, abi: loadAbiJson("shop"), provider });
-  const op = await shopC.encodeOperation({ name: "claim_promo", args: { account, campaign_id: String(f.campaign), code } });
-  const txId = await dryRunThenSend(signer, provider, net, [op], "claim promo campaign " + f.campaign + " with code " + code);
+  // Sign "promo / this shop / campaign / this account" with the link key.
+  const linkKey = Signer.fromWif(f["link-key"]);
+  const message = lib.promoMessage(utils.decodeBase58(shop), String(f.campaign), utils.decodeBase58(account));
+  const signature = await linkKey.signHash(lib.sha256(message));
+  const op = await shopC.encodeOperation({ name: "claim_promo", args: { account, campaign_id: String(f.campaign), signer: "", signature } });
+  const txId = await dryRunThenSend(signer, provider, net, [op], "claim promo campaign " + f.campaign + " with its signed link");
   console.log("Send back: the transaction id (" + txId + ").");
 }
 
@@ -474,11 +485,14 @@ async function cmdUserChecks(args) {
     ["User claims next month's Writer Ink early (nothing is due yet)",
       () => shopC.encodeOperation({ name: "claim_writer_ink", args: { account: user } })],
   ];
+  // A random, unrelated signature: it recovers to some address, but never
+  // the campaign's link key, so the contract must reject it.
+  const bogusSig = new Uint8Array(65);
+  bogusSig[0] = 31;
+  for (let i = 1; i < 65; i++) bogusSig[i] = (i * 7) & 0xff;
   if (f.campaign) {
-    checks.push(["Same wallet claims a promo a second time (one claim per wallet, ever)",
-      () => shopC.encodeOperation({ name: "claim_promo", args: { account: user, campaign_id: String(f.campaign), code: lib.TEST_PROMO.code } })]);
-    checks.push(["Claim a promo with a wrong code",
-      () => shopC.encodeOperation({ name: "claim_promo", args: { account: user, campaign_id: String(f.campaign), code: "WRONG-CODE" } })]);
+    checks.push(["Claim a promo with a signature that is not from the campaign's link key",
+      () => shopC.encodeOperation({ name: "claim_promo", args: { account: user, campaign_id: String(f.campaign), signer: "", signature: bogusSig } })]);
   }
 
   console.log("");

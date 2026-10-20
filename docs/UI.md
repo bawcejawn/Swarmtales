@@ -50,7 +50,8 @@ On Linux or macOS the same commands are `npm install`, `npm test`, `npm run buil
 - **Home** shows your address, test KOIN, mana, Ink, and membership after you connect a wallet.
 - **Stories** lists stories the chain knows about, including unlisted ones. Open a story to read the text. The text is stored on the chain, in pieces of up to 10 segments per read. A private story's text is still readable by anyone who asks the node. Private only limits who may write.
 - **Open a story** opens a Short Story. The page asks the chain what the opening text will cost, then your wallet signs two calls in one transaction: approve the Shop for the price, then open the story.
-- **Shop** buys one Writer month, or claims a promo code. The sample testnet code `SWARMTEST` (campaign 1) is printed in the deploy script. It is not a secret. A wallet can claim a promo once, ever. Later Writer months are claimed with a separate contract call that this first page does not offer yet. The first month mints its Ink immediately.
+- **Shop** buys one Writer month. A wallet can claim a promo once, ever. The first month of a new Writer term mints its Ink immediately; later months are claimed with a separate call this first page does not offer yet.
+- **Promo link** (`#/promo/<id>?k=…`) and **invite link** (`#/join/<story>/<invite>?k=…`) are opened from a link someone shares. The key after the `#` never reaches a server. The page signs a request naming your wallet, so a copied link cannot be reused for anyone else. `deploy/deploy.js test-promo` prints a ready-made promo link.
 
 The Ink number next to the writing box is the same count the contract uses. A letter costs 1. Most emoji cost 2. ⭐ costs 1. A skin tone or a flag costs 4. A family such as 👨‍👩‍👧 costs 8.
 

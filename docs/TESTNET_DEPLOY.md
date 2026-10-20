@@ -329,32 +329,37 @@ node deploy/deploy.js test-buy --user $USER --shop $SHOP --tier reader
 **Expect:** `Dry run failed ... an active Writer membership cannot be replaced by Reader`.
 Nothing is sent. If it instead asks you to type SEND, type anything else and send me the output.
 
-### 12d. Promo code grant (admin creates it, user claims it)
+### 12d. Promo link grant (admin creates it, user claims it)
 
-The admin creates a test campaign: code `SWARMTEST`, 500 Ink per wallet, 5000 Ink budget,
-open for 7 days. Sign with the **admin** key:
+The admin creates a test campaign (500 Ink per wallet, 5000 Ink budget, open for 7 days). The
+command makes a fresh **link key**, stores only its public address on chain, and prints a share
+link that carries the private key after the `#`. Sign with the **admin** key:
 
 ```powershell
 node deploy/deploy.js test-promo --admin $ADMIN --shop $SHOP
 ```
 
-It prints `Campaign id: 1`. Use that number below. Then claim it with the **test user's** key:
+It prints `Campaign id: 1`, a `Promo link key (secret ...)` WIF, and a ready-made
+`claim-promo` command that includes `--link-key`. Copy that WIF. Then claim it with the **test
+user's** key, which signs a request naming the user's own wallet:
 
 ```powershell
-node deploy/deploy.js claim-promo --account $USER --shop $SHOP --campaign 1
+node deploy/deploy.js claim-promo --account $USER --shop $SHOP --campaign 1 --link-key <WIF-from-above>
 node deploy/deploy.js status --ink $INK --shop $SHOP --user $USER
 ```
 
 **Expect:** the Ink balance goes from 15000 to **15500**, and `promo claimed by user` = `{"value":"1"}`.
+The link key is not a secret in the security sense — it is a one-campaign key with no value of its
+own — but treat the whole link as the thing you share, since the private key is what lets a wallet claim.
 
-Then run the security checks again, this time with the promo checks added:
+Then run the security checks again, this time with the promo check added:
 
 ```powershell
 node deploy/deploy.js user-checks --user $USER --ink $INK --shop $SHOP --admin $ADMIN --campaign 1
 ```
 
-**Expect:** `[PASS]` on all of them, including "claims a promo a second time" (one claim per
-wallet, ever) and "wrong code".
+**Expect:** `[PASS]` on all of them, including "claim a promo with a signature that is not from the
+campaign's link key" (the contract rejects it).
 **Send back:** the transaction ids and both outputs.
 
 ### 12e. Spending Ink on writing: the Stories contract

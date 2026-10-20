@@ -10,10 +10,10 @@ Three contracts exist in this repository and have passing tests: **Ink**, **Shop
 
 | Piece | Status |
 |---|---|
-| Ink, the non-transferable writing allowance | Built and tested (48 checks) |
-| Shop, the cash register for memberships, packs, story fees, and promo codes | Built and tested (51 checks) |
+| Ink, the non-transferable writing allowance | Built and tested (49 checks) |
+| Shop, the cash register for memberships, packs, story fees, and promo links | Built and tested (64 checks) |
 | A practice stablecoin inside this repo | Not included. On testnet, deploy the official Koinos token and point Shop at it |
-| Stories (the books themselves, trials, the 3-project limit, archive, refunds) | Built, tested in the mock chain (61 checks), and uploaded to the Foundation testnet |
+| Stories (the books themselves, trials, the 3-project limit, archive, refunds) | Built, tested in the mock chain (98 checks), and uploaded to the Foundation testnet |
 | Sponsor (paying Mana for someone else) | Optional, later, a separate contract, OFF by default. Not in Stories |
 | Books NFT | Planned |
 | Website | Static pages in `web/`. Reads the testnet. GitHub Pages publishing needs one repo setting (see docs/UI.md) |
@@ -120,6 +120,16 @@ Shop does not mint Ink by itself. It calls Ink, and Ink checks that Shop was all
 
 ## Security model
 
+> **October 2026 security review.** A review added five hardening changes, all on the
+> `security/authorization-and-signed-links` branch: every user and admin action must be
+> called **directly** by the transaction, never relayed through another contract (so an app a
+> user signed for cannot act in their name); invites and promos are **signed links** (only a
+> public key is stored on chain, and a claim is bound to the claimer's wallet); Shop verifies a
+> payment by **reading balances before and after**, not by trusting the token's reply; the final
+> edit skips removed text in **bounded** steps; and new text must be at least 20 Ink units.
+> Key management (separate hardware-wallet keys, published wasm hashes) remains a hard
+> prerequisite before mainnet.
+
 Ink cannot be transferred. There is no transfer, approve, or allowance function on Ink.
 
 **Who can mint.** Only a contract the Ink admin has approved, and only for the reasons in its mask. The Shop mask is **30**, which is PURCHASE (1), MEMBERSHIP (2), STARTER (3), and PROMO (4). Stories is approved for REFUND (5) only: mask **32**. The deploy script's `wire-stories` sets exactly that. A direct call from a wallet has no calling contract, so it cannot mint.
@@ -134,7 +144,7 @@ Ink cannot be transferred. There is no transfer, approve, or allowance function 
 
 **Upgrades.** Koinos stores a contract at an address. Uploading again to that same address replaces the code and keeps the storage. These contracts do not have a separate proxy. Leave the three upload overrides **false** (`upload file.wasm file.abi false false false`). That leaves future uploads, and contract-call authority, with the key of the contract address. `set_admin` does not remove that key's power to replace the wasm. If the storage layout changes in a later version, old data can be read wrong. Do not turn the authorize override on unless a reviewed `authorize` function exists. Turning it on without one can freeze the contract.
 
-**What the tests do not prove.** The mock chain does not run the real stablecoin or the real Ink wasm. Shop tests check the exact call bytes and roll back when a call returns a failure. A real testnet rehearsal is still required. The reentrancy lock is in the code and was not executed against a malicious token.
+**What the tests do not prove.** The mock chain does not run the real stablecoin or the real Ink wasm. Shop tests check the exact call bytes and roll back when a call returns a failure. A real testnet rehearsal of the legitimate flows is still required. The reentrancy lock and the direct-call rule are in the code; the direct-call rule is exercised by unit tests that set another contract as the caller, but not yet against a live relay on testnet.
 
 ## Repository layout
 
@@ -210,7 +220,7 @@ yarn test
 
 `yarn build:debug` is `koinos-sdk-as-cli build-all debug 0 ink.proto`. The `0` is not a version. Leaving it out makes the tool print help and stop. `yarn install` runs `scripts/patch-protoc-stdin.js`, which keeps the code generators from crashing with `EAGAIN` on Node.js 20 and later.
 
-Success means `build/debug/contract.wasm` exists and the test report ends with **48 pass** and **0 fail**.
+Success means `build/debug/contract.wasm` exists and the test report ends with **49 pass** and **0 fail**.
 
 ### Shop
 
@@ -221,7 +231,7 @@ yarn build:debug
 yarn test
 ```
 
-Success means `shop/build/debug/contract.wasm` exists and the test report ends with **51 pass** and **0 fail**.
+Success means `shop/build/debug/contract.wasm` exists and the test report ends with **64 pass** and **0 fail**.
 
 ### Stories
 
@@ -232,7 +242,7 @@ yarn build:release
 yarn test
 ```
 
-Success means `stories/build/release/contract.wasm` exists and the test report ends with **61 pass** and **0 fail**.
+Success means `stories/build/release/contract.wasm` exists and the test report ends with **98 pass** and **0 fail**.
 
 `yarn build:release` in any of the three folders makes the smaller wasm used for an upload. Tests use the debug build.
 
