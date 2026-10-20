@@ -471,7 +471,7 @@ export class Stories {
     this.callOut(shopId, SHOP_OPEN_FEE_ENTRY, Protobuf.encode(fee, stories.shop_fee_call.encode), [opener], "STORIES: open fee payment failed");
 
     // 2) The opening text is segment 1, paid in Ink like any other text.
-    this.writeSegment(storyId, st, opener, text, cost, true, args.ai_assisted, false, ink, args.terms_version, 0, false);
+    this.writeSegment(storyId, st, opener, text, cost, true, args.ai_assisted, false, ink, args.terms_version, 0, false, this.requireCitation(args.citation));
     // 3) Optional: Ink set aside for everyone's writing in this story.
     if (args.fund > 0) this.depositFund(storyId, st, opener, args.fund, ink);
     this.leave();
@@ -703,7 +703,7 @@ export class Stories {
     // Paid from the story's fund when it has enough; otherwise by the writer.
     const fromFund = inviteOnly && st.fund >= cost;
     if (fromFund) st.fund = st.fund - cost;
-    const seq = this.writeSegment(args.story_id, st, author, text, cost, args.starts_chapter, args.ai_assisted, trial, ink, args.terms_version, insertAfter, fromFund);
+    const seq = this.writeSegment(args.story_id, st, author, text, cost, args.starts_chapter, args.ai_assisted, trial, ink, args.terms_version, insertAfter, fromFund, this.requireCitation(args.citation));
     this.leave();
     return new stories.uint64(seq);
   }
@@ -1042,6 +1042,71 @@ export class Stories {
     this.emitModeration(args.story_id, args.seq,
       args.hidden ? stories.moderation_action.ACTION_HIDE : stories.moderation_action.ACTION_UNHIDE,
       args.hidden ? args.reason : stories.moderation_reason.REASON_UNSPECIFIED, actor, seg, note);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  // The part's writer, the opener or an editor sets the part's citation:
+  // what it quotes. The copy checker leaves cited quotes alone.
+  set_citation(args: stories.set_citation_arguments): stories.empty_object {
+    this.enter();
+    const account = this.requireAddress(args.account, "STORIES: invalid address");
+    this.requireSigner(account, "STORIES: account has not authorized this");
+    const st = this.requireStory(args.story_id);
+    System.require(st.status != stories.story_status.STATUS_FINALIZED, "STORIES: a finalized story cannot be changed");
+    const key = this.pairKey(args.story_id, args.seq);
+    const seg = this.requireActiveSegment(key);
+    System.require(Arrays.equal(account, seg.author!) || this.isPrivileged(args.story_id, st, account),
+      "STORIES: only the part's writer, the opener or an editor may do this");
+    const citation = this.requireCitation(args.citation);
+    seg.citation = citation;
+    this.segments.put(key, seg);
+    const ev = new stories.citation_event(args.story_id, args.seq, account, citation, false);
+    System.event("stories.citation_event", Protobuf.encode(ev, stories.citation_event.encode), [seg.author!]);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  // Admin or moderator (the copy checker) notes where parts of a text also
+  // appear. Shown under the part; it does not hide anything.
+  set_source_note(args: stories.set_source_note_arguments): stories.empty_object {
+    this.enter();
+    const actor = this.requireAddress(args.actor, "STORIES: invalid address");
+    this.requireModeratorOrAdmin(actor);
+    this.requireStory(args.story_id);
+    const key = this.pairKey(args.story_id, args.seq);
+    const seg = this.requireActiveSegment(key);
+    const note = this.requireNote(args.note);
+    seg.source_note = note;
+    this.segments.put(key, seg);
+    const ev = new stories.citation_event(args.story_id, args.seq, actor, note, true);
+    System.event("stories.citation_event", Protobuf.encode(ev, stories.citation_event.encode), [seg.author!]);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  // The story's opener or an editor brings back a hidden part (the checker or
+  // writer reports hid it). A part taken down by the admin stays removed.
+  restore_segment(args: stories.restore_segment_arguments): stories.empty_object {
+    this.enter();
+    const actor = this.requireAddress(args.actor, "STORIES: invalid address");
+    this.requireSigner(actor, "STORIES: actor has not authorized this");
+    const st = this.requireStory(args.story_id);
+    System.require(this.isPrivileged(args.story_id, st, actor), "STORIES: only the opener or an editor may do this");
+    System.require(st.status != stories.story_status.STATUS_FINALIZED, "STORIES: a finalized story cannot be changed");
+    const key = this.pairKey(args.story_id, args.seq);
+    const seg = this.requireActiveSegment(key);
+    System.require(seg.hidden, "STORIES: part is not hidden");
+    const note = this.requireNote(args.note);
+    seg.hidden = false;
+    seg.restored = true;
+    seg.moderation_reason = stories.moderation_reason.REASON_UNSPECIFIED;
+    seg.report_count = 0;
+    this.unhideCount(st);
+    this.segments.put(key, seg);
+    this.putStory(args.story_id, st);
+    this.emitModeration(args.story_id, args.seq, stories.moderation_action.ACTION_RESTORE,
+      stories.moderation_reason.REASON_UNSPECIFIED, actor, seg, note.length ? note : "restored by the story's opener or an editor");
     this.leave();
     return new stories.empty_object();
   }
@@ -1390,7 +1455,8 @@ export class Stories {
   // Append a new segment, update the story, then burn the Ink.
   private writeSegment(
     storyId: u64, st: stories.story, author: Uint8Array, text: string, cost: u64,
-    startsChapter: bool, aiAssisted: bool, trial: bool, ink: Uint8Array, termsVersion: u32, insertAfter: u64, fromFund: bool
+    startsChapter: bool, aiAssisted: bool, trial: bool, ink: Uint8Array, termsVersion: u32, insertAfter: u64, fromFund: bool,
+    citation: string
   ): u64 {
     const now = this.now();
     const seq = st.segment_count + 1;
@@ -1415,6 +1481,7 @@ export class Stories {
     seg.terms_version = termsVersion;
     seg.insert_after = insertAfter;
     seg.fund_paid = fromFund;
+    seg.citation = citation;
     this.segments.put(this.pairKey(storyId, seq), seg);
 
     st.segment_count = seq;
@@ -1479,6 +1546,8 @@ export class Stories {
 
   private clearSegment(seg: stories.segment, by: Uint8Array, now: u64): void {
     seg.text = "";
+    seg.citation = "";
+    seg.source_note = "";
     seg.charged = 0;
     seg.current_cost = 0;
     seg.surviving = 0;
@@ -1653,6 +1722,13 @@ export class Stories {
     const mod = this.config.get()!.moderator;
     System.require(mod != null && mod.length == ADDRESS_LENGTH && Arrays.equal(actor, mod!), "STORIES: only the admin or the moderator may do this");
     this.requireSigner(actor, "STORIES: moderator has not authorized this");
+  }
+
+  private requireCitation(value: string | null): string {
+    const citation = this.text(value);
+    System.require(citation.length <= MAX_NOTE, "STORIES: a citation must be at most 200 characters");
+    if (citation.length > 0) this.requireText(citation, false);
+    return citation;
   }
 
   private requireNote(value: string | null): string {

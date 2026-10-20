@@ -9,10 +9,15 @@
 
 export const SHINGLE_WORDS = 8;
 export const MIN_SHINGLES = 6;           // parts with fewer kept hashes are too short to judge
-export const DUPLICATE_RATIO = 0.5;      // at least half of a part matches one other part
+export const DUPLICATE_RATIO = 0.8;      // hide: at least 80% of a part matches one other part
+export const DUPLICATE_NOTE_RATIO = 0.5; // note only: half or more matches
 export const PHRASE_WORDS = 12;
-export const WEB_MIN_CHARS = 300;        // only longer parts are checked on the web
-export const WEB_MATCHES_TO_HIDE = 2;    // of 3 phrases
+export const WEB_MIN_CHARS = 400;        // only longer parts are searched outside SwarmTales
+export const PHRASES = 5;                // phrases searched per part
+export const HIDE_FOUND = 4;             // hide: at least 4 of the 5 phrases found...
+export const HIDE_SAME_SOURCE = 3;       // ...and at least 3 of them in the same book or site
+export const NOTE_FOUND = 2;             // note only: 2 or more found
+export const WEB_MATCHES_TO_HIDE = HIDE_FOUND; // kept for older callers
 export const REASON = { COPYRIGHT: 1, DUPLICATE: 2 };
 
 const STOPWORDS = new Set((
@@ -108,11 +113,61 @@ export function isDuplicate(hashes, match) {
   return !!match && hashes.length >= MIN_SHINGLES && match.shared >= MIN_SHINGLES && match.ratio >= DUPLICATE_RATIO;
 }
 
+/** Strong enough for a public note ("much of this also appears in…"), but not to hide? */
+export function isPartialDuplicate(hashes, match) {
+  return !!match && hashes.length >= MIN_SHINGLES && match.shared >= MIN_SHINGLES &&
+    match.ratio >= DUPLICATE_NOTE_RATIO && match.ratio < DUPLICATE_RATIO;
+}
+
+/**
+ * Does the writer's citation name this source? Most of the source's
+ * meaningful words (title, author) must appear in the citation.
+ * source: { title, author } or a website host.
+ */
+export function citationCovers(citation, source) {
+  const have = new Set(words(citation));
+  if (!have.size || !source) return false;
+  if (typeof source === "string") {
+    const host = source.toLowerCase().replace(/^www\./, "");
+    return String(citation).toLowerCase().includes(host) || words(host.split(".")[0]).every((w) => have.has(w));
+  }
+  const title = words(source.title || "").filter((w) => !STOPWORDS.has(w));
+  const author = words(source.author || "").filter((w) => w.length > 2);
+  const titleHits = title.filter((w) => have.has(w)).length;
+  const authorHit = author.some((w) => have.has(w));
+  if (title.length && titleHits / title.length >= 0.6) return true;
+  return authorHit && titleHits >= 1;
+}
+
+/**
+ * What to do with a part, given where each searched phrase was found.
+ * found: one entry per phrase: a source key (book or site) or null.
+ * Returns { action: "hide" | "note" | "none", source, found, same }.
+ *   hide: HIDE_FOUND or more phrases found, HIDE_SAME_SOURCE or more in one source
+ *   note: NOTE_FOUND or more found (shown under the part; nothing is hidden)
+ */
+export function decide(found) {
+  const hits = found.filter(Boolean);
+  const counts = new Map();
+  for (const key of hits) counts.set(key, (counts.get(key) || 0) + 1);
+  let source = null;
+  let same = 0;
+  for (const [key, n] of counts) if (n > same) { source = key; same = n; }
+  if (hits.length >= HIDE_FOUND && same >= HIDE_SAME_SOURCE) return { action: "hide", source, found: hits.length, same };
+  if (hits.length >= NOTE_FOUND) return { action: "note", source, found: hits.length, same };
+  return { action: "none", source, found: hits.length, same };
+}
+
+/** Can more searches still change the outcome? (Saves the free search budget.) */
+export function worthAsking(foundSoFar, asked, total) {
+  return foundSoFar + (total - asked) >= NOTE_FOUND;
+}
+
 /**
  * Up to 3 distinctive phrases of about 12 words, taken from the start,
  * middle and end of a part, in its original spelling, for an exact web search.
  */
-export function pickPhrases(text, count = 3) {
+export function pickPhrases(text, count = PHRASES) {
   const raw = String(text ?? "").replace(/\s+/g, " ").trim().split(" ");
   if (raw.length < PHRASE_WORDS + 4) return [];
   const spots = count === 1 ? [0.5] : Array.from({ length: count }, (_, i) => 0.15 + (0.7 * i) / (count - 1));
@@ -178,7 +233,8 @@ export function normalizeResults(service, body) {
         url: info.infoLink || info.canonicalVolumeLink || ("https://books.google.com/books?id=" + encodeURIComponent(item.id || "")),
         title: info.title || "",
         description: String((item.searchInfo && item.searchInfo.textSnippet) || ""),
-        label: "the book \u201c" + (info.title || "untitled") + "\u201d" + (by ? " by " + by : ""),
+        label: "\u201c" + (info.title || "untitled") + "\u201d" + (by ? " by " + by : ""),
+        source: { title: info.title || "", author: by },
       };
     });
   }

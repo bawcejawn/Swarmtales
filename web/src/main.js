@@ -907,7 +907,17 @@ function renderReader(page, id) {
       append(article, details);
     }
 
-    const listen = createReader(article, active.filter((b) => !b.segment.hidden).map((b) => ({ seq: b.seq, text: b.segment.text || "" })));
+    // Read-aloud items in reading order; each chapter's first part announces it.
+    const listenItems = [];
+    for (const chapter of chapters) {
+      let first = true;
+      for (const b of chapter.blocks) {
+        if (b.segment.hidden || Number(b.segment.status) === 2) continue;
+        listenItems.push({ seq: b.seq, text: b.segment.text || "", announce: first ? "Chapter " + chapter.number + "." : "" });
+        first = false;
+      }
+    }
+    const listen = createReader(article, listenItems);
     ctx.listen = listen;
     append(column, 
       h("div", { class: "chapter-bar" }, [
@@ -986,8 +996,11 @@ function segmentView(block, story, storyId, ctx) {
       : "Removed by the story's editor.";
     body = h("p", { class: "seg-text seg-placeholder" }, [why]);
   } else if (segment.hidden) {
-    body = h("p", { class: "seg-text seg-placeholder" }, [
-      "This part is hidden while it's checked" + (REASON_LABELS[Number(segment.moderation_reason)] ? " (possibly " + REASON_LABELS[Number(segment.moderation_reason)] + ")" : "") + ".",
+    body = h("div", {}, [
+      h("p", { class: "seg-text seg-placeholder" }, [
+        "This part is hidden" + (REASON_LABELS[Number(segment.moderation_reason)] ? " (possibly " + REASON_LABELS[Number(segment.moderation_reason)] + ")" : "") + ".",
+      ]),
+      hiddenHelp(storyId, block.seq, segment, story, ctx),
     ]);
   } else {
     body = h("p", { class: "seg-text" }, [segment.text || ""]);
@@ -1001,6 +1014,10 @@ function segmentView(block, story, storyId, ctx) {
       ]));
     }
     if (segment.ai_assisted) notes.push(h("span", { class: "tag-ai" }, ["Written with AI help"]));
+    if (segment.citation) notes.push(h("span", { class: "source-note" }, ["Source: " + segment.citation]));
+    if (segment.source_note) {
+      notes.push(h("span", { class: "source-note", title: "Added automatically by SwarmTales' copy checker" }, [segment.source_note]));
+    }
   }
   const tools = h("div", { class: "seg-tools" });
   const slot = h("div", { class: "seg-slot" });
@@ -1280,6 +1297,7 @@ function composer(id, story, active, insertAfter, flags) {
     }
   }, 0));
   const chapter = h("input", { type: "checkbox" });
+  const citation = citationField();
   const aiBox = aiToggle();
   const ai = aiBox.input;
   const costText = h("b", {}, ["0 Ink"]);
@@ -1327,6 +1345,7 @@ function composer(id, story, active, insertAfter, flags) {
       h("span", { "aria-live": "polite" }, [splitNote]),
     ]),
     h("label", { class: "check" }, [chapter, "Start a new chapter"]),
+    citation.node,
     aiBox.node,
     rights.node,
     list,
@@ -1416,6 +1435,7 @@ function composer(id, story, active, insertAfter, flags) {
           // Later pieces of a split addition follow the piece before them.
           insert_after: i === 0 ? String(after) : "0",
           after_my_last: i > 0 && after > 0,
+          citation: citation.value(),
         }));
       }
       const sent = await send(ops, status2);
@@ -1568,6 +1588,7 @@ function renderOpen(page) {
   const opening = h("textarea", { rows: "8", spellcheck: "true" });
   const costLine = h("p", { class: "counter" }, ["0 Ink"]);
   const openRights = rightsBox();
+  const openCitation = citationField();
   opening.addEventListener("paste", () => setTimeout(() => {
     const tidy = normalizePasted(opening.value);
     if (tidy !== opening.value) {
@@ -1611,6 +1632,7 @@ function renderOpen(page) {
     field("The first part", opening, "At least " + (Number(minContribution()) || 1) + " characters. Readers see this first."),
     costLine,
     aiBox.node,
+    openCitation.node,
     openRights.node,
     h("details", { class: "more-options" }, [
       h("summary", {}, ["Reading preview and keepsake copies (optional)"]),
@@ -1684,6 +1706,7 @@ function renderOpen(page) {
         rights_confirmed: true,
         terms_version: termsVersion(),
         fund: plan.fund,
+        citation: openCitation.value(),
       });
       const sent = await send([approve, open], status);
       if (sent) {
@@ -2210,26 +2233,43 @@ function sharePanel(id, story, me, flags) {
   const isEditor = !!me && !!(flags && flags.editor);
   const vis = Number(story.visibility);
   const link = siteBase() + "#/stories/" + id;
+  const isPrivate = vis !== 1;
+  const canManage = (isOpener || isEditor) && Number(story.status) < 4;
   const panel = h("section", { class: "card share-panel", "aria-labelledby": "share-title" }, [
     h("h2", { class: "aside-title", id: "share-title" }, [isOpener ? "Share & invite" : "Share"]),
-    h("p", { class: "body-2 small" }, [VISIBILITY_HELP[vis] || ""]),
-    h("p", { class: "mono small share-link" }, [link]),
-    h("div", { class: "row" }, [copyButton(link)]),
+    h("p", { class: "body-2 small" }, [isPrivate
+      ? "Private: only people you invite can write. Anyone with the reading link can read."
+      : "Public: listed in Discover. Anyone can read, and anyone with a Writer month can write."]),
   ]);
   if (/[?&]new=1/.test(location.hash) && isOpener) {
     panel.prepend(notice("ok", h("p", {}, ["Your story is open. It's saved under ", h("a", { href: "#/mine" }, ["My stories"]), "."])));
   }
-  if (!(isOpener || isEditor) || Number(story.status) >= 4) return panel;
+  // One tidy block per job. The first one the opener needs is open.
+  const tool = (title, what, body, open) => h("details", { class: "share-tool", open: open ? true : null }, [
+    h("summary", {}, [h("b", {}, [title]), h("span", { class: "meta small" }, [what])]),
+    h("div", { class: "share-tool-body" }, body),
+  ]);
+  const readingTool = tool(
+    isPrivate ? "Share for reading" : "Share the story",
+    isPrivate ? "A link to read the story. It does not let anyone write." : "Anyone with this link can read it, and write with a Writer month.",
+    [
+      h("p", { class: "mono small share-link" }, [link]),
+      h("div", { class: "row" }, [copyButton(link, isPrivate ? "Copy reading link" : "Copy link")]),
+    ],
+    !(isPrivate && isOpener && canManage)
+  );
+  if (!canManage) {
+    append(panel, readingTool);
+    return panel;
+  }
 
-  if (vis !== 1 && isOpener) append(panel, poolSection(id, story, me), giftSection(me));
-
-  if (vis !== 1 && isOpener) {
+  if (isPrivate && isOpener) {
     const uses = h("input", { type: "number", min: "1", max: "1000", value: "5", inputmode: "numeric" });
     const days = h("input", { type: "number", min: "1", max: "365", value: "14", inputmode: "numeric" });
     const out = h("div");
     const status = statusBox();
     const make = h("button", { type: "submit", class: "btn btn-primary btn-small" }, ["Create invite link"]);
-    append(panel, h("form", { class: "invite-form", onSubmit: async (event) => {
+    append(panel, tool("Invite writers", "A link that lets people join and write. Send it privately.", [h("form", { class: "invite-form", onSubmit: async (event) => {
       event.preventDefault();
       make.disabled = true;
       replace(out);
@@ -2263,13 +2303,18 @@ function sharePanel(id, story, me, flags) {
         make.disabled = false;
       }
     } }, [
-      h("h3", { class: "h3" }, ["Invite writers"]),
-      h("p", { class: "meta small" }, ["Each person who opens the link joins with one confirmation. Their parts are paid from the writers' pool while it has enough Ink; after that they use their own."]),
+      h("p", { class: "meta small" }, ["Each person who opens the link joins with one confirmation. Their parts are paid from the writers' pool while it has enough Ink. They also need a Writer month (see below)."]),
       h("div", { class: "form-grid" }, [field("People", uses), field("Days it works", days)]),
       h("div", { class: "actions" }, [make]),
       status,
       out,
-    ]));
+    ])], true));
+  }
+  append(panel, readingTool);
+  if (isPrivate && isOpener) {
+    append(panel,
+      tool("Writers' pool", num(story.fund || 0) + " Ink left. Pays for your writers' parts.", [poolSection(id, story, me)]),
+      tool("Pay for a Writer month", "Invited writers need one. You can pay for theirs.", [giftSection(me)]));
   }
 
   if (isOpener) {
@@ -2285,8 +2330,7 @@ function sharePanel(id, story, me, flags) {
         failure(status, error);
       }
     };
-    append(panel, h("div", { class: "editor-form" }, [
-      h("h3", { class: "h3" }, ["Editors"]),
+    append(panel, tool("Editors", "People who can fix and remove parts, like you.", [h("div", { class: "editor-form" }, [
       h("p", { class: "meta small" }, [vis === 1
         ? "Editors can fix and remove parts like you can, and write without a Writer month. They use their own Ink. Up to 10."
         : "Editors can fix and remove parts like you can. In this story they write like invited writers: from the pool, with a Writer month. Up to 10."]),
@@ -2296,7 +2340,7 @@ function sharePanel(id, story, me, flags) {
         h("button", { type: "button", class: "text-button", onClick: act(false) }, ["Remove editor"]),
       ]),
       status,
-    ]));
+    ])]));
   }
   return panel;
 }
@@ -2312,6 +2356,66 @@ function canWriteInvited(story, me, flags) {
   if (!(flags && (flags.editor || flags.allowed))) return false;
   if (!state.account) return true;
   return isActiveWriter(state.account.membership, state.account.now);
+}
+
+/**
+ * Under a hidden part: the writer can name the source (a matching citation
+ * brings the part back automatically within the hour), and the opener or an
+ * editor can restore it.
+ */
+function hiddenHelp(storyId, seq, segment, story, ctx) {
+  const me = currentAddress();
+  if (!me || !ctx) return null;
+  const isAuthor = segment.author === me;
+  const canRestore = !!ctx.canEdit;
+  if (!isAuthor && !canRestore) return null;
+  const status = statusBox();
+  const box = h("div", { class: "hidden-help" });
+  if (isAuthor) {
+    const input = h("input", { type: "text", maxlength: "200", placeholder: "e.g. \u201cPride and Prejudice\u201d, Jane Austen", value: segment.citation || "" });
+    append(box,
+      h("p", { class: "meta small" }, [
+        "This is your part. If it quotes a book or website, name the source. When it matches what the checker found, the part comes back by itself within about an hour.",
+      ]),
+      field("Source", input),
+      h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: async () => {
+        try {
+          const op = await encode("stories", "set_citation", { account: me, story_id: String(storyId), seq: String(seq), citation: input.value.trim() });
+          if (await send([op], status)) renderPage();
+        } catch (error) {
+          failure(status, error);
+        }
+      } }, ["Save the source"]));
+  }
+  if (canRestore) {
+    append(box,
+      h("p", { class: "meta small" }, [
+        "As the story's " + (story.opener === me ? "opener" : "editor") + ", you can bring this part back if you're satisfied it's fine. The copy checker won't hide it again.",
+      ]),
+      h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: async () => {
+        try {
+          const op = await encode("stories", "restore_segment", { actor: me, story_id: String(storyId), seq: String(seq), note: "" });
+          if (await send([op], status)) renderPage();
+        } catch (error) {
+          failure(status, error);
+        }
+      } }, ["Restore this part"]));
+  }
+  append(box, status);
+  return box;
+}
+
+/** "Quoting someone?": an optional source shown under the part. Cited quotes are left alone by the copy checker. */
+function citationField() {
+  const input = h("input", { type: "text", maxlength: "200", placeholder: "e.g. \u201cPride and Prejudice\u201d, Jane Austen" });
+  const node = h("details", { class: "more-options citation-box" }, [
+    h("summary", {}, ["Quoting someone? Name the source (optional)"]),
+    h("p", { class: "meta small" }, [
+      "If your part quotes a book, poem, song or website, name it here. Readers see it under your part as \u201cSource: \u2026\u201d, and the copy checker leaves quotes from a named source alone. Keep quotes short; whole pages copied from someone else's work still aren't allowed.",
+    ]),
+    field("Source", input),
+  ]);
+  return { node, value: () => input.value.trim() };
 }
 
 /** The opener's writers' pool: balance and top-up. */
@@ -2340,7 +2444,6 @@ function poolSection(id, story, me) {
       add.disabled = false;
     }
   } }, [
-    h("h3", { class: "h3" }, ["Writers' pool"]),
     h("p", { class: "body-2" }, [h("b", {}, [num(story.fund || 0) + " Ink left"]), " of " + num(story.fund_added || 0) + " you've put in."]),
     h("p", { class: "meta small" }, [
       "Parts in this story are paid from the pool while it has enough Ink for them; after that, writers pay with their own Ink. " +
@@ -2387,7 +2490,6 @@ function giftSection(me) {
       give.disabled = false;
     }
   } }, [
-    h("h3", { class: "h3" }, ["Give a Writer month"]),
     h("p", { class: "meta small" }, [
       "Invited writers need an active Writer month to write here. You can pay for theirs: " + tokenAmount(price) +
         " from your wallet. The month and its Ink go to them. This is optional; they can also buy their own.",
@@ -2407,6 +2509,7 @@ function writingHelp() {
       h("li", {}, [h("b", {}, ["Add in the middle."]), " Click “+ Add text here” under any part. Your text appears directly below that part, before what came next. Anyone who can write here can do this."]),
       h("li", {}, [h("b", {}, ["Edit."]), " Only the story's opener and editors can edit, and only lightly: fix typos, tidy a sentence. A part can grow by about 10% at most. Shortening returns Ink to the writer. The part stays credited to its writer and shows “Edited by”."]),
       h("li", {}, [h("b", {}, ["Remove."]), " Opener and editors can remove a part. The writer gets their Ink back, unless the part was hidden as possible copying."]),
+      h("li", {}, [h("b", {}, ["Quoting someone?"]), " Open \u201cQuoting someone? Name the source\u201d and write the book or site. It shows under your part, and the copy checker leaves named quotes alone."]),
       h("li", {}, [h("b", {}, ["Want to change someone else's part?"]), " Add your own text after it instead, or ask the opener. Bigger rewrites happen in the final edit, once the story is full."]),
       h("li", {}, [h("b", {}, ["Ink."]), " 1 Ink per letter. In public stories every writer pays for their own words. In private stories the opener's writers' pool pays while it has enough. Long text is split into parts automatically."]),
     ]),

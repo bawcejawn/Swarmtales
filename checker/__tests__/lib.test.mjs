@@ -82,7 +82,8 @@ test("search answers from each service become the same shape", async () => {
       searchInfo: { textSnippet: "&quot;...<b>the lighthouse keeper counted every wave that broke against the northern rocks</b>, and..." } }],
   });
   assert.equal(books.length, 1);
-  assert.equal(books[0].label, "the book “Sea Stories” by A. Writer");
+  assert.equal(books[0].label, "“Sea Stories” by A. Writer");
+  assert.deepEqual(books[0].source, { title: "Sea Stories", author: "A. Writer" });
   assert.equal(resultMatches(phrase, books[0], []), true);
   const tavily = normalizeResults("tavily", { results: [{ url: "https://example.com/a", title: "A page", content: "Once the lighthouse keeper counted every wave that broke against the northern rocks." }] });
   assert.equal(resultMatches(phrase, tavily[0], []), true);
@@ -102,4 +103,43 @@ test("each search service keeps its own monthly budget", () => {
   assert.equal(books.left(), 1);
   assert.equal(tavily.left(), 0);
   assert.equal(budget(state, now, 1800).left(), 1800); // the original Brave budget is untouched
+});
+
+test("decide: hide only on strong matches from one source, otherwise a note or nothing", async () => {
+  const { decide } = await import("../lib.mjs");
+  assert.equal(decide(["A", "A", "A", "A", null]).action, "hide");
+  assert.equal(decide(["A", "A", "A", "B", "B"]).action, "hide");
+  // Found 4 times, but spread over different books: common wording, so only a note.
+  assert.equal(decide(["A", "B", "C", "D", null]).action, "note");
+  assert.equal(decide(["A", "A", null, null, null]).action, "note");
+  assert.equal(decide(["A", null, null, null, null]).action, "none");
+  assert.equal(decide([null, null, null]).action, "none");
+  assert.equal(decide(["A", "A", "A", "A", null]).source, "A");
+});
+
+test("a writer's citation covers the book it names", async () => {
+  const { citationCovers } = await import("../lib.mjs");
+  const book = { title: "Pride and Prejudice", author: "Jane Austen" };
+  assert.equal(citationCovers("Pride and Prejudice, Jane Austen", book), true);
+  assert.equal(citationCovers("quoting Austen's Pride & Prejudice", book), true);
+  assert.equal(citationCovers("Austen", book), false);
+  assert.equal(citationCovers("Emma by Jane Austen", book), false);
+  assert.equal(citationCovers("", book), false);
+  assert.equal(citationCovers("from example.com", "www.example.com"), true);
+  assert.equal(citationCovers("from my blog", "www.example.com"), false);
+});
+
+test("worthAsking stops searching when a note can no longer be reached", async () => {
+  const { worthAsking } = await import("../lib.mjs");
+  assert.equal(worthAsking(0, 3, 5), true);
+  assert.equal(worthAsking(0, 4, 5), false);
+  assert.equal(worthAsking(1, 4, 5), true);
+});
+
+test("a half-matching part gets a note, not a hide", async () => {
+  const { isPartialDuplicate } = await import("../lib.mjs");
+  const hashes = new Array(20).fill(0).map((_, i) => i);
+  assert.equal(isPartialDuplicate(hashes, { key: "1:2", shared: 12, ratio: 0.6 }), true);
+  assert.equal(isPartialDuplicate(hashes, { key: "1:2", shared: 18, ratio: 0.9 }), false);
+  assert.equal(isPartialDuplicate(hashes, { key: "1:2", shared: 6, ratio: 0.3 }), false);
 });

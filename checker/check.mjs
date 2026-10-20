@@ -9,8 +9,17 @@
  *        GOOGLE_BOOKS_KEY  Google Books: searches inside millions of books
  *        TAVILY_API_KEY    Tavily web search (free: 1,000 searches a month)
  *        BRAVE_API_KEY     Brave web search (Brave now needs a card; kept for anyone who has a key)
- *   4. hides a part on a high-confidence match, signing with the MODERATOR key,
- *      which can only hide and unhide. Every hide is a public event with a note.
+ *   4. acts gently, by itself (no one has to review anything):
+ *        - a clear copy is hidden: 4 or more of 5 phrases found, 3 or more in
+ *          the same book or site; or 80%+ of the part matches another
+ *          writer's part on SwarmTales;
+ *        - a partial match is NOT hidden: it gets a public source note under
+ *          the part ("Parts of this text also appear in …");
+ *        - a match with a source the writer cited is left alone;
+ *        - a part the story's opener restored is never hidden again by the
+ *          checker (it can still get a note).
+ *      Signed with the MODERATOR key, which can only hide, unhide and add
+ *      notes. Every action is a public event with a note.
  *   5. when a story fills up or enters its final edit, checks all of it once
  *      more against everything else, before it can be finished.
  *
@@ -32,7 +41,10 @@
  */
 import fs from "fs";
 import { createRequire } from "module";
-import { Index, REASON, WEB_MATCHES_TO_HIDE, WEB_MIN_CHARS, budget, fingerprint, isDuplicate, normalizeResults, pickPhrases, resultMatches } from "./lib.mjs";
+import {
+  HIDE_FOUND, Index, REASON, WEB_MIN_CHARS, budget, citationCovers, decide, fingerprint, isDuplicate, isPartialDuplicate,
+  normalizeResults, pickPhrases, resultMatches, worthAsking,
+} from "./lib.mjs";
 
 const require = createRequire(new URL("../web/package.json", import.meta.url));
 const { Contract, Provider, Signer, Transaction } = require("koilib");
@@ -73,7 +85,7 @@ function writeSummary(actions) {
   const file = env.GITHUB_STEP_SUMMARY;
   if (!file) return;
   const rows = actions.length
-    ? actions.map((a) => `| ${a.story} | ${a.seq} | ${a.reason === REASON.COPYRIGHT ? "web match" : "duplicate"} | ${a.note} | ${a.sent ? "hidden" : "would hide"} |`).join("\n")
+    ? actions.map((a) => `| ${a.story} | ${a.seq} | ${a.kind === "note" ? "source note" : a.kind === "unhide" ? "brought back" : a.reason === REASON.COPYRIGHT ? "copied text" : "duplicate"} | ${a.note} | ${a.kind === "note" ? (a.sent ? "noted" : "would note") : a.kind === "unhide" ? (a.sent ? "unhidden" : "would unhide") : a.sent ? "hidden" : "would hide"} |`).join("\n")
     : "| | | | nothing to hide | |";
   fs.appendFileSync(file, "## SwarmTales copy checker\n\n| story | part | why | note | action |\n|---|---|---|---|---|\n" + rows + "\n\n```\n" + log.join("\n") + "\n```\n");
 }
@@ -172,33 +184,49 @@ async function searchOnce(service, phrase) {
  * A phrase counts as found when any service finds it. Books are asked first
  * (the free quota is large and copied book text is the main risk), then the web.
  */
-async function webCheck(text, spendable) {
+/**
+ * Search up to five phrases of a part. Returns null (nothing worth noting),
+ * "defer" (not enough free searches left this run: try next run), or
+ * { action: "hide" | "note", found, same, label, cited }.
+ */
+async function webCheck(text, spendable, citation) {
   const phrases = pickPhrases(text);
-  if (phrases.length < WEB_MATCHES_TO_HIDE) return null;
-  let matched = 0;
-  let where = "";
-  for (const phrase of phrases) {
+  if (phrases.length < HIDE_FOUND) return null;
+  if (spendable.leftThisRun() < phrases.length) return "defer";
+  const found = [];
+  const labels = new Map();
+  for (let i = 0; i < phrases.length; i++) {
+    if (!worthAsking(found.filter(Boolean).length, i, phrases.length)) break;
     let hit = null;
     for (const service of spendable.services()) {
       if (!spendable.ok(service)) continue;
       spendable.spend(service);
-      const found = await searchOnce(service, phrase);
-      if (found === "failed") {
+      const result = await searchOnce(service, phrases[i]);
+      if (result === "failed") {
         spendable.disable(service);
         continue;
       }
-      if (found) {
-        hit = found;
+      if (result) {
+        hit = result;
         break;
       }
     }
     if (hit) {
-      matched += 1;
-      if (!where) where = hit.label || new URL(hit.url).host;
+      let host = "";
+      try { host = new URL(hit.url).host; } catch { host = hit.url || "a website"; }
+      const key = hit.source ? (hit.source.title + "|" + hit.source.author).toLowerCase() : host.toLowerCase();
+      if (!labels.has(key)) labels.set(key, { label: hit.label || host, source: hit.source || host });
+      found.push(key);
+    } else {
+      found.push(null);
     }
     if (!spendable.any()) break;
   }
-  return matched >= WEB_MATCHES_TO_HIDE ? { matched, of: phrases.length, where } : null;
+  const d = decide(found);
+  if (d.action === "none") return null;
+  const where = labels.get(d.source);
+  const cited = !!where && citationCovers(citation || "", where.source);
+  return { action: d.action, found: d.found, same: d.same, of: phrases.length, label: where ? where.label : "", source: where ? where.source : null, cited };
 }
 
 async function testPhrase(phrase) {
@@ -260,6 +288,8 @@ async function main() {
   const spendable = {
     services: () => SERVICES.filter((s) => s.key() && !disabled.has(s.name)),
     ok: (s) => searchesThisRun < PER_RUN && budgets[s.name].left() > 0,
+    leftThisRun: () => Math.min(PER_RUN - searchesThisRun,
+      spendable.services().reduce((sum, s) => sum + budgets[s.name].left(), 0)),
     any: () => spendable.services().some((s) => spendable.ok(s)),
     spend: (s) => { searchesThisRun += 1; budgets[s.name].spend(); },
     disable: (s) => disabled.add(s.name),
@@ -268,49 +298,109 @@ async function main() {
   note(searchKeys.length ? "Phrase search with: " + searchKeys.join(", ") + "." : "No search key set: only SwarmTales' own text is compared.");
   const actions = [];
 
-  async function hide(storyId, seq, reason, why) {
-    const action = { story: storyId, seq, reason, note: why.slice(0, 200), sent: false };
-    actions.push(action);
-    note("  HIDE story " + storyId + " part " + seq + ": " + action.note);
-    if (!signer) return;
+  state.noted = state.noted || {};
+  state.hiddenByChecker = state.hiddenByChecker || {};
+
+  /** Sign one Stories call with the moderator key (at most 0.5 mana; a hide uses about 0.05). */
+  async function sendAsModerator(name, args) {
+    if (!signer) return false;
     const mana = BigInt(await provider.getAccountRc(signer.getAddress()));
     if (mana === 0n) {
       note("  the moderator wallet has no mana; send it a little KOIN (it is never spent)");
-      return;
+      return false;
     }
-    const limit = mana < 500000000n ? mana : 500000000n; // at most 5 mana
+    const limit = mana < 50000000n ? mana : 50000000n;
     const tx = new Transaction({ signer, provider, options: { payer: signer.getAddress(), rcLimit: limit.toString() } });
-    await tx.pushOperation(await stories.encodeOperation({
-      name: "set_segment_hidden",
-      args: { actor: signer.getAddress(), story_id: String(storyId), seq: String(seq), hidden: true, reason, note: action.note },
-    }));
+    await tx.pushOperation(await stories.encodeOperation({ name, args: { actor: signer.getAddress(), ...args } }));
     await tx.prepare();
     await tx.sign();
     const receipt = await tx.send();
     await tx.wait();
-    if (receipt && receipt.reverted) note("  the chain refused: " + (receipt.logs || []).join(" "));
-    else action.sent = true;
-  }
-
-  async function checkPart(storyId, seq, seg, alsoWeb) {
-    const key = storyId + ":" + seq;
-    const hashes = fingerprint(seg.text);
-    const match = index.bestMatch(hashes, seg.author, key);
-    if (isDuplicate(hashes, match)) {
-      const [srcStory, srcSeq] = match.key.split(":");
-      await hide(storyId, seq, REASON.DUPLICATE, "matches story " + srcStory + " part " + srcSeq + " (" + Math.round(match.ratio * 100) + "% of its text)");
+    if (receipt && receipt.reverted) {
+      note("  the chain refused: " + (receipt.logs || []).join(" "));
       return false;
-    }
-    if (alsoWeb && String(seg.text).length >= WEB_MIN_CHARS && spendable.any()) {
-      const web = await webCheck(seg.text, spendable);
-      if (web) {
-        await hide(storyId, seq, REASON.COPYRIGHT, "copy match: " + web.matched + " of " + web.of + " phrases found, e.g. in " + web.where);
-        return false;
-      }
     }
     return true;
   }
 
+  async function hide(storyId, seq, reason, why) {
+    const action = { story: storyId, seq, reason, kind: "hide", note: why.slice(0, 200), sent: false };
+    actions.push(action);
+    note("  HIDE story " + storyId + " part " + seq + ": " + action.note);
+    action.sent = await sendAsModerator("set_segment_hidden", {
+      story_id: String(storyId), seq: String(seq), hidden: true, reason, note: action.note,
+    });
+  }
+
+  /** A public note under the part. Nothing is hidden. Added once per part. */
+  async function sourceNote(storyId, seq, seg, text) {
+    const key = storyId + ":" + seq;
+    if (state.noted[key] || (seg.source_note && seg.source_note.length)) return;
+    const action = { story: storyId, seq, reason: 0, kind: "note", note: text.slice(0, 200), sent: false };
+    actions.push(action);
+    note("  NOTE story " + storyId + " part " + seq + ": " + action.note);
+    action.sent = await sendAsModerator("set_source_note", { story_id: String(storyId), seq: String(seq), note: action.note });
+    if (action.sent || !signer) state.noted[key] = true;
+  }
+
+  /** Returns "clean", "flagged" or "defer" (search budget used up: try next run). */
+  async function checkPart(storyId, seq, seg, alsoWeb) {
+    const key = storyId + ":" + seq;
+    const hashes = fingerprint(seg.text);
+    const match = index.bestMatch(hashes, seg.author, key);
+    if (match && (isDuplicate(hashes, match) || isPartialDuplicate(hashes, match))) {
+      const [srcStory, srcSeq] = match.key.split(":");
+      const pct = Math.round(match.ratio * 100);
+      if (isDuplicate(hashes, match) && !seg.restored) {
+        await hide(storyId, seq, REASON.DUPLICATE, pct + "% of this part matches story " + srcStory + ", part " + srcSeq + ", by another writer");
+        return "flagged";
+      }
+      await sourceNote(storyId, seq, seg, "About " + pct + "% of this text also appears in story " + srcStory + ", part " + srcSeq + ".");
+      return "flagged";
+    }
+    if (alsoWeb && String(seg.text).length >= WEB_MIN_CHARS && spendable.any()) {
+      const web = await webCheck(seg.text, spendable, seg.citation);
+      if (web === "defer") return "defer";
+      if (web && web.cited) return "clean"; // the writer named this source
+      if (web && web.action === "hide" && !seg.restored) {
+        await hide(storyId, seq, REASON.COPYRIGHT, "copied text: " + web.found + " of " + web.of + " phrases found, " + web.same + " of them in " + web.label);
+        // Remembered so the part comes back by itself if its writer names this source.
+        state.hiddenByChecker[key] = { source: web.source, label: web.label };
+        return "flagged";
+      }
+      if (web) {
+        await sourceNote(storyId, seq, seg, "Parts of this text also appear in " + web.label + ".");
+        return "flagged";
+      }
+    }
+    return "clean";
+  }
+
+  // Parts the checker hid: bring one back when its writer has named the source,
+  // and forget the ones the opener restored.
+  for (const key of Object.keys(state.hiddenByChecker)) {
+    try {
+      const [sid, sq] = key.split(":");
+      const seg = await read("get_segment", { story_id: sid, seq: sq });
+      const entry = state.hiddenByChecker[key];
+      if (!seg.hidden || Number(seg.status) !== 1) {
+        delete state.hiddenByChecker[key];
+        continue;
+      }
+      if (seg.citation && citationCovers(seg.citation, entry.source)) {
+        note("  UNHIDE story " + sid + " part " + sq + ": the writer named the source (" + seg.citation.slice(0, 80) + ")");
+        const ok = await sendAsModerator("set_segment_hidden", {
+          story_id: sid, seq: sq, hidden: false, reason: 0, note: "source cited by the writer",
+        });
+        actions.push({ story: sid, seq: sq, reason: REASON.COPYRIGHT, kind: "unhide", note: "source cited by the writer", sent: ok });
+        if (ok || !signer) delete state.hiddenByChecker[key];
+      }
+    } catch (error) {
+      note("  could not re-check " + key + ": " + (error && error.message ? error.message : String(error)));
+    }
+  }
+
+  let outOfSearches = false;
   const next = Number(cfg.next_story_id || 1);
   for (let id = 1; id < next; id++) {
     try {
@@ -319,17 +409,27 @@ async function main() {
       if (!status) continue;
       const count = Number(st.segment_count || 0);
       const done = Number(state.checked[id] || 0);
-      for (let start = done + 1; start <= count; start += 10) {
+      let deferred = false;
+      for (let start = done + 1; start <= count && !deferred && !outOfSearches; start += 10) {
         const page = await read("get_segments", { story_id: String(id), start: String(start), limit: 10 });
         const values = page.values || [];
         for (let i = 0; i < values.length; i++) {
           const seq = start + i;
           const seg = values[i];
-          if (Number(seg.status) !== 1 || seg.hidden || !seg.text) continue;
-          const clean = await checkPart(id, seq, seg, true);
-          if (clean) index.add(id + ":" + seq, seg.author, fingerprint(seg.text));
+          if (Number(seg.status) !== 1 || seg.hidden || !seg.text) {
+            state.checked[id] = seq;
+            continue;
+          }
+          const result = await checkPart(id, seq, seg, true);
+          if (result === "defer") {
+            // Out of free searches for this run: this part waits for the next run.
+            deferred = true;
+            outOfSearches = true;
+            break;
+          }
+          if (result === "clean" || seg.restored) index.add(id + ":" + seq, seg.author, fingerprint(seg.text));
+          state.checked[id] = seq;
         }
-        state.checked[id] = Math.min(count, start + values.length - 1);
       }
       // Before a story can be finished: one more full comparison, once.
       if ((status === 2 || status === 3) && !state.swept[id]) {
@@ -350,7 +450,7 @@ async function main() {
   }
 
   saveState(state, index);
-  note("Done. " + actions.length + " part(s) flagged. Searches this run: " + searchesThisRun + "." +
+  note("Done. Hidden: " + actions.filter((a) => a.kind === "hide").length + ". Source notes: " + actions.filter((a) => a.kind === "note").length + ". Searches this run: " + searchesThisRun + "." +
     SERVICES.filter((s) => s.key()).map((s) => " " + s.label + " left this month: " + budgets[s.name].left() + ".").join(""));
   writeSummary(actions);
 }
