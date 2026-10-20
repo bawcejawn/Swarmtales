@@ -37,13 +37,16 @@ export const ACTIVE = "testnet";
 
 /**
  * The security-fixed contracts, deployed fresh to the Foundation testnet on
- * 19 October 2026 (rehearsal in docs/TESTNET_REHEARSAL.md). The older,
- * pre-fix copies (195trf…, 1Jfgg…, 1JHak…) are no longer used by this site.
+ * 19 October 2026 (rehearsal in docs/TESTNET_REHEARSAL.md). Stories was
+ * replaced on 20 October 2026 with the moderation release
+ * (docs/TESTNET_UPGRADE_MODERATION.md); the previous Stories (15YAvN…) is
+ * retired and has no Ink rights. The older, pre-fix copies (195trf…, 1Jfgg…,
+ * 1JHak…) are no longer used by this site.
  */
 export const TESTNET_ADDRESSES = {
   ink: "1EbuyYK1kso7GbZamHCU2LRhXaEyePkXpf",
   shop: "14zbNPeH6Janw4gneuEhieXVmaQBsk8WDD",
-  stories: "15YAvNkBACg7PpiEkCYVN95fnajbp1EkwZ",
+  stories: "1MJz8k1jSgbf1QU9Zdyfip1M7nuXJP3eCZ",
   treasury: "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6",
   paymentToken: "1FaSvLjQJsCJKq5ybmGsMMQs8RQYyVv8ju",
 };

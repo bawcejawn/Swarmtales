@@ -1968,8 +1968,13 @@ function renderTerms(page) {
       return res.text();
     })
     .then(async (text) => {
-      const local = await sha256Hex(text).catch(() => "");
+      // The same text can arrive with Unix or Windows line endings (Git
+      // converts them on Windows), so either form counts as a match.
+      const unix = text.replace(/\r\n/g, "\n");
+      const forms = [text, unix, unix.replace(/\n/g, "\r\n")];
+      const hashes = await Promise.all(forms.map((t) => sha256Hex(t).catch(() => "")));
       const onChain = chainTermsHashHex();
+      const local = hashes.includes(onChain) ? onChain : hashes[1];
       let check;
       if (!onChain) {
         check = notice("info", h("p", {}, ["These terms are not yet published on the blockchain. Once they are, this page checks that the text matches the published fingerprint."]));

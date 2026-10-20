@@ -933,7 +933,10 @@ async function cmdSetTerms(args) {
   if (!f.file || !fs.existsSync(String(f.file))) lib.fail("--file must point to the Terms of Use text you are publishing.");
   const uri = String(f.uri || "");
   if (!/^[\x21-\x7e]{1,200}$/.test(uri)) lib.fail("--uri must be the link where the terms are published (1 to 200 plain characters).");
-  const hash = lib.sha256(fs.readFileSync(String(f.file)));
+  // Fingerprint the text with Unix line endings, whatever computer this runs
+  // on, so it matches the file the website serves.
+  const text = fs.readFileSync(String(f.file), "utf8").replace(/\r\n/g, "\n");
+  const hash = lib.sha256(Buffer.from(text, "utf8"));
   const { net, provider } = await connect(f);
   const cfg = await readOnly(provider, "stories", stories, "get_config");
   if (version <= Number(cfg.terms_version || 0)) lib.fail("The chain is already at version " + cfg.terms_version + ". Use a higher number.");
