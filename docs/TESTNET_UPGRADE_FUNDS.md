@@ -15,16 +15,17 @@ website talks to the new contract code.
 
 ## What changes
 
-- **Unlisted and private stories are invite-only.** Only the opener, editors, and invited
-  wallets can write in them.
-- **Writers' pool.** Opening an unlisted or private story requires Ink for the pool: at
+- **"Unlisted" and "Private" are merged into one option: Private.** A private story isn't
+  listed in Discover, and only the opener, editors, and invited wallets can write in it. Your
+  existing unlisted story 2 now shows as Private and works the same way.
+- **Writers' pool.** Opening a private story requires Ink for the pool: at
   least 10,000 for a short story, or 100,000 for a book. While the pool has enough Ink,
   everyone's parts are paid from it. After that, writers pay with their own Ink.
   - The opener can add more Ink to the pool at any time.
   - Refunds for shortened or removed parts go back into the pool.
   - Whatever is left returns to the opener when the story is finished or archived.
 - **Writer month.** Everyone except the opener needs an active Writer month to write in an
-  unlisted or private story. Editors need one too, and trials don't count. The opener can
+  private story. Editors need one too, and trials don't count. The opener can
   pay for someone's month from the story's Share & invite panel: the month and its Ink go
   to that person.
 - **No fixed length.** New stories can be closed once they reach 10,000 characters (a book:
@@ -36,7 +37,7 @@ website talks to the new contract code.
 - **"edited" note.** It's now a small "edited" link under the part. Tap it to see who
   edited the part and when.
 
-**Your existing stories 2 (unlisted) and 3 (private) have no pool.** They become invite-only,
+**Your existing stories 2 and 3 have no pool.** They become invite-only,
 and writers pay with their own Ink until you add Ink to the pool on the story's page.
 
 ---
@@ -172,7 +173,7 @@ site updates on its own in about two minutes.
    - **Writers' pool:** shows the Ink left. Add some with **Add to the pool**.
    - **Give a Writer month:** paste a second wallet's address and click
      **Pay for their Writer month**. Its month and Ink go to that wallet.
-   - **Invite writers:** this now works for unlisted stories too.
+   - **Invite writers:** create an invite link for the people you want to write with.
 3. **Write as an invited wallet.** The writing box says "Paid from the writers' pool". After
    you sign, that wallet's own Ink balance doesn't change, and the pool goes down.
 4. **Progress:** the bar now reads, for example, "182 characters · 9,818 more until it can be

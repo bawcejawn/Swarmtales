@@ -81,7 +81,7 @@ export function assessWrite(input) {
   }
   const privileged = !!input.privileged;
   const visibility = Number(input.visibility || 0);
-  // Unlisted and private stories are invite-only, and paid from the
+  // Private stories (and older "unlisted" ones, which work the same way) are invite-only, and paid from the
   // writers' pool while it has enough.
   const inviteOnly = visibility === VIS_PRIVATE || visibility === VIS_UNLISTED;
   const fund = whole(input.fund, "writers' pool", 0n);
@@ -95,7 +95,7 @@ export function assessWrite(input) {
     problems.push("Only people the opener invites can write in this story. Ask the opener for an invite link.");
   }
   if (inviteOnly && !input.isOpener && !input.writerActive) {
-    problems.push("An active Writer month is needed to write in an unlisted or private story. The opener can give you one, or you can buy one on the Membership page.");
+    problems.push("An active Writer month is needed to write in a private story. The opener can give you one, or you can buy one on the Membership page.");
   }
 
   let usesTrial = false;
@@ -170,7 +170,7 @@ export function assessOpen(input) {
 
   const visibility = Number(input.visibility || 0);
   if (visibility !== VIS_PUBLIC && visibility !== VIS_UNLISTED && visibility !== VIS_PRIVATE) {
-    problems.push("Pick Public, Unlisted, or Private.");
+    problems.push("Pick Public or Private.");
   }
 
   const free = Number(input.freeChapters);
@@ -200,7 +200,7 @@ export function assessOpen(input) {
     problems.push("The writers' pool must be a whole number of Ink.");
   }
   if (inviteOnly && fund < BigInt(lo)) {
-    problems.push("An unlisted or private " + (isBook ? "book" : "short story") + " needs a writers' pool of at least " +
+    problems.push("A private " + (isBook ? "book" : "short story") + " needs a writers' pool of at least " +
       lo.toLocaleString("en-US") + " Ink, enough for the story to reach the length where it can be finished.");
   }
 

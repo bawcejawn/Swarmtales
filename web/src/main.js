@@ -796,7 +796,7 @@ function renderReader(page, id) {
       storyId: id,
       story,
       canEdit: storyOpen && !!me && (story.opener === me || flags.editor),
-      // Unlisted and private stories: only the opener, editors and invited writers.
+      // Private stories: only the opener, editors and invited writers.
       canAdd: storyOpen && (!inviteOnly(story) || (!!me && (story.opener === me || flags.editor || flags.allowed))),
       flags,
       lastSeq: active.length ? active[active.length - 1].seq : 0,
@@ -1512,7 +1512,6 @@ function renderOpen(page) {
   const cat2 = h("select", {}, [h("option", { value: "0" }, ["None"]), ...categories.map((item) => h("option", { value: String(item.id) }, [item.name]))]);
   const visibility = h("select", {}, [
     h("option", { value: "1" }, ["Public: listed, anyone can write"]),
-    h("option", { value: "2" }, ["Unlisted: not listed, invited writers only"]),
     h("option", { value: "3" }, ["Private: not listed, invited writers only"]),
   ]);
   const free = h("select", {}, [
@@ -1527,7 +1526,7 @@ function renderOpen(page) {
   const pool = h("input", { type: "number", min: String(kindInfo.min), value: String(kindInfo.min), step: "1000", inputmode: "numeric" });
   const poolNote = h("p", { class: "meta" });
   const poolField = field("Writers' pool (Ink)", pool,
-    "Unlisted and private stories are invite-only. You set Ink aside for the writers you invite: their parts are paid from this pool, " +
+    "Private stories are invite-only. You set Ink aside for the writers you invite: their parts are paid from this pool, " +
       "so they don't spend their own Ink while it lasts. At least " + num(kindInfo.min) + " Ink, enough for the story to reach the length where it can be finished. " +
       "You can add more later, and whatever is left comes back to you when the story is finished or archived. " +
       "Invited writers also need an active Writer month; you can give them one from the story's Share & invite panel.");
@@ -1842,7 +1841,7 @@ function renderMembership(page) {
     h("h2", { class: "h3", id: "free-title" }, ["Free ways to start"]),
     h("ul", { class: "how-list" }, [
       h("li", {}, [h("b", {}, ["Promo links."]), " SwarmTales sometimes shares a link on Discord, Telegram or X. Open it and claim free Ink. One claim per wallet, ever."]),
-      h("li", {}, [h("b", {}, ["Invites."]), " A story's opener can invite you to an unlisted or private story. Joining is free, and the opener's writers' pool pays for your parts while it lasts. You need a Writer month there, which the opener can pay for."]),
+      h("li", {}, [h("b", {}, ["Invites."]), " A story's opener can invite you to a private story. Joining is free, and the opener's writers' pool pays for your parts while it lasts. You need a Writer month there, which the opener can pay for."]),
       h("li", {}, [h("b", {}, ["Open your own."]), " Opening a story comes with starter Ink for your first part."]),
     ]),
     h("p", {}, [h("a", { class: "link-arrow", href: "#/how" }, ["How Ink works", icons.arrow()])]),
@@ -1994,7 +1993,7 @@ function renderJoin(page, storyId, inviteId) {
     replace(card, 
       h("p", { class: "eyebrow" }, ["You're invited to write in"]),
       h("h1", { class: "title" }, [story.title || "Untitled"]),
-      h("p", { class: "lede" }, [shortAddress(story.opener) + " invited you to this " + (Number(story.visibility) === 3 ? "private " : "unlisted ") + "story. Only invited writers can add to it."]),
+      h("p", { class: "lede" }, [shortAddress(story.opener) + " invited you to this " + "private story. Only invited writers can add to it."]),
       opening ? h("blockquote", { class: "excerpt" }, ["“" + clip(opening, 220) + "”"]) : null,
       landingSteps("Join with one confirmation", "Your wallet asks you to approve. Joining is free.")
     );
@@ -2087,13 +2086,13 @@ async function storyRows(ids) {
 }
 
 function renderMine(page) {
-  setMeta("My stories", "The stories you opened or write in, including unlisted and private ones.");
+  setMeta("My stories", "The stories you opened or write in, including private ones.");
   const container = h("div", { class: "container page" });
   append(page, container);
   append(container,
     h("p", { class: "eyebrow" }, ["Your shelf"]),
     h("h1", { class: "title" }, ["My stories"]),
-    h("p", { class: "lede" }, ["Every story you opened or wrote in, including unlisted and private ones that don't appear in Discover."])
+    h("p", { class: "lede" }, ["Every story you opened or wrote in, including private ones that don't appear in Discover."])
   );
   const address = currentAddress();
   if (!address) {
@@ -2147,7 +2146,7 @@ function siteBase() {
 
 const VISIBILITY_HELP = {
   1: "Public: listed in Discover. Anyone with Ink and a Writer month (or a promo trial) can write.",
-  2: "Unlisted: not in Discover. Anyone with the link can read it. Only you, your editors and people you invite can write, paid from the writers' pool while it lasts. Invited writers need a Writer month.",
+  2: "Private: not in Discover. Only you, your editors and people you invite can write, paid from the writers' pool while it lasts. Invited writers need a Writer month. The words are still public on the blockchain.",
   3: "Private: not in Discover. Only you, your editors and people you invite can write, paid from the writers' pool while it lasts. Invited writers need a Writer month. The words are still public on the blockchain.",
 };
 
@@ -2342,7 +2341,7 @@ function writingHelp() {
       h("li", {}, [h("b", {}, ["Edit."]), " Only the story's opener and editors can edit, and only lightly: fix typos, tidy a sentence. A part can grow by about 10% at most. Shortening returns Ink to the writer. The part stays credited to its writer and shows “Edited by”."]),
       h("li", {}, [h("b", {}, ["Remove."]), " Opener and editors can remove a part. The writer gets their Ink back, unless the part was hidden as possible copying."]),
       h("li", {}, [h("b", {}, ["Want to change someone else's part?"]), " Add your own text after it instead, or ask the opener. Bigger rewrites happen in the final edit, once the story is full."]),
-      h("li", {}, [h("b", {}, ["Ink."]), " 1 Ink per letter. In public stories every writer pays for their own words. In unlisted and private stories the opener's writers' pool pays while it has enough. Long text is split into parts automatically."]),
+      h("li", {}, [h("b", {}, ["Ink."]), " 1 Ink per letter. In public stories every writer pays for their own words. In private stories the opener's writers' pool pays while it has enough. Long text is split into parts automatically."]),
     ]),
   ]);
 }
