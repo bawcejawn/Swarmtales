@@ -122,12 +122,42 @@ const SERVICES = [
   },
 ];
 
+const BUSY = new Set([429, 500, 502, 503, 504]);
+
+/**
+ * Ask a service, retrying when it is busy (Google Books sometimes answers 503
+ * "backendFailed" for a moment). Waits about 1, 2, 4 and 8 seconds.
+ */
+async function askWithRetry(service, phrase) {
+  let res = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt) await pause(1000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 400));
+    try {
+      res = await service.ask(phrase);
+    } catch (error) {
+      res = { ok: false, status: 0, error };
+    }
+    if (res.ok || !BUSY.has(res.status) && res.status !== 0) return res;
+  }
+  return res;
+}
+
+function failureText(service, res) {
+  if (res.status === 400 || res.status === 401 || res.status === 403) {
+    return service.label + ": FAILED with status " + res.status + ". The key is wrong, restricted to another API, or the API isn't enabled.";
+  }
+  if (BUSY.has(res.status) || res.status === 0) {
+    return service.label + ": the service was busy (status " + (res.status || "no answer") + ") five times in a row. That's a problem on the service's side, not your key. It is tried again next run.";
+  }
+  return service.label + ": FAILED with status " + res.status + ".";
+}
+
 /** Search one phrase with one service. Returns the matching result, null, or "failed". */
 async function searchOnce(service, phrase) {
   try {
-    const res = await service.ask(phrase);
+    const res = await askWithRetry(service, phrase);
     if (!res.ok) {
-      note("  " + service.label + " search failed (" + res.status + "); it is skipped for the rest of this run");
+      note("  " + failureText(service, res) + " Skipped for the rest of this run.");
       return "failed";
     }
     const results = normalizeResults(service.name, await res.json());
@@ -180,9 +210,9 @@ async function testPhrase(phrase) {
   note('Testing the search keys with: "' + phrase + '"');
   for (const service of active) {
     try {
-      const res = await service.ask(phrase);
+      const res = await askWithRetry(service, phrase);
       if (!res.ok) {
-        note("  " + service.label + ": FAILED with status " + res.status + ". Check the key.");
+        note("  " + failureText(service, res));
         continue;
       }
       const results = normalizeResults(service.name, await res.json());
