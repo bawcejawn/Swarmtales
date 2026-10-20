@@ -55,10 +55,11 @@
  *       (publishes a Terms of Use version: its sha256 and link go on chain. Every new part must then carry this version)
  *   node deploy/deploy.js new-moderator-key
  *       (makes a fresh key for the automated copy checker and prints it ONCE. Put it in a GitHub secret. Nothing is saved)
- *   node deploy/deploy.js set-moderation --admin <addr> --stories <addr> --moderator <addr|off> [--threshold 3]
+ *   node deploy/deploy.js set-moderation --admin <addr> --stories <addr> --moderator <addr|off> [--threshold 3] [--strikes 3]
  *   node deploy/deploy.js hide --actor <admin or moderator addr> --stories <addr> --story <id> --seq <n> --reason copyright|duplicate|spam|illegal|other [--note "..."] [--unhide]
  *   node deploy/deploy.js takedown --admin <addr> --stories <addr> --story <id> --seq <n> --reason copyright|duplicate|spam|illegal|other --note "notice reference"
- *       (permanent: clears the part's text from contract storage. No Ink refund)
+ *       (permanent: clears the part's text from contract storage. No Ink refund. One strike for the writer)
+ *   node deploy/deploy.js block --admin <addr> --stories <addr> --account <addr> [--note "..."] [--unblock]
  * Common flags: --network testnet|mainnet  --rpc <https url>
  */
 "use strict";
@@ -872,6 +873,23 @@ async function cmdStoriesLimits(args) {
   console.log("Send back: the transaction id (" + txId + ").");
 }
 
+async function cmdBlock(args) {
+  const f = args.flags;
+  const admin = lib.requireAddress(f.admin, "admin");
+  const stories = lib.requireAddress(f.stories, "stories");
+  const account = lib.requireAddress(f.account, "account");
+  const blocked = f.unblock !== true;
+  const note = f.note === undefined || f.note === true ? "" : String(f.note);
+  if (note.length > 200) lib.fail("--note must be at most 200 characters.");
+  const { net, provider } = await connect(f);
+  const signer = await getSigner(provider, admin, "the admin wallet");
+  const { Contract } = koilib();
+  const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  const op = await storiesC.encodeOperation({ name: "set_blocked", args: { account, blocked, note } });
+  const txId = await dryRunThenSend(signer, provider, net, [op], (blocked ? "BLOCK " : "UNBLOCK ") + account + (note ? " (" + note + ")" : ""));
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
 async function cmdSetTerms(args) {
   const f = args.flags;
   const admin = lib.requireAddress(f.admin, "admin");
@@ -920,13 +938,15 @@ async function cmdSetModeration(args) {
   const moderator = off ? "" : lib.requireAddress(f.moderator, "moderator (or the word off)");
   const threshold = f.threshold === undefined ? 3 : Number(f.threshold);
   if (!Number.isInteger(threshold) || threshold < 1 || threshold > 20) lib.fail("--threshold must be 1 to 20.");
+  const strikes = f.strikes === undefined ? 3 : Number(f.strikes);
+  if (!Number.isInteger(strikes) || strikes < 1 || strikes > 20) lib.fail("--strikes must be 1 to 20.");
   const { net, provider } = await connect(f);
   const signer = await getSigner(provider, admin, "the admin wallet");
   const { Contract } = koilib();
   const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
-  const op = await storiesC.encodeOperation({ name: "set_moderation", args: { moderator, report_threshold: threshold } });
+  const op = await storiesC.encodeOperation({ name: "set_moderation", args: { moderator, report_threshold: threshold, strike_limit: strikes } });
   const txId = await dryRunThenSend(signer, provider, net, [op],
-    "stories.set_moderation: moderator " + (off ? "OFF" : moderator) + ", " + threshold + " writer reports hide a part");
+    "stories.set_moderation: moderator " + (off ? "OFF" : moderator) + ", " + threshold + " writer reports hide a part, " + strikes + " takedowns block a wallet");
   console.log("Send back: the transaction id (" + txId + ").");
 }
 
@@ -1082,6 +1102,8 @@ async function main() {
       return cmdHide(args);
     case "takedown":
       return cmdTakedown(args);
+    case "block":
+      return cmdBlock(args);
     default: {
       const head = fs.readFileSync(__filename, "utf8").split("*/")[0];
       console.log(head.replace(/^#!.*\n/, "").replace(/^\/\*\*?|^ \* ?/gm, ""));

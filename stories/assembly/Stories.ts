@@ -28,7 +28,11 @@
 //     on the record but block finalizing until unhidden or removed.
 //   - The admin alone may take a part down for good, at any stage. Its
 //     text is cleared from contract storage and no Ink is refunded.
-//   - Every report, hide, unhide and takedown is a public event.
+//   - Every takedown is a strike against the writer. At the strike limit
+//     (default 3) the wallet is blocked from opening, writing and
+//     reporting (the repeat-infringer policy). The admin can also block
+//     or unblock by hand.
+//   - Every report, hide, unhide, takedown and block is a public event.
 //
 // WHAT THIS CONTRACT DOES NOT DO
 //   - It never moves stablecoins and holds no money.
@@ -92,6 +96,7 @@ const CATEGORIES_SPACE_ID: u32 = 18;
 const REPORTS_SPACE_ID: u32 = 19;
 const TEXT_HASHES_SPACE_ID: u32 = 20;
 const TERMS_ACCEPTED_SPACE_ID: u32 = 21;
+const ACCOUNT_STATUS_SPACE_ID: u32 = 22;
 
 const ADDRESS_LENGTH: i32 = 25;
 const DAY_SECONDS: u64 = 86400;
@@ -137,6 +142,8 @@ const MAX_TERMS_URI: i32 = 200;
 const TERMS_HASH_LENGTH: i32 = 32;
 const DEFAULT_REPORT_THRESHOLD: u32 = 3;
 const REPORT_THRESHOLD_MAX: u32 = 20;
+const DEFAULT_STRIKE_LIMIT: u32 = 3;
+const STRIKE_LIMIT_MAX: u32 = 20;
 
 // ---------- adjustable limits: start value and hard bounds ----------
 const DEFAULT_CAP: u32 = 2000;
@@ -190,6 +197,7 @@ export class Stories {
   reports: Storage.Map<Uint8Array, stories.boole>;
   textHashes: Storage.Map<Uint8Array, stories.boole>;
   termsAccepted: Storage.Map<Uint8Array, stories.uint32>;
+  accountStatus: Storage.Map<Uint8Array, stories.account_status>;
   // How many removed segments this call may still fold in (fix M2).
   skipBudget: u32 = MAX_SKIP_PER_CALL;
 
@@ -225,6 +233,7 @@ export class Stories {
     this.reports = new Storage.Map(id, REPORTS_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
     this.textHashes = new Storage.Map(id, TEXT_HASHES_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
     this.termsAccepted = new Storage.Map(id, TERMS_ACCEPTED_SPACE_ID, stories.uint32.decode, stories.uint32.encode, () => new stories.uint32(0));
+    this.accountStatus = new Storage.Map(id, ACCOUNT_STATUS_SPACE_ID, stories.account_status.decode, stories.account_status.encode, () => new stories.account_status(false, 0));
   }
 
   // ===================================================================
@@ -338,6 +347,11 @@ export class Stories {
     return this.reports.get(this.reportKey(args.story_id, args.seq, args.account!))!;
   }
 
+  get_account_status(args: stories.get_account_status_arguments): stories.account_status {
+    if (!this.isAddress(args.account)) return new stories.account_status(false, 0);
+    return this.accountStatus.get(args.account!)!;
+  }
+
   get_terms_accepted(args: stories.get_terms_accepted_arguments): stories.uint32 {
     if (!this.isAddress(args.account)) return new stories.uint32(0);
     return this.termsAccepted.get(args.account!)!;
@@ -356,6 +370,7 @@ export class Stories {
     this.requireNotPaused();
     const opener = this.requireAddress(args.opener, "STORIES: invalid opener address");
     this.requireSigner(opener, "STORIES: opener has not authorized this");
+    this.requireNotBlocked(opener);
     const cfg = this.config.get()!;
     const ink = this.requireAddress(cfg.ink, "STORIES: Ink contract is not set");
     const shopId = this.requireAddress(cfg.shop, "STORIES: Shop contract is not set");
@@ -593,6 +608,7 @@ export class Stories {
     this.requireNotPaused();
     const author = this.requireAddress(args.author, "STORIES: invalid author address");
     this.requireSigner(author, "STORIES: author has not authorized this");
+    this.requireNotBlocked(author);
     const cfg = this.config.get()!;
     const ink = this.requireAddress(cfg.ink, "STORIES: Ink contract is not set");
     const st = this.requireStory(args.story_id);
@@ -997,6 +1013,7 @@ export class Stories {
     seg.moderation_reason = args.reason;
     this.segments.put(key, seg);
     this.putStory(args.story_id, st);
+    this.addStrike(seg.author!, admin);
 
     const ev = new stories.moderation_event(args.story_id, args.seq, stories.moderation_action.ACTION_TAKEDOWN,
       args.reason, admin, seg.author, note, fingerprint);
@@ -1012,6 +1029,7 @@ export class Stories {
     this.requireNotPaused();
     const reporter = this.requireAddress(args.reporter, "STORIES: invalid reporter address");
     this.requireSigner(reporter, "STORIES: reporter has not authorized this");
+    this.requireNotBlocked(reporter);
     const st = this.requireStory(args.story_id);
     const key = this.pairKey(args.story_id, args.seq);
     const seg = this.requireActiveSegment(key);
@@ -1216,12 +1234,29 @@ export class Stories {
       System.require(!Arrays.equal(mod!, this.contractId), "STORIES: the moderator cannot be the Stories contract");
     }
     System.require(args.report_threshold >= 1 && args.report_threshold <= REPORT_THRESHOLD_MAX, "STORIES: report threshold must be 1 to 20");
+    System.require(args.strike_limit >= 1 && args.strike_limit <= STRIKE_LIMIT_MAX, "STORIES: strike limit must be 1 to 20");
     const cfg = this.config.get()!;
     cfg.moderator = off ? new Uint8Array(0) : mod;
     cfg.report_threshold = args.report_threshold;
+    cfg.strike_limit = args.strike_limit;
     this.saveConfig(cfg);
-    const ev = new stories.moderation_settings_event(cfg.moderator, args.report_threshold);
+    const ev = new stories.moderation_settings_event(cfg.moderator, args.report_threshold, args.strike_limit);
     System.event("stories.moderation_settings_event", Protobuf.encode(ev, stories.moderation_settings_event.encode), []);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  set_blocked(args: stories.set_blocked_arguments): stories.empty_object {
+    this.enter();
+    this.requireAdmin();
+    const account = this.requireAddress(args.account, "STORIES: invalid wallet address");
+    const note = this.requireNote(args.note);
+    const status = this.accountStatus.get(account)!;
+    System.require(status.blocked != args.blocked, args.blocked ? "STORIES: wallet is already blocked" : "STORIES: wallet is not blocked");
+    status.blocked = args.blocked;
+    this.accountStatus.put(account, status);
+    const ev = new stories.account_blocked_event(account, args.blocked, status.strikes, this.getAdmin(), note);
+    System.event("stories.account_blocked_event", Protobuf.encode(ev, stories.account_blocked_event.encode), [account]);
     this.leave();
     return new stories.empty_object();
   }
@@ -1433,6 +1468,27 @@ export class Stories {
     this.termsAccepted.put(account, accepted);
     const ev = new stories.terms_accepted_event(account, version);
     System.event("stories.terms_accepted_event", Protobuf.encode(ev, stories.terms_accepted_event.encode), [account]);
+  }
+
+  private requireNotBlocked(account: Uint8Array): void {
+    System.require(!this.accountStatus.get(account)!.blocked, "STORIES: this wallet can no longer write on SwarmTales (repeated takedowns)");
+  }
+
+  // Repeat-infringer policy: every takedown is a strike; at the limit the
+  // wallet is blocked automatically.
+  private addStrike(author: Uint8Array, by: Uint8Array): void {
+    const status = this.accountStatus.get(author)!;
+    status.strikes = status.strikes + 1;
+    const cfg = this.config.get()!;
+    const limit = cfg.strike_limit == 0 ? DEFAULT_STRIKE_LIMIT : cfg.strike_limit;
+    const newlyBlocked = !status.blocked && status.strikes >= limit;
+    if (newlyBlocked) status.blocked = true;
+    this.accountStatus.put(author, status);
+    if (newlyBlocked) {
+      const ev = new stories.account_blocked_event(author, true, status.strikes, by,
+        "automatic: " + status.strikes.toString() + " takedowns");
+      System.event("stories.account_blocked_event", Protobuf.encode(ev, stories.account_blocked_event.encode), [author]);
+    }
   }
 
   private requireModeratorOrAdmin(actor: Uint8Array): void {

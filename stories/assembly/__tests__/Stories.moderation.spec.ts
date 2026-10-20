@@ -153,7 +153,7 @@ function writerWrites(who: Uint8Array, id: u64, text: string): u64 {
 
 function setModerator(): void {
   directly(); authorize(STORIES);
-  c().set_moderation(new stories.set_moderation_arguments(BOT, 3));
+  c().set_moderation(new stories.set_moderation_arguments(BOT, 3, 3));
   checkpoint();
 }
 
@@ -320,16 +320,16 @@ describe("Moderation: hide and unhide", () => {
   beforeEach(() => { reset(); });
 
   it("lets only the admin set the moderator and a threshold of 1 to 20", () => {
-    fails(() => { authorize(BOB); c().set_moderation(new stories.set_moderation_arguments(BOT, 3)); }, "STORIES: admin authority required");
-    fails(() => { authorize(STORIES); c().set_moderation(new stories.set_moderation_arguments(BOT, 0)); }, "STORIES: report threshold must be 1 to 20");
-    fails(() => { authorize(STORIES); c().set_moderation(new stories.set_moderation_arguments(BOT, 21)); }, "STORIES: report threshold must be 1 to 20");
-    fails(() => { authorize(STORIES); c().set_moderation(new stories.set_moderation_arguments(STORIES, 3)); }, "STORIES: the moderator cannot be the Stories contract");
+    fails(() => { authorize(BOB); c().set_moderation(new stories.set_moderation_arguments(BOT, 3, 3)); }, "STORIES: admin authority required");
+    fails(() => { authorize(STORIES); c().set_moderation(new stories.set_moderation_arguments(BOT, 0, 3)); }, "STORIES: report threshold must be 1 to 20");
+    fails(() => { authorize(STORIES); c().set_moderation(new stories.set_moderation_arguments(BOT, 21, 3)); }, "STORIES: report threshold must be 1 to 20");
+    fails(() => { authorize(STORIES); c().set_moderation(new stories.set_moderation_arguments(STORIES, 3, 3)); }, "STORIES: the moderator cannot be the Stories contract");
     setModerator();
     expect(Base58.encode(cfg().moderator!)).toBe(Base58.encode(BOT));
     expect(cfg().report_threshold).toBe(3);
     // Empty turns the moderator off.
     directly(); authorize(STORIES);
-    c().set_moderation(new stories.set_moderation_arguments(new Uint8Array(0), 3));
+    c().set_moderation(new stories.set_moderation_arguments(new Uint8Array(0), 3, 3));
     checkpoint();
     expect(cfg().moderator!.length).toBe(0);
   });
@@ -601,7 +601,7 @@ describe("Moderation: reports", () => {
     writerWrites(DAVE, 1, "Dave writes an honest line as well.");
     setModerator();
     directly(); authorize(STORIES);
-    c().set_moderation(new stories.set_moderation_arguments(BOT, 2));
+    c().set_moderation(new stories.set_moderation_arguments(BOT, 2, 3));
     checkpoint();
     report(BOB, 1, 4);
     report(CAROL, 1, 4);
@@ -610,5 +610,64 @@ describe("Moderation: reports", () => {
     expect(seg(1, 4).report_count).toBe(0);
     report(ALICE, 1, 4);
     expect(seg(1, 4).hidden).toBe(false);
+  });
+});
+
+// ---------- repeat-infringer policy ----------
+
+describe("Moderation: strikes and blocking", () => {
+  beforeEach(() => { reset(); });
+
+  it("blocks a wallet automatically at the third takedown, and logs it", () => {
+    open(OPENING);
+    writerWrites(BOB, 1, "Bob pastes page one of a novel here.");     // 2
+    writerWrites(BOB, 1, "Bob pastes page two of a novel here.");     // 3
+    writerWrites(BOB, 1, "Bob pastes page three of a novel now.");    // 4
+    takedown(1, 2);
+    takedown(1, 3);
+    expect(c().get_account_status(new stories.get_account_status_arguments(BOB)).strikes).toBe(2);
+    expect(c().get_account_status(new stories.get_account_status_arguments(BOB)).blocked).toBe(false);
+    takedown(1, 4);
+    const st = c().get_account_status(new stories.get_account_status_arguments(BOB));
+    expect(st.strikes).toBe(3);
+    expect(st.blocked).toBe(true);
+    expect(countEvents("stories.account_blocked_event")).toBe(1);
+    fails(() => {
+      directly(); authorize(BOB); MockVM.setCallContractResults([writerAnswer(), okCall()]);
+      c().contribute(new stories.contribute_arguments(BOB, 1, "Bob tries to write again today.", false, false, 31, true, 0));
+    }, "STORIES: this wallet can no longer write on SwarmTales (repeated takedowns)");
+    fails(() => {
+      directly(); authorize(BOB);
+      c().report_segment(new stories.report_segment_arguments(BOB, 1, 1, SPAM, ""));
+    }, "STORIES: this wallet can no longer write on SwarmTales (repeated takedowns)");
+  });
+
+  it("follows the strike limit the admin sets", () => {
+    directly(); authorize(STORIES);
+    c().set_moderation(new stories.set_moderation_arguments(BOT, 3, 1));
+    checkpoint();
+    fails(() => { authorize(STORIES); c().set_moderation(new stories.set_moderation_arguments(BOT, 3, 0)); }, "STORIES: strike limit must be 1 to 20");
+    open(OPENING);
+    writerWrites(BOB, 1, "Bob pastes page one of a novel here.");
+    takedown(1, 2);
+    expect(c().get_account_status(new stories.get_account_status_arguments(BOB)).blocked).toBe(true);
+  });
+
+  it("lets only the admin block and unblock by hand", () => {
+    open(OPENING);
+    fails(() => { authorize(BOT); c().set_blocked(new stories.set_blocked_arguments(BOB, true, "")); }, "STORIES: admin authority required");
+    directly(); authorize(STORIES);
+    c().set_blocked(new stories.set_blocked_arguments(ALICE, true, "spam wave"));
+    checkpoint();
+    fails(() => {
+      directly(); authorize(ALICE); allowCalls(1);
+      c().contribute(new stories.contribute_arguments(ALICE, 1, "Alice writes one more line.", false, false, 27, true, 0));
+    }, "STORIES: this wallet can no longer write on SwarmTales (repeated takedowns)");
+    fails(() => { directly(); authorize(STORIES); c().set_blocked(new stories.set_blocked_arguments(ALICE, true, "")); }, "STORIES: wallet is already blocked");
+    directly(); authorize(STORIES);
+    c().set_blocked(new stories.set_blocked_arguments(ALICE, false, "appeal accepted"));
+    checkpoint();
+    openerWrites(1, "Alice writes one more line.");
+    expect(story(1).segment_count).toBe(2);
   });
 });

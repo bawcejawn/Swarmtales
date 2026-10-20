@@ -121,6 +121,7 @@ message config {
   bytes terms_hash = 15;         // sha256 of the published Terms of Use text
   string terms_uri = 16;         // where the Terms of Use are published
   uint32 report_threshold = 17;  // writer reports that hide a part automatically (default 3)
+  uint32 strike_limit = 18;      // takedowns after which a wallet is blocked automatically (default 3)
 }
 
 message story {
@@ -179,6 +180,12 @@ message segment {
   uint32 report_count = 18;      // reports from wallets that have written on SwarmTales
   bool rights_confirmed = 19;    // the writer confirmed they wrote it or may use it
   uint32 terms_version = 20;     // Terms of Use version the writer accepted for this part
+}
+
+// A wallet's standing under the repeat-infringer policy.
+message account_status {
+  bool blocked = 1;
+  uint32 strikes = 2;            // takedowns of this wallet's parts
 }
 
 message segment_list {
@@ -382,6 +389,13 @@ message has_reported_arguments {
   uint64 story_id = 1 [jstype = JS_STRING];
   uint64 seq = 2 [jstype = JS_STRING];
   bytes account = 3 [(koinos.btype) = ADDRESS];
+}
+
+// @description Whether a wallet is blocked and how many takedowns it has
+// @read-only true
+// @result account_status
+message get_account_status_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
 }
 
 // @description Latest Terms of Use version a wallet accepted (0 if never)
@@ -688,6 +702,16 @@ message set_paused_arguments {
 message set_moderation_arguments {
   bytes moderator = 1 [(koinos.btype) = ADDRESS];
   uint32 report_threshold = 2;
+  uint32 strike_limit = 3;       // 1 to 20 takedowns before a wallet is blocked
+}
+
+// @description Admin blocks or unblocks a wallet from opening, writing and reporting
+// @read-only false
+// @result empty_object
+message set_blocked_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  bool blocked = 2;
+  string note = 3;               // up to 200 characters
 }
 
 // @description Publish a new Terms of Use version (must be higher than the current one)
@@ -877,4 +901,13 @@ message terms_accepted_event {
 message moderation_settings_event {
   bytes moderator = 1 [(koinos.btype) = ADDRESS];
   uint32 report_threshold = 2;
+  uint32 strike_limit = 3;
+}
+
+message account_blocked_event {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  bool blocked = 2;
+  uint32 strikes = 3;
+  bytes by = 4 [(koinos.btype) = ADDRESS];
+  string note = 5;               // "automatic: 3 takedowns" or the admin's note
 }
