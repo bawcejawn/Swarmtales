@@ -66,6 +66,29 @@ export async function encode(name, method, args) {
   return instance(name).encodeOperation({ name: method, args: args || {} });
 }
 
+/**
+ * Mana a wallet can use right now. After a transaction, the node keeps its
+ * whole mana limit set aside for a few minutes, even once it is in a block.
+ */
+export async function freeMana(address) {
+  const total = BigInt((await getProvider().getAccountRc(address)) || "0");
+  let reserved = 0n;
+  try {
+    const r = await getProvider().call("mempool.get_reserved_account_rc", { account: address });
+    if (r && r.rc) reserved = BigInt(r.rc);
+  } catch {
+    reserved = 0n;
+  }
+  return { total, reserved, free: total > reserved ? total - reserved : 0n };
+}
+
+/** Ask for what an action measured, plus a quarter, and never more than is free. */
+export function manaLimit(used, free) {
+  let limit = (BigInt(used) * 125n) / 100n + 1000000n;
+  if (limit > free) limit = free;
+  return limit;
+}
+
 export async function getMana(address) {
   return getProvider().getAccountRc(address);
 }
@@ -116,14 +139,18 @@ async function mapPool(items, limit, fn) {
 }
 
 export async function loadOverview() {
-  const [storiesCfg, shopCfg, asset, writerPrice, shortPrice, bookPrice] = await Promise.all([
+  const [storiesCfg, shopCfg, asset, writerPrice, shortPrice, bookPrice, packS, packM, packL] = await Promise.all([
     read("stories", "get_config", {}),
     read("shop", "get_config", {}),
     read("shop", "get_asset", { token: contracts.paymentToken }),
     read("shop", "get_price", { item: 2, token: contracts.paymentToken }),
     read("shop", "get_price", { item: 7, token: contracts.paymentToken }),
     read("shop", "get_price", { item: 6, token: contracts.paymentToken }),
+    read("shop", "get_price", { item: 3, token: contracts.paymentToken }),
+    read("shop", "get_price", { item: 4, token: contracts.paymentToken }),
+    read("shop", "get_price", { item: 5, token: contracts.paymentToken }),
   ]);
+  const price = (r) => (r && r.value ? r.value : "0");
   const nextCat = Number((storiesCfg && storiesCfg.next_category_id) || 0);
   const ids = [];
   for (let id = 1; id < nextCat && id <= 255; id++) ids.push(id);
@@ -138,6 +165,11 @@ export async function loadOverview() {
     writerPrice: writerPrice && writerPrice.value ? writerPrice.value : "0",
     shortPrice: shortPrice && shortPrice.value ? shortPrice.value : "0",
     bookPrice: bookPrice && bookPrice.value ? bookPrice.value : "0",
+    packs: [
+      { item: 3, name: "Small", price: price(packS), ink: (shopCfg && shopCfg.pack_s_ink) || "0" },
+      { item: 4, name: "Medium", price: price(packM), ink: (shopCfg && shopCfg.pack_m_ink) || "0" },
+      { item: 5, name: "Large", price: price(packL), ink: (shopCfg && shopCfg.pack_l_ink) || "0" },
+    ],
     categories,
   };
 }
