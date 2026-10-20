@@ -61,12 +61,12 @@ export function fingerprint(text) {
 export class Index {
   constructor() {
     this.byHash = new Map();
-    this.parts = new Map(); // key -> { author, hashes }
+    this.parts = new Map(); // key -> { author, hashes, at }
   }
 
   static fromJSON(obj) {
     const idx = new Index();
-    for (const [key, entry] of Object.entries(obj || {})) idx.add(key, entry.author, entry.hashes);
+    for (const [key, entry] of Object.entries(obj || {})) idx.add(key, entry.author, entry.hashes, entry.at);
     return idx;
   }
 
@@ -76,8 +76,9 @@ export class Index {
     return out;
   }
 
-  add(key, author, hashes) {
-    this.parts.set(key, { author, hashes });
+  /** `at`: when the part was written (segment.created_at); 0 if unknown. */
+  add(key, author, hashes, at = 0) {
+    this.parts.set(key, { author, hashes, at: Number(at) || 0 });
     for (const h of hashes) {
       let set = this.byHash.get(h);
       if (!set) this.byHash.set(h, (set = new Set()));
@@ -87,10 +88,14 @@ export class Index {
 
   /**
    * The other part that shares the most fingerprint with `hashes`, ignoring
-   * parts by `author` (a writer may reuse their own words).
+   * parts by `author` (a writer may reuse their own words). With `at`, only
+   * parts written earlier count (AB-005): the later of two matching parts is
+   * the copy, so the original is never flagged for a copy made after it.
+   * Entries saved before `at` was kept count as earlier.
    */
-  bestMatch(hashes, author, exceptKey) {
+  bestMatch(hashes, author, exceptKey, at) {
     const counts = new Map();
+    const order = at ? partOrder(exceptKey, at) : null;
     for (const h of hashes) {
       const keys = this.byHash.get(h);
       if (!keys) continue;
@@ -98,6 +103,7 @@ export class Index {
         if (key === exceptKey) continue;
         const entry = this.parts.get(key);
         if (!entry || entry.author === author) continue;
+        if (order && entry.at && compareOrder(partOrder(key, entry.at), order) > 0) continue;
         counts.set(key, (counts.get(key) || 0) + 1);
       }
     }
@@ -106,6 +112,29 @@ export class Index {
     if (!best) return null;
     return { key: best.key, shared: best.shared, ratio: hashes.length ? best.shared / hashes.length : 0 };
   }
+}
+
+function partOrder(key, at) {
+  const [story, seq] = String(key).split(":").map(Number);
+  return [Number(at) || 0, story || 0, seq || 0];
+}
+
+function compareOrder(a, b) {
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] - b[i];
+  return 0;
+}
+
+/**
+ * The order a run checks parts in (AB-005): oldest first by when they were
+ * written (`at`, the segment's created_at), then story, then part. A copy is
+ * always checked after the text it copied, whatever the story numbers, and
+ * each story's parts stay in part order.
+ * stories: [{ id, parts: [{ seq, at, ... }] }] -> [{ story, seq, at, ... }]
+ */
+export function checkOrder(stories) {
+  const out = [];
+  for (const s of stories) for (const p of s.parts) out.push({ story: s.id, ...p });
+  return out.sort((a, b) => compareOrder(partOrder(a.story + ":" + a.seq, a.at), partOrder(b.story + ":" + b.seq, b.at)));
 }
 
 /** Is a match strong enough to hide the newer part automatically? */

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Index, budget, fingerprint, isDuplicate, pickPhrases, resultMatches, words } from "../lib.mjs";
+import { Index, budget, checkOrder, fingerprint, isDuplicate, pickPhrases, resultMatches, words } from "../lib.mjs";
 
 const ORIGINAL = "The lanterns of Harrow Street went out one by one, as if someone were walking the length of the road " +
   "and pinching each flame between finger and thumb. Nell counted eleven before she understood that the someone was her shadow. " +
@@ -142,4 +142,60 @@ test("a half-matching part gets a note, not a hide", async () => {
   assert.equal(isPartialDuplicate(hashes, { key: "1:2", shared: 12, ratio: 0.6 }), true);
   assert.equal(isPartialDuplicate(hashes, { key: "1:2", shared: 18, ratio: 0.9 }), false);
   assert.equal(isPartialDuplicate(hashes, { key: "1:2", shared: 6, ratio: 0.3 }), false);
+});
+
+// ---------- AB-005: the earlier writer is never the one hidden ----------
+
+// One run as check.mjs does it: parts in checkOrder, each compared with
+// what is already indexed; a duplicate is flagged, anything else indexed.
+function runLocal(stories, idx = new Index()) {
+  const flagged = [];
+  for (const p of checkOrder(stories)) {
+    const key = p.story + ":" + p.seq;
+    const hashes = fingerprint(p.text);
+    const match = idx.bestMatch(hashes, p.author, key, p.at);
+    if (match && isDuplicate(hashes, match)) flagged.push(key);
+    else idx.add(key, p.author, hashes, p.at);
+  }
+  return flagged;
+}
+
+const COPY = ORIGINAL; // pasted word for word
+
+test("a copy pasted into a lower-numbered story is hidden, not the original it copied", () => {
+  const flagged = runLocal([
+    { id: 5, parts: [{ seq: 2, author: "mallory", text: COPY, at: 2000 }] },   // copied later
+    { id: 10, parts: [{ seq: 3, author: "wren", text: ORIGINAL, at: 1000 }] }, // written first
+  ]);
+  assert.deepEqual(flagged, ["5:2"]);
+});
+
+test("parts are checked oldest first; ties go by story, then part", () => {
+  const order = checkOrder([
+    { id: 5, parts: [{ seq: 1, at: 300 }, { seq: 2, at: 300 }] },
+    { id: 3, parts: [{ seq: 7, at: 300 }, { seq: 8, at: 900 }] },
+    { id: 9, parts: [{ seq: 1, at: 100 }] },
+  ]).map((p) => p.story + ":" + p.seq);
+  assert.deepEqual(order, ["9:1", "3:7", "5:1", "5:2", "3:8"]);
+});
+
+test("the final sweep never flags an original because a later copy is in the index", () => {
+  const idx = new Index();
+  idx.add("10:3", "wren", fingerprint(ORIGINAL), 1000);
+  idx.add("5:2", "mallory", fingerprint(COPY), 2000); // e.g. restored by its opener, so indexed
+  const again = idx.bestMatch(fingerprint(ORIGINAL), "wren", "10:3", 1000);
+  assert.equal(again, null); // not even a source note
+  const copy = idx.bestMatch(fingerprint(COPY), "mallory", "5:2", 2000);
+  assert.equal(copy.key, "10:3");
+  assert.ok(isDuplicate(fingerprint(COPY), copy));
+});
+
+test("when each part was written survives a save and load; older saved entries count as earlier", () => {
+  const idx = new Index();
+  idx.add("10:3", "wren", fingerprint(ORIGINAL), 1000);
+  const back = Index.fromJSON(JSON.parse(JSON.stringify(idx.toJSON())));
+  assert.equal(back.bestMatch(fingerprint(COPY), "mallory", "5:2", 500), null);   // written before the original
+  assert.equal(back.bestMatch(fingerprint(COPY), "mallory", "5:2", 2000).key, "10:3");
+  const legacy = Index.fromJSON({ "10:3": { author: "wren", hashes: fingerprint(ORIGINAL) } });
+  assert.equal(legacy.bestMatch(fingerprint(COPY), "mallory", "5:2", 2000).key, "10:3");
 });
