@@ -250,7 +250,9 @@ function shopAddressesForStories(onChain, wanted) {
   if (ink !== wanted.ink) fail("Shop points at Ink " + (ink || "(none)") + " but you gave --ink " + wanted.ink + ". Nothing was changed.");
   if (wanted.treasury && wanted.treasury !== treasury) fail("Shop treasury on chain is " + treasury + " but you gave --treasury " + wanted.treasury + ". Nothing was changed.");
   if (wanted.founder && wanted.founder !== founder) fail("Shop founder on chain is " + founder + " but you gave --founder " + wanted.founder + ". Nothing was changed.");
-  if (current && current !== wanted.stories) fail("Shop already points at a different Stories contract (" + current + "). Nothing was changed.");
+  if (current && current !== wanted.stories && current !== wanted.replace) {
+    fail("Shop already points at a different Stories contract (" + current + "). To retire it, add --replace-stories " + current + ". Nothing was changed.");
+  }
   return { treasury, founder, ink, stories: wanted.stories };
 }
 

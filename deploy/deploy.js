@@ -29,9 +29,11 @@
  *       (dry runs only: each call must be REJECTED; nothing is ever sent)
  *
  * Stories (after building stories/ and uploading it):
- *   node deploy/deploy.js wire-stories --admin <addr> --ink <addr> --shop <addr> --stories <addr> [--treasury <addr>] [--founder <addr>]
+ *   node deploy/deploy.js wire-stories --admin <addr> --ink <addr> --shop <addr> --stories <addr> [--treasury <addr>] [--founder <addr>] [--replace-stories <old addr>]
  *       (one admin transaction: stories.set_addresses, ink.set_burner, ink.set_minter mask 32,
- *        shop.set_addresses with the treasury and founder READ FROM THE CHAIN, and the 11 categories)
+ *        shop.set_addresses with the treasury and founder READ FROM THE CHAIN, and the 11 categories.
+ *        --replace-stories retires an older Stories contract: Shop moves to the new one and the old one
+ *        loses its Ink burn and mint rights, all in the same transaction)
  *   node deploy/deploy.js test-open --user <addr> --shop <addr> --stories <addr> [--token <addr>] [--private]
  *       (testnet: approve the Shop for the Short Story open price, then open a Short Story.
  *        --private makes it invite-only, for the invite rehearsal)
@@ -225,13 +227,36 @@ async function buildTx(signer, provider, net, operations, rcLimit) {
   return tx;
 }
 
+/**
+ * Mana this wallet can use right now. The node keeps a recent transaction's
+ * whole mana limit set aside for a few minutes, even after it is in a block,
+ * so that amount is subtracted.
+ */
+async function freeMana(provider, payer) {
+  const total = BigInt(await provider.getAccountRc(payer));
+  let reserved = 0n;
+  try {
+    const r = await provider.call("mempool.get_reserved_account_rc", { account: payer });
+    if (r && r.rc) reserved = BigInt(r.rc);
+  } catch {
+    reserved = 0n;
+  }
+  return { total, reserved, free: total > reserved ? total - reserved : 0n };
+}
+
 async function dryRunThenSend(signer, provider, net, operations, summary) {
   const payer = signer.getAddress();
-  const available = await provider.getAccountRc(payer);
+  const mana = await freeMana(provider, payer);
+  const available = mana.free.toString();
   console.log("");
   console.log("What will happen: " + summary);
-  console.log("Mana available on " + payer + ": " + lib.formatMana(available));
-  if (BigInt(available) === 0n) lib.fail("This wallet has no mana. Send it some tKOIN first, then wait a minute.");
+  console.log("Mana available on " + payer + ": " + lib.formatMana(available) +
+    (mana.reserved > 0n ? " (another " + lib.formatMana(mana.reserved.toString()) + " is held for a recent transaction for a few minutes)" : ""));
+  if (mana.free === 0n) {
+    lib.fail(mana.reserved > 0n
+      ? "All of this wallet's mana is held for a recent transaction. Wait about 5 minutes and run this again."
+      : "This wallet has no mana. Send it some tKOIN first, then wait a minute.");
+  }
 
   // Dry run: signed, submitted with broadcast=false. The node runs it and
   // returns the receipt, but it is not passed to other nodes or put in a block.
@@ -580,7 +605,11 @@ async function cmdWireStories(args) {
     stories,
     treasury: f.treasury === undefined ? undefined : lib.requireAddress(f.treasury, "treasury"),
     founder: f.founder === undefined ? undefined : lib.requireAddress(f.founder, "founder"),
+    replace: f["replace-stories"] === undefined ? undefined : lib.requireAddress(f["replace-stories"], "replace-stories"),
   });
+  // Retiring an older Stories contract: it loses its Ink burn and mint rights
+  // in the same transaction, so only the new one can ever touch Ink.
+  const retiring = shopCfg.stories && shopCfg.stories !== stories ? shopCfg.stories : "";
   const storiesCfg = await readOnly(provider, "stories", stories, "get_config");
   if (storiesCfg.admin !== admin) {
     lib.fail("Stories admin is " + (storiesCfg.admin || "(not readable)") + ", not " + admin + ". Run set-admin stories first.");
@@ -605,6 +634,11 @@ async function cmdWireStories(args) {
     await inkC.encodeOperation({ name: "set_minter", args: { account: stories, reasons_mask: lib.STORIES_MINT_MASK } }),
     await shopC.encodeOperation({ name: "set_addresses", args: shopArgs }),
   ];
+  if (retiring) {
+    console.log("Retiring the old Stories contract " + retiring + ": its Ink burn and mint rights are removed.");
+    ops.push(await inkC.encodeOperation({ name: "set_burner", args: { account: retiring, allowed: false } }));
+    ops.push(await inkC.encodeOperation({ name: "set_minter", args: { account: retiring, reasons_mask: 0 } }));
+  }
   if (!haveCategories) {
     for (const name of lib.STORY_CATEGORIES) {
       ops.push(await storiesC.encodeOperation({ name: "add_category", args: { name } }));
