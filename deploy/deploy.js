@@ -24,7 +24,7 @@
  *   node deploy/deploy.js test-asset --admin <addr> --shop <addr> [--token <addr>] [--symbol tKOIN] [--decimals 8]
  *   node deploy/deploy.js test-buy --user <addr> --shop <addr> [--tier writer|reader] [--token <addr>]
  *   node deploy/deploy.js test-promo --admin <addr> --shop <addr>
- *   node deploy/deploy.js claim-promo --account <addr> --shop <addr> --campaign <id> --link-key <wif-from-the-promo-link>
+ *   node deploy/deploy.js claim-promo --account <addr> --shop <addr> --campaign <id> --link-key <wif-from-the-promo-link> [--sign-for <addr>]
  *   node deploy/deploy.js user-checks --user <addr> --ink <addr> --shop <addr> --admin <addr>
  *       (dry runs only: each call must be REJECTED; nothing is ever sent)
  *
@@ -32,13 +32,21 @@
  *   node deploy/deploy.js wire-stories --admin <addr> --ink <addr> --shop <addr> --stories <addr> [--treasury <addr>] [--founder <addr>]
  *       (one admin transaction: stories.set_addresses, ink.set_burner, ink.set_minter mask 32,
  *        shop.set_addresses with the treasury and founder READ FROM THE CHAIN, and the 11 categories)
- *   node deploy/deploy.js test-open --user <addr> --shop <addr> --stories <addr> [--token <addr>]
- *       (testnet: approve the Shop for the Short Story open price, then open a Short Story)
+ *   node deploy/deploy.js test-open --user <addr> --shop <addr> --stories <addr> [--token <addr>] [--private]
+ *       (testnet: approve the Shop for the Short Story open price, then open a Short Story.
+ *        --private makes it invite-only, for the invite rehearsal)
+ *   node deploy/deploy.js test-invite --opener <addr> --stories <addr> --story <id> [--uses 5] [--days 7]
+ *       (testnet: the opener creates a signed invite link. Only the link key's PUBLIC address
+ *        goes on chain; the private key is printed once, for the share link)
+ *   node deploy/deploy.js join-invite --account <addr> --stories <addr> --story <id> --invite <id> --link-key <wif> [--sign-for <addr>]
+ *       (testnet: join a private story with a signed invite link. --sign-for signs for a
+ *        DIFFERENT wallet on purpose, to show the contract refuses a copied signature)
  *   node deploy/deploy.js measure --user <addr> --ink <addr> --stories <addr> --story <id> [--emoji] [--sizes 100,500,1000,2000,4000]
  *       (dry runs only: mana for contributions of each size; nothing is ever sent)
  *   node deploy/deploy.js test-write --user <addr> --ink <addr> --stories <addr> --story <id> [--size 100] [--emoji] [--text "..."]
- *       (testnet only: one contribute from the story opener; dry run, then SEND. Burns Ink.
- *        --user must be the opener. Default is 100 units of plain text. Size is lowered to the
+ *       (testnet only: one contribute; dry run, then SEND. Burns Ink.
+ *        --user must be the opener, unless you add --not-opener (then the chain checks
+ *        Writer membership, the promo trial, and a private story's allow-list). Default is 100 units of plain text. Size is lowered to the
  *        per-submission cap and the space left. Stops if the Ink balance is too low.)
  *   node deploy/deploy.js stories-limits --admin <addr> --stories <addr> --cap <100-4000>
  * Common flags: --network testnet|mainnet  --rpc <https url>
@@ -440,9 +448,13 @@ async function cmdClaimPromo(args) {
   const shopC = new Contract({ id: shop, abi: loadAbiJson("shop"), provider });
   // Sign "promo / this shop / campaign / this account" with the link key.
   const linkKey = Signer.fromWif(f["link-key"]);
-  const message = lib.promoMessage(utils.decodeBase58(shop), String(f.campaign), utils.decodeBase58(account));
+  // --sign-for signs for a DIFFERENT wallet on purpose: the dry run must be refused.
+  const signedFor = f["sign-for"] === undefined ? account : lib.requireAddress(f["sign-for"], "sign-for");
+  if (signedFor !== account) console.log("Signing for " + signedFor + " but claiming as " + account + ". The contract should refuse this.");
+  const message = lib.promoMessage(utils.decodeBase58(shop), String(f.campaign), utils.decodeBase58(signedFor));
   const signature = await linkKey.signHash(lib.sha256(message));
-  const op = await shopC.encodeOperation({ name: "claim_promo", args: { account, campaign_id: String(f.campaign), signer: "", signature } });
+  // koilib takes bytes fields as base64url text.
+  const op = await shopC.encodeOperation({ name: "claim_promo", args: { account, campaign_id: String(f.campaign), signer: "", signature: utils.encodeBase64url(signature) } });
   const txId = await dryRunThenSend(signer, provider, net, [op], "claim promo campaign " + f.campaign + " with its signed link");
   console.log("Send back: the transaction id (" + txId + ").");
 }
@@ -492,7 +504,7 @@ async function cmdUserChecks(args) {
   for (let i = 1; i < 65; i++) bogusSig[i] = (i * 7) & 0xff;
   if (f.campaign) {
     checks.push(["Claim a promo with a signature that is not from the campaign's link key",
-      () => shopC.encodeOperation({ name: "claim_promo", args: { account: user, campaign_id: String(f.campaign), signer: "", signature: bogusSig } })]);
+      () => shopC.encodeOperation({ name: "claim_promo", args: { account: user, campaign_id: String(f.campaign), signer: "", signature: koilib().utils.encodeBase64url(bogusSig) } })]);
   }
 
   console.log("");
@@ -619,11 +631,11 @@ async function cmdTestOpen(args) {
       args: {
         opener: user,
         kind: lib.STORY_KIND.SHORT,
-        title: "Testnet Short Story",
+        title: f.private === true ? "Testnet Private Story" : "Testnet Short Story",
         max_chars: "10000",
         category_1: 1,
         category_2: 0,
-        visibility: lib.STORY_VISIBILITY.PUBLIC,
+        visibility: f.private === true ? lib.STORY_VISIBILITY.PRIVATE : lib.STORY_VISIBILITY.PUBLIC,
         free_chapters: 0,
         contributor_edition_min: "0",
         opening_text: text,
@@ -641,6 +653,69 @@ async function cmdTestOpen(args) {
 }
 
 /** Dry runs only: never broadcast. Shows the mana each contribution size would use. */
+async function cmdTestInvite(args) {
+  const f = args.flags;
+  const opener = lib.requireAddress(f.opener, "opener");
+  const stories = lib.requireAddress(f.stories, "stories");
+  const storyId = lib.requireStoryId(f.story);
+  const uses = f.uses === undefined ? 5 : Number(f.uses);
+  const days = f.days === undefined ? 7 : Number(f.days);
+  if (!Number.isInteger(uses) || uses < 1 || uses > 1000) lib.fail("--uses must be 1 to 1000.");
+  if (!Number.isInteger(days) || days < 1 || days > 365) lib.fail("--days must be 1 to 365.");
+  if (lib.resolveNetwork(f).mainnet) lib.fail("test-invite is for testnet only.");
+  const { net, provider } = await connect(f);
+  const st = await readOnly(provider, "stories", stories, "get_story", { story_id: storyId });
+  lib.assertStoryOpener(storyId, st.opener, opener);
+  const inviteId = st.next_invite_id && st.next_invite_id !== "0" ? st.next_invite_id : "1";
+
+  // A fresh link key. Only its PUBLIC address goes on chain.
+  const { Contract, Signer } = koilib();
+  const linkKey = Signer.fromSeed("swarmtales-testnet-invite-" + Date.now() + "-" + Math.random());
+  const signer = await getSigner(provider, opener, "the story opener");
+  const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  const expiresAt = String(Math.floor(Date.now() / 1000) + days * 86400);
+  const op = await storiesC.encodeOperation({
+    name: "create_invite",
+    args: { opener, story_id: storyId, link_signer: linkKey.getAddress(), max_uses: uses, expires_at: expiresAt },
+  });
+  const txId = await dryRunThenSend(
+    signer, provider, net, [op],
+    "create invite " + inviteId + " on story " + storyId + ": " + uses + " uses, " + days + " days. Stored on chain: link key address " + linkKey.getAddress() + " only"
+  );
+  const wif = linkKey.getPrivateKey("wif");
+  console.log("Invite id: " + inviteId);
+  console.log("Invite link key (goes in the share link only): " + wif);
+  console.log("Share link (replace the host with your site): https://YOUR-SITE/#/join/" + storyId + "/" + inviteId + "?k=" + wif);
+  console.log("To join from the CLI: node deploy/deploy.js join-invite --account <addr> --stories " + stories + " --story " + storyId + " --invite " + inviteId + " --link-key " + wif);
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
+async function cmdJoinInvite(args) {
+  const f = args.flags;
+  const account = lib.requireAddress(f.account, "account");
+  const stories = lib.requireAddress(f.stories, "stories");
+  const storyId = lib.requireStoryId(f.story);
+  if (!f.invite || !/^[1-9][0-9]*$/.test(String(f.invite))) lib.fail("Add --invite <id> (a number, usually 1).");
+  if (typeof f["link-key"] !== "string" || !f["link-key"]) lib.fail("Add --link-key <wif> from the invite link (the part after k=).");
+  if (lib.resolveNetwork(f).mainnet) lib.fail("join-invite is for testnet only.");
+  const { net, provider } = await connect(f);
+  const { Contract, Signer, utils } = koilib();
+  // --sign-for signs for a DIFFERENT wallet on purpose: the dry run must be refused.
+  const signedFor = f["sign-for"] === undefined ? account : lib.requireAddress(f["sign-for"], "sign-for");
+  if (signedFor !== account) console.log("Signing for " + signedFor + " but joining as " + account + ". The contract should refuse this.");
+  const linkKey = Signer.fromWif(f["link-key"]);
+  const message = lib.inviteMessage(utils.decodeBase58(stories), storyId, String(f.invite), utils.decodeBase58(signedFor));
+  const signature = await linkKey.signHash(lib.sha256(message));
+  const signer = await getSigner(provider, account, "the joining wallet");
+  const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  const op = await storiesC.encodeOperation({
+    name: "join_with_invite",
+    args: { account, story_id: storyId, invite_id: String(f.invite), signature: utils.encodeBase64url(signature) },
+  });
+  const txId = await dryRunThenSend(signer, provider, net, [op], "join story " + storyId + " with invite " + f.invite + " (signed link)");
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
 async function cmdMeasure(args) {
   const f = args.flags;
   const user = lib.requireAddress(f.user, "user");
@@ -707,7 +782,12 @@ async function cmdTestWrite(args) {
 
   const cfg = await readOnly(provider, "stories", stories, "get_config");
   const st = await readOnly(provider, "stories", stories, "get_story", { story_id: storyId });
-  lib.assertStoryOpener(storyId, st.opener, user);
+  if (f["not-opener"] === true) {
+    console.log("Writing as " + user + ", who is not the opener. The chain will check Writer membership,");
+    console.log("the promo trial, and (for a private story) the allow-list. A refusal shows in the dry run.");
+  } else {
+    lib.assertStoryOpener(storyId, st.opener, user);
+  }
   const bal = await readOnly(provider, "ink", ink, "balance_of", { owner: user });
   const plan = lib.planTestWrite(
     { size: f.size, emoji: f.emoji === true, text: f.text },
@@ -724,7 +804,7 @@ async function cmdTestWrite(args) {
     ? " Requested " + plan.requested + "; lowered to " + plan.cost + " (per-submission cap " + plan.cap + ", space left " + plan.spaceLeft + ")."
     : "";
   console.log("");
-  console.log("Story " + storyId + " opener matches " + user + ".");
+  if (f["not-opener"] !== true) console.log("Story " + storyId + " opener matches " + user + ".");
   console.log("Ink balance: " + plan.balance + "    this write: " + plan.cost + "    cap: " + plan.cap + "    space left: " + plan.spaceLeft);
 
   const signer = await getSigner(provider, user, "the test user wallet");
@@ -856,6 +936,10 @@ async function main() {
       return cmdUserChecks(args);
     case "wire-stories":
       return cmdWireStories(args);
+    case "test-invite":
+      return cmdTestInvite(args);
+    case "join-invite":
+      return cmdJoinInvite(args);
     case "test-open":
       return cmdTestOpen(args);
     case "measure":

@@ -25,6 +25,7 @@ import {
 } from "./wallet.js";
 import { fetchVaultConfig, vaultManaDecision, vaultPairingDecision } from "./lib/vaultApi.js";
 import { linkSecretFromHash, signPromoClaim, signInviteJoin } from "./lib/links.js";
+import { utils } from "koilib";
 
 const problems = configProblems();
 const kondor = createKondorWallet();
@@ -751,7 +752,8 @@ function renderShop(page, campaignFromLink) {
           account: address,
           campaign_id: String(campaignId).trim(),
           signer: "",
-          signature,
+          // koilib takes bytes fields as base64url text.
+          signature: utils.encodeBase64url(signature),
         });
         const sent = await send([op], promoStatus);
         if (sent) await refreshAccount();
@@ -798,7 +800,7 @@ function renderJoin(page, storyId, inviteId) {
         account: address,
         story_id: String(storyId),
         invite_id: String(inviteId),
-        signature,
+        signature: utils.encodeBase64url(signature),
       });
       const sent = await send([op], status);
       if (sent) {
