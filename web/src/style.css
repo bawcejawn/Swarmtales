@@ -415,3 +415,10 @@ dialog.sheet::backdrop { background: rgba(27, 31, 42, 0.45); }
 .kind-choice span { font-size: 14px; color: var(--text-2); }
 .kind-choice:hover { border-color: var(--ink); }
 .kind-choice[aria-pressed="true"] { border: 2px solid var(--accent); background: var(--blue-bg); padding: 15px 17px; }
+
+/* AI help label preview, optional settings */
+.ai-toggle p { margin: 0 0 4px 28px; }
+.tag-ai-preview { opacity: 0.45; }
+.more-options { margin-top: 24px; border: 1px solid var(--line); border-radius: 12px; padding: 4px 16px 16px; background: var(--surface-2); }
+.more-options summary { cursor: pointer; padding: 12px 0; font-weight: 600; min-height: 44px; }
+.more-options > p { margin: 0; }

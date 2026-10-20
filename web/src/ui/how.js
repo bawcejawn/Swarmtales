@@ -78,6 +78,7 @@ export const HOW_SECTIONS = [
     body: [
       "Anyone with a wallet can open a short story. You choose a title, a length, a category, and who may write: anyone (public), anyone with the link (unlisted), or only people you invite (private).",
       "Opening has a small price, paid from your wallet, and comes with starter Ink so you can write the first part. Private only limits who can write. The words themselves are still public on the blockchain.",
+      "Two optional settings are saved with every story. Free preview: how many chapters visitors without a membership can read before being asked to join. Keepsake copy: how many characters a writer needs in the finished story to receive a free Contributor Edition, a keepsake copy with their name in the credits. Both switch on when memberships and finished books launch; for now every story is free to read.",
     ],
   },
   {
