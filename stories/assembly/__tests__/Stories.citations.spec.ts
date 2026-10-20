@@ -474,3 +474,44 @@ describe("Stories: source notes and restoring", () => {
     fails(failRestore, "STORIES: segment was already removed");
   });
 });
+
+let fReader: Uint8Array = new Uint8Array(0);
+function failPlace(): void {
+  authorize(fReader);
+  new Stories().set_reading_place(new stories.set_reading_place_arguments(BOB, fId, fSeq, 1, 50));
+}
+
+describe("Stories: reading places follow the wallet", () => {
+  beforeEach(() => { reset(); configure(); openShort(); writeAsOpener(1, "A second part to read."); });
+
+  it("saves, updates, lists and clears a reader's place", () => {
+    authorize(BOB);
+    new Stories().set_reading_place(new stories.set_reading_place_arguments(BOB, 1, 2, 1, 100));
+    checkpoint();
+    let place = new Stories().get_reading_place(new stories.get_reading_place_arguments(BOB, 1));
+    expect(place.seq).toBe(2);
+    expect(place.percent).toBe(100);
+    expect(place.at).toBe(START);
+    authorize(BOB);
+    new Stories().set_reading_place(new stories.set_reading_place_arguments(BOB, 1, 1, 1, 50));
+    checkpoint();
+    const list = new Stories().get_reading_places(new stories.get_reading_places_arguments(BOB, 0, 10));
+    expect(list.total).toBe(1);
+    expect(list.values.length).toBe(1);
+    expect(list.values[0].seq).toBe(1);
+    // seq 0 clears it; the story stays in the count but isn't listed.
+    authorize(BOB);
+    new Stories().set_reading_place(new stories.set_reading_place_arguments(BOB, 1, 0, 0, 0));
+    checkpoint();
+    expect(new Stories().get_reading_places(new stories.get_reading_places_arguments(BOB, 0, 10)).values.length).toBe(0);
+    place = new Stories().get_reading_place(new stories.get_reading_place_arguments(ALICE, 1));
+    expect(place.seq).toBe(0);
+  });
+
+  it("only the reader can save their place, and only for a real part", () => {
+    fReader = MALLORY; fId = 1; fSeq = 1;
+    fails(failPlace, "STORIES: reader has not authorized this");
+    fReader = BOB; fSeq = 99;
+    fails(failPlace, "STORIES: unknown segment");
+  });
+});

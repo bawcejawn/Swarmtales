@@ -600,6 +600,47 @@ message set_citation_arguments {
   string citation = 4;           // up to 200 characters; empty clears it
 }
 
+// @description A reader saves their place in a story (their bookmark), so it follows their wallet to any device.
+// @read-only false
+// @result empty_object
+message set_reading_place_arguments {
+  bytes reader = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  uint64 seq = 3 [jstype = JS_STRING];   // 0 clears the place
+  uint32 chapter = 4;
+  uint32 percent = 5;                    // 0 to 100
+}
+
+// @description A reader's saved place in one story (seq 0 if none).
+// @read-only true
+// @result reading_place
+message get_reading_place_arguments {
+  bytes reader = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+}
+
+// @description A reader's saved places, newest story first is NOT guaranteed; index from 0, up to 50.
+// @read-only true
+// @result reading_place_list
+message get_reading_places_arguments {
+  bytes reader = 1 [(koinos.btype) = ADDRESS];
+  uint64 start = 2 [jstype = JS_STRING];
+  uint32 limit = 3;
+}
+
+message reading_place {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 seq = 2 [jstype = JS_STRING];
+  uint32 chapter = 3;
+  uint32 percent = 4;
+  uint64 at = 5 [jstype = JS_STRING];    // seconds
+}
+
+message reading_place_list {
+  repeated reading_place values = 1;
+  uint64 total = 2 [jstype = JS_STRING]; // stories this reader ever saved a place in
+}
+
 // @description Admin or moderator (the copy checker) notes where parts of a text also appear, without hiding it.
 // @read-only false
 // @result empty_object

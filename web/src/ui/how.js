@@ -69,7 +69,7 @@ export const HOW_SECTIONS = [
     id: "finish",
     title: "8. Finishing a story",
     body: [
-      "When a story is long enough, the opener closes it and gives it a final polish. Then it is marked finished and becomes a book. Every writer whose words survive is in the credits.",
+      "When a story is long enough, the opener uses \u201cFinish the book\u201d on the story page. It's free and has three steps: close (writing stops), a final edit (keep, lightly fix, or remove each part), and publish. The published book gets a fingerprint on the blockchain, and anyone can read it, print it, save it as a PDF, or download it from its book page. Leftover writers' pool Ink goes back to the opener.",
       "A story nobody touches for a long time can be archived. Archived stories can still be read.",
     ],
   },

@@ -1021,7 +1021,7 @@ describe("Stories: closing", () => {
     fails(() => { authorize(ALICE); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(ALICE, 1, USDT)); }, "STORIES: story cannot be closed yet");
   });
 
-  it("closes an open story at exactly the 10,000 minimum, charging the close fee", () => {
+  it("closes an open story at exactly the 10,000 minimum, for free", () => {
     openAs(ALICE, SHORT, 20000, PUBLIC, chars(2000));
     writeAsOpener(1, chars(2000));
     writeAsOpener(1, chars(2000));
@@ -1030,12 +1030,8 @@ describe("Stories: closing", () => {
     fails(() => { authorize(ALICE); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(ALICE, 1, USDT)); }, "STORIES: story cannot be closed yet");
     writeAsOpener(1, "x");
     closeAs(ALICE, 1);
-    const list = callsTo(CLOSE_FEE_ENTRY);
-    expect(list.length).toBe(1);
-    expect(same(list[0].contract_id, SHOP)).toBe(true);
-    const fee = Protobuf.decode<stories.shop_fee_call>(list[0].payload!, stories.shop_fee_call.decode);
-    expect(same(fee.payer, ALICE)).toBe(true);
-    expect(fee.kind).toBe(2);
+    // Closing is free: no call to the Shop.
+    expect(callsTo(CLOSE_FEE_ENTRY).length).toBe(0);
     const st = story(1);
     expect(st.status).toBe(stories.story_status.STATUS_EDITING);
     expect(st.close_fee_paid).toBe(true);
@@ -1057,17 +1053,16 @@ describe("Stories: closing", () => {
     expect(story(1).status).toBe(stories.story_status.STATUS_EDITING);
   });
 
-  it("charges the opener the close fee even when the story auto-filled", () => {
+  it("lets only the opener close an auto-filled story, for free", () => {
     openShort();
     writeAsWriter(BOB, 1, chars(2000));
     fillShort(1);
     expect(story(1).status).toBe(stories.story_status.STATUS_LOCKED);
     fails(() => { authorize(BOB); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(BOB, 1, USDT)); }, "STORIES: only the opener may do this");
-    fails(() => { authorize(ALICE); results([falseCall()]); new Stories().close_story(new stories.close_story_arguments(ALICE, 1, USDT)); }, "STORIES: close fee payment failed");
     expect(story(1).status).toBe(stories.story_status.STATUS_LOCKED);
     closeAs(ALICE, 1);
-    const fee = Protobuf.decode<stories.shop_fee_call>(callsTo(CLOSE_FEE_ENTRY)[0].payload!, stories.shop_fee_call.decode);
-    expect(same(fee.payer, ALICE)).toBe(true);
+    expect(story(1).status).toBe(stories.story_status.STATUS_EDITING);
+    expect(callsTo(CLOSE_FEE_ENTRY).length).toBe(0);
   });
 
   it("refuses new text, edits and invites after closing", () => {

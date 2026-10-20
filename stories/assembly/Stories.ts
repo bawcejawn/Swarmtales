@@ -111,6 +111,9 @@ const REPORTS_SPACE_ID: u32 = 19;
 const TEXT_HASHES_SPACE_ID: u32 = 20;
 const TERMS_ACCEPTED_SPACE_ID: u32 = 21;
 const ACCOUNT_STATUS_SPACE_ID: u32 = 22;
+const READING_PLACE_SPACE_ID: u32 = 23;
+const READING_COUNT_SPACE_ID: u32 = 24;
+const READING_LIST_SPACE_ID: u32 = 25;
 
 const ADDRESS_LENGTH: i32 = 25;
 const DAY_SECONDS: u64 = 86400;
@@ -182,7 +185,6 @@ const DAYS_MAX: u32 = 365;
 const INK_BURN_ENTRY: u32 = 2241834181;       // 0x859facc5 "burn"
 const INK_MINT_ENTRY: u32 = 3698268091;       // 0xdc6f17bb "mint"
 const SHOP_OPEN_FEE_ENTRY: u32 = 547545118;   // 0x20a2e01e "pay_open_fee"
-const SHOP_CLOSE_FEE_ENTRY: u32 = 3080983189; // 0xb7a41295 "pay_close_fee"
 const SHOP_MEMBERSHIP_ENTRY: u32 = 1996602347; // 0x7701bbeb "get_membership"
 const SHOP_PROMO_ENTRY: u32 = 672038647;      // 0x280e7ef7 "get_promo_claimed"
 
@@ -215,6 +217,9 @@ export class Stories {
   textHashes: Storage.Map<Uint8Array, stories.boole>;
   termsAccepted: Storage.Map<Uint8Array, stories.uint32>;
   accountStatus: Storage.Map<Uint8Array, stories.account_status>;
+  readingPlace: Storage.Map<Uint8Array, stories.reading_place>;
+  readingCount: Storage.Map<Uint8Array, stories.uint64>;
+  readingList: Storage.Map<Uint8Array, stories.uint64>;
   // How many removed segments this call may still fold in (fix M2).
   skipBudget: u32 = MAX_SKIP_PER_CALL;
 
@@ -251,6 +256,9 @@ export class Stories {
     this.textHashes = new Storage.Map(id, TEXT_HASHES_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
     this.termsAccepted = new Storage.Map(id, TERMS_ACCEPTED_SPACE_ID, stories.uint32.decode, stories.uint32.encode, () => new stories.uint32(0));
     this.accountStatus = new Storage.Map(id, ACCOUNT_STATUS_SPACE_ID, stories.account_status.decode, stories.account_status.encode, () => new stories.account_status(false, 0));
+    this.readingPlace = new Storage.Map(id, READING_PLACE_SPACE_ID, stories.reading_place.decode, stories.reading_place.encode, null);
+    this.readingCount = new Storage.Map(id, READING_COUNT_SPACE_ID, stories.uint64.decode, stories.uint64.encode, () => new stories.uint64(0));
+    this.readingList = new Storage.Map(id, READING_LIST_SPACE_ID, stories.uint64.decode, stories.uint64.encode, null);
   }
 
   // ===================================================================
@@ -334,6 +342,26 @@ export class Stories {
     const limit = this.listLimit(args.limit);
     for (let i = args.start; i < total && <u32>(i - args.start) < limit; i++) {
       out.values.push(this.openerList.get(this.addrIdxKey(args.account!, i))!.value);
+    }
+    return out;
+  }
+
+  get_reading_place(args: stories.get_reading_place_arguments): stories.reading_place {
+    if (!this.isAddress(args.reader)) return new stories.reading_place();
+    const found = this.readingPlace.get(this.idAddrKey(args.story_id, args.reader!));
+    return found != null ? found : new stories.reading_place(args.story_id);
+  }
+
+  get_reading_places(args: stories.get_reading_places_arguments): stories.reading_place_list {
+    const out = new stories.reading_place_list();
+    if (!this.isAddress(args.reader)) return out;
+    const total = this.readingCount.get(args.reader!)!.value;
+    out.total = total;
+    const limit = this.listLimit(args.limit);
+    for (let i = args.start; i < total && <u32>(i - args.start) < limit; i++) {
+      const storyId = this.readingList.get(this.addrIdxKey(args.reader!, i))!.value;
+      const place = this.readingPlace.get(this.idAddrKey(storyId, args.reader!));
+      if (place != null && place.seq > 0) out.values.push(place);
     }
     return out;
   }
@@ -792,8 +820,8 @@ export class Stories {
     this.requireNotPaused();
     const opener = this.requireAddress(args.opener, "STORIES: invalid opener address");
     this.requireSigner(opener, "STORIES: opener has not authorized this");
-    const shopId = this.requireAddress(this.config.get()!.shop, "STORIES: Shop contract is not set");
-    const token = this.requireAddress(args.token, "STORIES: invalid token address");
+    // Closing is free (October 2026): the open price already paid for the
+    // story. The token argument is kept for older callers and ignored.
     const st = this.requireStory(args.story_id);
     this.requireOpener(st, opener);
     System.require(
@@ -809,9 +837,6 @@ export class Stories {
     st.opener_last_active = now;
     this.putStory(args.story_id, st);
     this.emitStatus(args.story_id, st.status, "closed", opener);
-
-    const fee = new stories.shop_fee_call(opener, <u32>st.kind, token);
-    this.callOut(shopId, SHOP_CLOSE_FEE_ENTRY, Protobuf.encode(fee, stories.shop_fee_call.encode), [opener], "STORIES: close fee payment failed");
     this.leave();
     return new stories.empty_object();
   }
@@ -1043,6 +1068,27 @@ export class Stories {
       args.hidden ? stories.moderation_action.ACTION_HIDE : stories.moderation_action.ACTION_UNHIDE,
       args.hidden ? args.reason : stories.moderation_reason.REASON_UNSPECIFIED, actor, seg, note);
     this.leave();
+    return new stories.empty_object();
+  }
+
+  // A reader saves their place (bookmark) so it follows their wallet. Anyone
+  // may read any story, so any wallet may save a place in any existing story.
+  set_reading_place(args: stories.set_reading_place_arguments): stories.empty_object {
+    const reader = this.requireAddress(args.reader, "STORIES: invalid address");
+    this.requireSigner(reader, "STORIES: reader has not authorized this");
+    const st = this.requireStory(args.story_id);
+    System.require(args.seq <= st.segment_count, "STORIES: unknown segment");
+    System.require(args.percent <= 100, "STORIES: percent must be 0 to 100");
+    const key = this.idAddrKey(args.story_id, reader);
+    const existing = this.readingPlace.get(key);
+    if (existing == null) {
+      // First place in this story: add it to the reader's list.
+      const count = this.readingCount.get(reader)!;
+      this.readingList.put(this.addrIdxKey(reader, count.value), new stories.uint64(args.story_id));
+      count.value = count.value + 1;
+      this.readingCount.put(reader, count);
+    }
+    this.readingPlace.put(key, new stories.reading_place(args.story_id, args.seq, args.chapter, args.percent, this.now()));
     return new stories.empty_object();
   }
 
