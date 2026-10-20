@@ -50,7 +50,7 @@
  *        --user must be the opener, unless you add --not-opener (then the chain checks
  *        Writer membership, the promo trial, and a private story's allow-list). Default is 100 units of plain text. Size is lowered to the
  *        per-submission cap and the space left. Stops if the Ink balance is too low.)
- *   node deploy/deploy.js stories-limits --admin <addr> --stories <addr> --cap <100-4000>
+ *   node deploy/deploy.js stories-limits --admin <addr> --stories <addr> [--cap <100-10000>] [--open-limit <1-10>]
  *
  * Moderation (Stories, October 2026):
  *   node deploy/deploy.js set-terms --admin <addr> --stories <addr> --version <n> --file <terms.md> --uri <https link>
@@ -888,14 +888,16 @@ async function cmdStoriesLimits(args) {
   const f = args.flags;
   const admin = lib.requireAddress(f.admin, "admin");
   const stories = lib.requireAddress(f.stories, "stories");
-  const cap = Number(f.cap);
-  if (!Number.isInteger(cap) || cap < 100 || cap > 4000) lib.fail("--cap must be a whole number from 100 to 4000.");
   const { net, provider } = await connect(f);
   const cfg = await readOnly(provider, "stories", stories, "get_config");
+  const cap = f.cap === undefined ? Number(cfg.contribution_cap || 10000) : Number(f.cap);
+  if (!Number.isInteger(cap) || cap < 100 || cap > 10000) lib.fail("--cap must be a whole number from 100 to 10000.");
+  const openLimit = f["open-limit"] === undefined ? Number(cfg.open_limit || 3) : Number(f["open-limit"]);
+  if (!Number.isInteger(openLimit) || openLimit < 1 || openLimit > 10) lib.fail("--open-limit must be a whole number from 1 to 10.");
   const limits = {
     contribution_cap: cap,
     trial_limit: cfg.trial_limit || 0,
-    open_limit: cfg.open_limit || 3,
+    open_limit: openLimit,
     archive_days: cfg.archive_days || 60,
     inactivity_days: cfg.inactivity_days || 30,
   };
@@ -903,7 +905,7 @@ async function cmdStoriesLimits(args) {
   const { Contract } = koilib();
   const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
   const op = await storiesC.encodeOperation({ name: "set_limits", args: limits });
-  const txId = await dryRunThenSend(signer, provider, net, [op], "stories.set_limits: per-submission cap " + cap + " (other limits unchanged: " + JSON.stringify(limits) + ")");
+  const txId = await dryRunThenSend(signer, provider, net, [op], "stories.set_limits: per-part cap " + cap + ", open projects per wallet " + openLimit + " (all limits: " + JSON.stringify(limits) + ")");
   console.log("Send back: the transaction id (" + txId + ").");
 }
 
