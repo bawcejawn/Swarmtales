@@ -1736,13 +1736,13 @@ function kondorTestnetHelp(open) {
   return h("details", { class: "more-options", open: open || null }, [
     h("summary", {}, ["Kondor keeps asking to “Refresh check”?"]),
     h("p", { class: "body-2" }, [
-      "On the testnet, Kondor's automatic mana check doesn't work yet. Nothing is wrong with your wallet or the transaction. In the Kondor window, do one of these:",
+      "Some Kondor versions can't check transactions on the testnet yet. Nothing is wrong with your wallet or the transaction. Try this:",
     ]),
     h("ol", { class: "how-list" }, [
-      h("li", {}, ["Press ", h("b", {}, ["Use free mana"]), ". Kondor's free-mana service pays for the action. Or:"]),
-      h("li", {}, ["Open ", h("b", {}, ["Transaction details"]), ", then ", h("b", {}, ["Technical details"]), ", and switch off ", h("b", {}, ["Optimize mana"]), ". Your own mana then pays, and only what the action uses is spent."]),
+      h("li", {}, ["Press ", h("b", {}, ["Use free mana"]), " in Kondor's window. If your Kondor has an ", h("b", {}, ["Optimize mana"]), " switch under Technical details, switch it off."]),
+      h("li", {}, ["If it still asks to “Refresh check”, cancel it and use the ", h("b", {}, ["Test wallet (testnet only)"]), " further down this window instead."]),
     ]),
-    h("p", { class: "meta" }, ["Then confirm. If Kondor still won't continue, send a screenshot of Technical details to the SwarmTales team."]),
+    h("p", { class: "meta" }, ["On the main network, Kondor works normally."]),
   ]);
 }
 
