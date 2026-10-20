@@ -16,10 +16,27 @@
 //   - The 3-open-projects limit, the promo trial, private allow-lists
 //     with invite codes, the 60-day archive and the admin-finalize rule.
 //
+// MODERATION (added October 2026, for copied text and abuse)
+//   - Every new part carries the writer's "I wrote this, or I have the
+//     right to use it" confirmation and the Terms of Use version they
+//     accepted. The contract refuses a part without both.
+//   - The same exact text cannot be added to one story twice.
+//   - Any wallet may report a part once. Reports from wallets that have
+//     written on SwarmTales count; enough of them hide the part.
+//   - The admin, or a narrow "moderator" key used by the automated copy
+//     checker, may hide and unhide parts at any stage. Hidden parts stay
+//     on the record but block finalizing until unhidden or removed.
+//   - The admin alone may take a part down for good, at any stage. Its
+//     text is cleared from contract storage and no Ink is refunded.
+//   - Every report, hide, unhide and takedown is a public event.
+//
 // WHAT THIS CONTRACT DOES NOT DO
 //   - It never moves stablecoins and holds no money.
-//   - The admin cannot edit or remove text, move or burn Ink, refund
-//     outside the rules, or finalize except under the admin rule.
+//   - The admin cannot edit text, move or burn Ink, refund outside the
+//     rules, or finalize except under the admin rule. It can only remove
+//     text through a recorded takedown.
+//   - The moderator can only hide and unhide. It cannot remove text,
+//     touch Ink, or change any setting.
 //
 // SECURITY RULES ADDED AFTER THE OCTOBER 2026 REVIEW
 //   H1  Every action must be called directly by the transaction, never
@@ -72,6 +89,9 @@ const CATEGORY_MEMBER_SPACE_ID: u32 = 15;
 const AUTHOR_COUNT_SPACE_ID: u32 = 16;
 const AUTHOR_LIST_SPACE_ID: u32 = 17;
 const CATEGORIES_SPACE_ID: u32 = 18;
+const REPORTS_SPACE_ID: u32 = 19;
+const TEXT_HASHES_SPACE_ID: u32 = 20;
+const TERMS_ACCEPTED_SPACE_ID: u32 = 21;
 
 const ADDRESS_LENGTH: i32 = 25;
 const DAY_SECONDS: u64 = 86400;
@@ -111,6 +131,12 @@ const MAX_INVITE_DAYS: u64 = 365;
 const MAX_PDF_URI: i32 = 200;
 const MIN_PDF_HASH: i32 = 32;
 const MAX_PDF_HASH: i32 = 64;
+// Moderation
+const MAX_NOTE: i32 = 200;
+const MAX_TERMS_URI: i32 = 200;
+const TERMS_HASH_LENGTH: i32 = 32;
+const DEFAULT_REPORT_THRESHOLD: u32 = 3;
+const REPORT_THRESHOLD_MAX: u32 = 20;
 
 // ---------- adjustable limits: start value and hard bounds ----------
 const DEFAULT_CAP: u32 = 2000;
@@ -161,6 +187,9 @@ export class Stories {
   authorCount: Storage.Map<Uint8Array, stories.uint64>;
   authorList: Storage.Map<Uint8Array, stories.segment_ref>;
   categories: Storage.Map<Uint8Array, stories.category>;
+  reports: Storage.Map<Uint8Array, stories.boole>;
+  textHashes: Storage.Map<Uint8Array, stories.boole>;
+  termsAccepted: Storage.Map<Uint8Array, stories.uint32>;
   // How many removed segments this call may still fold in (fix M2).
   skipBudget: u32 = MAX_SKIP_PER_CALL;
 
@@ -193,6 +222,9 @@ export class Stories {
     this.authorCount = new Storage.Map(id, AUTHOR_COUNT_SPACE_ID, stories.uint64.decode, stories.uint64.encode, () => new stories.uint64(0));
     this.authorList = new Storage.Map(id, AUTHOR_LIST_SPACE_ID, stories.segment_ref.decode, stories.segment_ref.encode, null);
     this.categories = new Storage.Map(id, CATEGORIES_SPACE_ID, stories.category.decode, stories.category.encode, null);
+    this.reports = new Storage.Map(id, REPORTS_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
+    this.textHashes = new Storage.Map(id, TEXT_HASHES_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
+    this.termsAccepted = new Storage.Map(id, TERMS_ACCEPTED_SPACE_ID, stories.uint32.decode, stories.uint32.encode, () => new stories.uint32(0));
   }
 
   // ===================================================================
@@ -301,6 +333,16 @@ export class Stories {
     return out;
   }
 
+  has_reported(args: stories.has_reported_arguments): stories.boole {
+    if (!this.isAddress(args.account)) return new stories.boole(false);
+    return this.reports.get(this.reportKey(args.story_id, args.seq, args.account!))!;
+  }
+
+  get_terms_accepted(args: stories.get_terms_accepted_arguments): stories.uint32 {
+    if (!this.isAddress(args.account)) return new stories.uint32(0);
+    return this.termsAccepted.get(args.account!)!;
+  }
+
   quote_cost(args: stories.quote_cost_arguments): stories.uint64 {
     return new stories.uint64(this.requireText(this.text(args.text), true));
   }
@@ -339,6 +381,7 @@ export class Stories {
     System.require(cost == args.expected_ink, "STORIES: Ink cost does not match expected_ink");
     System.require(cost <= <u64>cfg.contribution_cap, "STORIES: text is over the per-submission cap");
     System.require(cost >= this.minContribution(cfg), "STORIES: opening text is shorter than the minimum");
+    this.requireRightsAndTerms(opener, args.rights_confirmed, args.terms_version, cfg);
 
     const open = this.openCount.get(opener)!;
     System.require(open.value < cfg.open_limit, "STORIES: you already have the maximum number of open projects");
@@ -379,7 +422,7 @@ export class Stories {
     this.callOut(shopId, SHOP_OPEN_FEE_ENTRY, Protobuf.encode(fee, stories.shop_fee_call.encode), [opener], "STORIES: open fee payment failed");
 
     // 2) The opening text is segment 1, paid in Ink like any other text.
-    this.writeSegment(storyId, st, opener, text, cost, true, args.ai_assisted, false, ink);
+    this.writeSegment(storyId, st, opener, text, cost, true, args.ai_assisted, false, ink, args.terms_version);
     this.leave();
     return new stories.uint64(storyId);
   }
@@ -564,6 +607,7 @@ export class Stories {
       cost >= this.minContribution(cfg) || SafeMath.add(st.used_chars, cost) == st.max_chars,
       "STORIES: text is shorter than the minimum (only the piece that fills the story may be shorter)"
     );
+    this.requireRightsAndTerms(author, args.rights_confirmed, args.terms_version, cfg);
 
     const privileged = this.isPrivileged(args.story_id, st, author);
     if (st.visibility == stories.visibility.VISIBILITY_PRIVATE) {
@@ -582,7 +626,7 @@ export class Stories {
       trial = true;
     }
 
-    const seq = this.writeSegment(args.story_id, st, author, text, cost, args.starts_chapter, args.ai_assisted, trial, ink);
+    const seq = this.writeSegment(args.story_id, st, author, text, cost, args.starts_chapter, args.ai_assisted, trial, ink, args.terms_version);
     this.leave();
     return new stories.uint64(seq);
   }
@@ -642,7 +686,9 @@ export class Stories {
     const key = this.pairKey(args.story_id, args.seq);
     const seg = this.requireActiveSegment(key);
 
-    const refund = seg.charged;
+    // A part hidden for a suspected copy or abuse is not refunded.
+    const refund = seg.hidden ? 0 : seg.charged;
+    if (seg.hidden) this.unhideCount(st);
     const oldCost = seg.current_cost;
     const now = this.now();
     this.clearSegment(seg, editor, now);
@@ -783,6 +829,10 @@ export class Stories {
       const oldCost = seg.current_cost;
       let refund: u64 = 0;
       let removed = false;
+      System.require(
+        !seg.hidden || item.mode == stories.final_mode.FINAL_REMOVED,
+        "STORIES: a hidden part can only be removed in the final edit (or unhidden first)"
+      );
 
       if (item.mode == stories.final_mode.FINAL_UNCHANGED) {
         seg.surviving = oldCost < seg.charged ? oldCost : seg.charged;
@@ -805,7 +855,8 @@ export class Stories {
         // fixes in a full book). Growth stays inside the light-edit allowance.
         st.used_chars = SafeMath.add(SafeMath.sub(st.used_chars, oldCost), newCost);
       } else if (item.mode == stories.final_mode.FINAL_REMOVED) {
-        refund = seg.charged;
+        refund = seg.hidden ? 0 : seg.charged;
+        if (seg.hidden) this.unhideCount(st);
         this.clearSegment(seg, finalizer, now);
         st.used_chars = SafeMath.sub(st.used_chars, oldCost);
         removed = true;
@@ -842,6 +893,7 @@ export class Stories {
     this.requireFinalizer(st, finalizer);
     this.skipRemoved(args.story_id, st);
     System.require(st.final_cursor == st.segment_count, "STORIES: some segments are not processed yet");
+    System.require(st.hidden_count == 0, "STORIES: some parts are hidden while they are checked; unhide or remove them first");
     const uri = this.text(args.pdf_uri);
     System.require(uri.length >= 1 && uri.length <= MAX_PDF_URI && this.isPlainAscii(uri), "STORIES: PDF link must be 1 to 200 plain characters");
     const hash = args.pdf_hash;
@@ -854,6 +906,156 @@ export class Stories {
     this.decrementOpen(st.opener!);
     this.putStory(args.story_id, st);
     this.emitStatus(args.story_id, st.status, "finalized", finalizer);
+    const ev = new stories.story_finalized_event(args.story_id, uri, hash, st.running_hash);
+    System.event("stories.story_finalized_event", Protobuf.encode(ev, stories.story_finalized_event.encode), [st.opener!]);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  // ===================================================================
+  // Moderation
+  // ===================================================================
+
+  // Admin or moderator hides or unhides a live part, at any stage. Works
+  // while paused, so moderation never waits for an unpause.
+  set_segment_hidden(args: stories.set_segment_hidden_arguments): stories.empty_object {
+    this.enter();
+    const actor = this.requireAddress(args.actor, "STORIES: invalid address");
+    this.requireModeratorOrAdmin(actor);
+    const st = this.requireStory(args.story_id);
+    const key = this.pairKey(args.story_id, args.seq);
+    const seg = this.requireActiveSegment(key);
+    const note = this.requireNote(args.note);
+    if (args.hidden) {
+      System.require(!seg.hidden, "STORIES: part is already hidden");
+      System.require(args.reason != stories.moderation_reason.REASON_UNSPECIFIED, "STORIES: give a reason");
+      seg.hidden = true;
+      seg.moderation_reason = args.reason;
+      st.hidden_count = st.hidden_count + 1;
+    } else {
+      System.require(seg.hidden, "STORIES: part is not hidden");
+      seg.hidden = false;
+      seg.moderation_reason = stories.moderation_reason.REASON_UNSPECIFIED;
+      // Old reports do not hide it again; it takes new ones.
+      seg.report_count = 0;
+      this.unhideCount(st);
+    }
+    this.segments.put(key, seg);
+    this.putStory(args.story_id, st);
+    this.emitModeration(args.story_id, args.seq,
+      args.hidden ? stories.moderation_action.ACTION_HIDE : stories.moderation_action.ACTION_UNHIDE,
+      args.hidden ? args.reason : stories.moderation_reason.REASON_UNSPECIFIED, actor, seg, note);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  // Admin removes a part's text for good, at any stage. No Ink refund.
+  takedown_segment(args: stories.takedown_segment_arguments): stories.empty_object {
+    this.enter();
+    this.requireAdmin();
+    const admin = this.getAdmin();
+    const st = this.requireStory(args.story_id);
+    const key = this.pairKey(args.story_id, args.seq);
+    const found = this.segments.get(key);
+    System.require(found != null, "STORIES: unknown segment");
+    const seg = found!;
+    System.require(!seg.taken_down, "STORIES: part was already taken down");
+    System.require(args.reason != stories.moderation_reason.REASON_UNSPECIFIED, "STORIES: give a reason");
+    const note = this.requireNote(args.note);
+    const fingerprint = seg.text_hash != null ? seg.text_hash! : new Uint8Array(0);
+    const now = this.now();
+
+    if (seg.status == stories.segment_status.SEGMENT_ACTIVE) {
+      const author = seg.author!;
+      // The writer's live and surviving totals lose this part; nothing is refunded.
+      const totalKey = this.idAddrKey(args.story_id, author);
+      const total = this.contributorTotals.get(totalKey);
+      if (total != null) {
+        total.value = total.value > seg.charged ? total.value - seg.charged : 0;
+        this.contributorTotals.put(totalKey, total);
+      }
+      if (seg.surviving > 0) {
+        const surv = this.survivingTotals.get(totalKey)!;
+        surv.value = surv.value > seg.surviving ? surv.value - seg.surviving : 0;
+        this.survivingTotals.put(totalKey, surv);
+      }
+      if (seg.hidden) this.unhideCount(st);
+      st.used_chars = SafeMath.sub(st.used_chars, seg.current_cost);
+      this.clearSegment(seg, admin, now);
+      seg.hidden = false;
+      // Already processed by the final edit: record it as removed there too.
+      if (args.seq <= st.final_cursor) seg.final_mode = stories.final_mode.FINAL_REMOVED;
+      if (st.status == stories.story_status.STATUS_FINALIZED) st.needs_new_pdf = true;
+      if (st.status == stories.story_status.STATUS_LOCKED && st.used_chars < st.max_chars) {
+        // Space opened up again: the story takes new parts.
+        st.status = stories.story_status.STATUS_OPEN;
+        st.locked_at = 0;
+        this.emitStatus(args.story_id, st.status, "reopened-after-takedown", admin);
+      }
+    }
+    seg.taken_down = true;
+    seg.moderation_reason = args.reason;
+    this.segments.put(key, seg);
+    this.putStory(args.story_id, st);
+
+    const ev = new stories.moderation_event(args.story_id, args.seq, stories.moderation_action.ACTION_TAKEDOWN,
+      args.reason, admin, seg.author, note, fingerprint);
+    System.event("stories.moderation_event", Protobuf.encode(ev, stories.moderation_event.encode), [seg.author!]);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  // Any wallet may report a live part once. Only reports from wallets that
+  // have written on SwarmTales count toward hiding it.
+  report_segment(args: stories.report_segment_arguments): stories.empty_object {
+    this.enter();
+    this.requireNotPaused();
+    const reporter = this.requireAddress(args.reporter, "STORIES: invalid reporter address");
+    this.requireSigner(reporter, "STORIES: reporter has not authorized this");
+    const st = this.requireStory(args.story_id);
+    const key = this.pairKey(args.story_id, args.seq);
+    const seg = this.requireActiveSegment(key);
+    System.require(!seg.hidden, "STORIES: this part is already hidden while it is checked");
+    System.require(!Arrays.equal(reporter, seg.author!), "STORIES: you cannot report your own part");
+    System.require(args.reason != stories.moderation_reason.REASON_UNSPECIFIED, "STORIES: give a reason");
+    const note = this.requireNote(args.note);
+    const rkey = this.reportKey(args.story_id, args.seq, reporter);
+    System.require(!this.reports.get(rkey)!.value, "STORIES: you already reported this part");
+    this.reports.put(rkey, new stories.boole(true));
+
+    const counted = this.authorCount.get(reporter)!.value > 0;
+    if (counted) seg.report_count = seg.report_count + 1;
+    const ev = new stories.report_event(args.story_id, args.seq, reporter, args.reason, note, counted, seg.report_count);
+    System.event("stories.report_event", Protobuf.encode(ev, stories.report_event.encode), [seg.author!]);
+
+    if (counted && seg.report_count >= this.reportThreshold(this.config.get()!)) {
+      seg.hidden = true;
+      seg.moderation_reason = args.reason;
+      st.hidden_count = st.hidden_count + 1;
+      this.putStory(args.story_id, st);
+      this.emitModeration(args.story_id, args.seq, stories.moderation_action.ACTION_REPORT_HIDE, args.reason, reporter, seg,
+        "hidden after " + seg.report_count.toString() + " writer reports");
+    }
+    this.segments.put(key, seg);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  // After a takedown in a finalized story, the admin publishes the new PDF.
+  replace_pdf(args: stories.replace_pdf_arguments): stories.empty_object {
+    this.enter();
+    this.requireAdmin();
+    const st = this.requireStory(args.story_id);
+    System.require(st.status == stories.story_status.STATUS_FINALIZED && st.needs_new_pdf, "STORIES: this story does not need a new PDF");
+    const uri = this.text(args.pdf_uri);
+    System.require(uri.length >= 1 && uri.length <= MAX_PDF_URI && this.isPlainAscii(uri), "STORIES: PDF link must be 1 to 200 plain characters");
+    const hash = args.pdf_hash;
+    System.require(hash != null && hash.length >= MIN_PDF_HASH && hash.length <= MAX_PDF_HASH, "STORIES: PDF hash must be 32 to 64 bytes");
+    st.pdf_uri = uri;
+    st.pdf_hash = hash;
+    st.needs_new_pdf = false;
+    this.putStory(args.story_id, st);
+    this.emitStatus(args.story_id, st.status, "pdf-replaced", this.getAdmin());
     const ev = new stories.story_finalized_event(args.story_id, uri, hash, st.running_hash);
     System.event("stories.story_finalized_event", Protobuf.encode(ev, stories.story_finalized_event.encode), [st.opener!]);
     this.leave();
@@ -1004,6 +1206,45 @@ export class Stories {
     return new stories.empty_object();
   }
 
+  set_moderation(args: stories.set_moderation_arguments): stories.empty_object {
+    this.enter();
+    this.requireAdmin();
+    const mod = args.moderator;
+    const off = mod == null || mod.length == 0;
+    if (!off) {
+      this.requireAddress(mod, "STORIES: invalid moderator address");
+      System.require(!Arrays.equal(mod!, this.contractId), "STORIES: the moderator cannot be the Stories contract");
+    }
+    System.require(args.report_threshold >= 1 && args.report_threshold <= REPORT_THRESHOLD_MAX, "STORIES: report threshold must be 1 to 20");
+    const cfg = this.config.get()!;
+    cfg.moderator = off ? new Uint8Array(0) : mod;
+    cfg.report_threshold = args.report_threshold;
+    this.saveConfig(cfg);
+    const ev = new stories.moderation_settings_event(cfg.moderator, args.report_threshold);
+    System.event("stories.moderation_settings_event", Protobuf.encode(ev, stories.moderation_settings_event.encode), []);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  set_terms(args: stories.set_terms_arguments): stories.empty_object {
+    this.enter();
+    this.requireAdmin();
+    const cfg = this.config.get()!;
+    System.require(args.version > cfg.terms_version, "STORIES: a new Terms of Use version must be higher than the current one");
+    const hash = args.terms_hash;
+    System.require(hash != null && hash.length == TERMS_HASH_LENGTH, "STORIES: Terms of Use hash must be 32 bytes");
+    const uri = this.text(args.terms_uri);
+    System.require(uri.length >= 1 && uri.length <= MAX_TERMS_URI && this.isPlainAscii(uri), "STORIES: Terms of Use link must be 1 to 200 plain characters");
+    cfg.terms_version = args.version;
+    cfg.terms_hash = hash;
+    cfg.terms_uri = uri;
+    this.saveConfig(cfg);
+    const ev = new stories.terms_event(args.version, hash, uri);
+    System.event("stories.terms_event", Protobuf.encode(ev, stories.terms_event.encode), []);
+    this.leave();
+    return new stories.empty_object();
+  }
+
   set_admin(args: stories.set_admin_arguments): stories.empty_object {
     this.enter();
     this.requireAdmin();
@@ -1025,12 +1266,16 @@ export class Stories {
   // Append a new segment, update the story, then burn the Ink.
   private writeSegment(
     storyId: u64, st: stories.story, author: Uint8Array, text: string, cost: u64,
-    startsChapter: bool, aiAssisted: bool, trial: bool, ink: Uint8Array
+    startsChapter: bool, aiAssisted: bool, trial: bool, ink: Uint8Array, termsVersion: u32
   ): u64 {
     const now = this.now();
     const seq = st.segment_count + 1;
     const chapter = startsChapter || seq == 1;
     const hash = this.sha256(StringBytes.stringToBytes(text));
+    // The same exact text cannot go into one story twice.
+    const dupKey = this.join(this.u64Key(storyId), hash);
+    System.require(!this.textHashes.get(dupKey)!.value, "STORIES: this exact text is already in this story");
+    this.textHashes.put(dupKey, new stories.boole(true));
     const seg = new stories.segment();
     seg.author = author;
     seg.text = text;
@@ -1042,6 +1287,8 @@ export class Stories {
     seg.starts_chapter = chapter;
     seg.ai_assisted = aiAssisted;
     seg.created_at = now;
+    seg.rights_confirmed = true;
+    seg.terms_version = termsVersion;
     this.segments.put(this.pairKey(storyId, seq), seg);
 
     st.segment_count = seq;
@@ -1068,7 +1315,7 @@ export class Stories {
     this.maybeAutoLock(storyId, st, author);
     this.putStory(storyId, st);
 
-    const ev = new stories.contribution_event(storyId, seq, author, cost, chapter, aiAssisted, hash, trial);
+    const ev = new stories.contribution_event(storyId, seq, author, cost, chapter, aiAssisted, hash, trial, true, termsVersion);
     System.event("stories.contribution_event", Protobuf.encode(ev, stories.contribution_event.encode), [author]);
 
     const burn = new stories.ink_burn_call(author, cost, BURN_CONTRIBUTION, "s:" + storyId.toString() + ":" + seq.toString());
@@ -1169,6 +1416,59 @@ export class Stories {
     const open = this.openCount.get(opener)!;
     if (open.value > 0) open.value = open.value - 1;
     this.openCount.put(opener, open);
+  }
+
+  // ===================================================================
+  // Moderation helpers
+  // ===================================================================
+
+  // Every new part needs the writer's rights confirmation and the current
+  // Terms of Use version. A wallet's newest accepted version is recorded.
+  private requireRightsAndTerms(account: Uint8Array, rights: bool, version: u32, cfg: stories.config): void {
+    System.require(rights, "STORIES: confirm that you wrote this text or have the right to use it");
+    System.require(version == cfg.terms_version, "STORIES: the Terms of Use have changed; reload the page and accept the current version");
+    const accepted = this.termsAccepted.get(account)!;
+    if (accepted.value == version) return;
+    accepted.value = version;
+    this.termsAccepted.put(account, accepted);
+    const ev = new stories.terms_accepted_event(account, version);
+    System.event("stories.terms_accepted_event", Protobuf.encode(ev, stories.terms_accepted_event.encode), [account]);
+  }
+
+  private requireModeratorOrAdmin(actor: Uint8Array): void {
+    if (Arrays.equal(actor, this.getAdmin())) {
+      this.requireAdmin();
+      return;
+    }
+    const mod = this.config.get()!.moderator;
+    System.require(mod != null && mod.length == ADDRESS_LENGTH && Arrays.equal(actor, mod!), "STORIES: only the admin or the moderator may do this");
+    this.requireSigner(actor, "STORIES: moderator has not authorized this");
+  }
+
+  private requireNote(value: string | null): string {
+    const note = this.text(value);
+    System.require(note.length <= MAX_NOTE, "STORIES: note must be at most 200 characters");
+    if (note.length > 0) this.requireText(note, false);
+    return note;
+  }
+
+  private reportThreshold(cfg: stories.config): u32 {
+    return cfg.report_threshold == 0 ? DEFAULT_REPORT_THRESHOLD : cfg.report_threshold;
+  }
+
+  private unhideCount(st: stories.story): void {
+    if (st.hidden_count > 0) st.hidden_count = st.hidden_count - 1;
+  }
+
+  private reportKey(storyId: u64, seq: u64, account: Uint8Array): Uint8Array {
+    return this.join(this.pairKey(storyId, seq), account);
+  }
+
+  private emitModeration(storyId: u64, seq: u64, action: stories.moderation_action, reason: stories.moderation_reason,
+    by: Uint8Array, seg: stories.segment, note: string): void {
+    const ev = new stories.moderation_event(storyId, seq, action, reason, by, seg.author, note,
+      seg.text_hash != null ? seg.text_hash! : new Uint8Array(0));
+    System.event("stories.moderation_event", Protobuf.encode(ev, stories.moderation_event.encode), [seg.author!]);
   }
 
   // ===================================================================

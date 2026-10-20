@@ -139,8 +139,19 @@ function same(a: Uint8Array | null, b: Uint8Array): bool {
   return Base58.encode(a) == Base58.encode(b);
 }
 
+// Filler text of exactly n characters. Each call is different, because a
+// story refuses the same exact text twice.
+let FILL_COUNTER: i32 = 0;
 function chars(n: i32): string {
-  return "a".repeat(n);
+  FILL_COUNTER++;
+  let tag = "";
+  let c = FILL_COUNTER;
+  while (c > 0) {
+    tag += String.fromCharCode(98 + c % 25);
+    c = c / 25;
+  }
+  if (tag.length >= n) return tag.substring(0, n);
+  return tag + "a".repeat(n - tag.length);
 }
 
 function cost(text: string): u64 {
@@ -179,7 +190,7 @@ function openAs(opener: Uint8Array, kind: stories.story_kind, max: u64, vis: sto
   authorize(opener);
   allowCalls(2);
   const id = new Stories().open_story(new stories.open_story_arguments(
-    opener, kind, "My Tale", max, 1, 0, vis, 0, 0, text, false, <u64>text.length, USDT
+    opener, kind, "My Tale", max, 1, 0, vis, 0, 0, text, false, <u64>text.length, USDT, true, 0
   )).value;
   checkpoint();
   return id;
@@ -193,7 +204,7 @@ function openShort(): u64 {
 function writeAsOpener(id: u64, text: string): u64 {
   authorize(ALICE);
   allowCalls(1);
-  const seq = new Stories().contribute(new stories.contribute_arguments(ALICE, id, text, false, false, <u64>text.length)).value;
+  const seq = new Stories().contribute(new stories.contribute_arguments(ALICE, id, text, false, false, <u64>text.length, true, 0)).value;
   checkpoint();
   return seq;
 }
@@ -202,7 +213,7 @@ function writeAsOpener(id: u64, text: string): u64 {
 function writeAsWriter(who: Uint8Array, id: u64, text: string): u64 {
   authorize(who);
   results([writer(), okCall()]);
-  const seq = new Stories().contribute(new stories.contribute_arguments(who, id, text, false, false, <u64>text.length)).value;
+  const seq = new Stories().contribute(new stories.contribute_arguments(who, id, text, false, false, <u64>text.length, true, 0)).value;
   checkpoint();
   return seq;
 }
@@ -267,7 +278,7 @@ let fResults: system_calls.exit_arguments[] = [];
 function failContribute(): void {
   authorize(fWho);
   results(fResults);
-  new Stories().contribute(new stories.contribute_arguments(fWho, fId, fText, false, false, fExpected));
+  new Stories().contribute(new stories.contribute_arguments(fWho, fId, fText, false, false, fExpected, true, 0));
 }
 
 function failEdit(): void {
@@ -304,7 +315,7 @@ function reset(): void {
 }
 
 function openArgs(opener: Uint8Array, kind: stories.story_kind, max: u64, c1: u32, c2: u32, title: string, text: string, expected: u64, free: u32): stories.open_story_arguments {
-  return new stories.open_story_arguments(opener, kind, title, max, c1, c2, PUBLIC, free, 0, text, false, expected, USDT);
+  return new stories.open_story_arguments(opener, kind, title, max, c1, c2, PUBLIC, free, 0, text, false, expected, USDT, true, 0);
 }
 
 // Alice tries to open with these settings; Shop and Ink answer `answers`.
@@ -547,12 +558,12 @@ describe("Stories: opening", () => {
     fails(() => {
       authorize(ALICE);
       allowCalls(2);
-      new Stories().open_story(new stories.open_story_arguments(ALICE, SHORT, "T", 10000, 1, 0, <stories.visibility>9, 0, 0, "Hi", false, 2, USDT));
+      new Stories().open_story(new stories.open_story_arguments(ALICE, SHORT, "T", 10000, 1, 0, <stories.visibility>9, 0, 0, "Hi", false, 2, USDT, true, 0));
     }, "STORIES: visibility must be Public, Unlisted or Private");
     fails(() => {
       authorize(ALICE);
       allowCalls(2);
-      new Stories().open_story(new stories.open_story_arguments(ALICE, SHORT, "T", 10000, 1, 0, PUBLIC, 0, 10001, "Hi", false, 2, USDT));
+      new Stories().open_story(new stories.open_story_arguments(ALICE, SHORT, "T", 10000, 1, 0, PUBLIC, 0, 10001, "Hi", false, 2, USDT, true, 0));
     }, "STORIES: Contributor Edition minimum is above the story size");
   });
 
@@ -595,7 +606,7 @@ describe("Stories: opening", () => {
     new Stories().set_paused(new stories.set_paused_arguments(true));
     checkpoint();
     fails(() => { tryOpen(openArgs(ALICE, SHORT, 10000, 1, 0, "T", "Hi", 2, 0), twoOk()); }, "STORIES: stories are paused");
-    fails(() => { authorize(ALICE); allowCalls(1); new Stories().contribute(new stories.contribute_arguments(ALICE, 1, "More", false, false, 4)); }, "STORIES: stories are paused");
+    fails(() => { authorize(ALICE); allowCalls(1); new Stories().contribute(new stories.contribute_arguments(ALICE, 1, "More", false, false, 4, true, 0)); }, "STORIES: stories are paused");
     expect(story(1).used_chars).toBe(17);
   });
 
@@ -645,7 +656,7 @@ describe("Stories: writing", () => {
   it("starts a new chapter only when asked", () => {
     authorize(ALICE);
     allowCalls(1);
-    new Stories().contribute(new stories.contribute_arguments(ALICE, 1, "Chapter two", true, true, 11));
+    new Stories().contribute(new stories.contribute_arguments(ALICE, 1, "Chapter two", true, true, 11, true, 0));
     checkpoint();
     expect(story(1).chapter_count).toBe(2);
     expect(segment(1, 2).starts_chapter).toBe(true);
@@ -674,8 +685,8 @@ describe("Stories: writing", () => {
     fails(failContribute, "STORIES: Ink cost does not match expected_ink");
     fText = "\uD83D\uDC4D\uD83C\uDFFD"; fExpected = 2;  // 👍🏽 costs 4, not 2
     fails(failContribute, "STORIES: Ink cost does not match expected_ink");
-    fails(() => { authorize(MALLORY); results([writer(), okCall()]); new Stories().contribute(new stories.contribute_arguments(BOB, 1, "Hi", false, false, 2)); }, "STORIES: author has not authorized this");
-    fails(() => { authorize(BOB); results([writer(), okCall()]); new Stories().contribute(new stories.contribute_arguments(BOB, 99, "Hi", false, false, 2)); }, "STORIES: unknown story");
+    fails(() => { authorize(MALLORY); results([writer(), okCall()]); new Stories().contribute(new stories.contribute_arguments(BOB, 1, "Hi", false, false, 2, true, 0)); }, "STORIES: author has not authorized this");
+    fails(() => { authorize(BOB); results([writer(), okCall()]); new Stories().contribute(new stories.contribute_arguments(BOB, 99, "Hi", false, false, 2, true, 0)); }, "STORIES: unknown story");
   });
 
   it("requires an active Writer membership, or a claimed promo for the trial", () => {
@@ -696,7 +707,7 @@ describe("Stories: writing", () => {
   it("caps trial writing at the trial limit, and refunds do not restore it", () => {
     authorize(BOB);
     results([okCall(), promo(true), okCall()]);
-    new Stories().contribute(new stories.contribute_arguments(BOB, 1, chars(1000), false, false, 1000));
+    new Stories().contribute(new stories.contribute_arguments(BOB, 1, chars(1000), false, false, 1000, true, 0));
     checkpoint();
     expect(new Stories().get_trial_used(new stories.get_trial_used_arguments(BOB)).value).toBe(1000);
     fWho = BOB; fId = 1; fText = "x"; fExpected = 1; fResults = [okCall(), promo(true), okCall()];
@@ -716,7 +727,7 @@ describe("Stories: writing", () => {
     const before = calls().length;
     authorize(CARA);
     allowCalls(1);       // only the burn
-    new Stories().contribute(new stories.contribute_arguments(CARA, 1, "Editor text", false, false, 11));
+    new Stories().contribute(new stories.contribute_arguments(CARA, 1, "Editor text", false, false, 11, true, 0));
     checkpoint();
     expect(calls().length).toBe(before + 1);
     expect(same(lastBurn().from, CARA)).toBe(true);

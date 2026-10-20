@@ -146,8 +146,19 @@ function same(a: Uint8Array | null, b: Uint8Array): bool {
   return Base58.encode(a) == Base58.encode(b);
 }
 
+// Filler text of exactly n characters. Each call is different, because a
+// story refuses the same exact text twice.
+let FILL_COUNTER: i32 = 0;
 function chars(n: i32): string {
-  return "a".repeat(n);
+  FILL_COUNTER++;
+  let tag = "";
+  let c = FILL_COUNTER;
+  while (c > 0) {
+    tag += String.fromCharCode(98 + c % 25);
+    c = c / 25;
+  }
+  if (tag.length >= n) return tag.substring(0, n);
+  return tag + "a".repeat(n - tag.length);
 }
 
 function cost(text: string): u64 {
@@ -186,7 +197,7 @@ function openAs(opener: Uint8Array, kind: stories.story_kind, max: u64, vis: sto
   authorize(opener);
   allowCalls(2);
   const id = new Stories().open_story(new stories.open_story_arguments(
-    opener, kind, "My Tale", max, 1, 0, vis, 0, 0, text, false, <u64>text.length, USDT
+    opener, kind, "My Tale", max, 1, 0, vis, 0, 0, text, false, <u64>text.length, USDT, true, 0
   )).value;
   checkpoint();
   return id;
@@ -200,7 +211,7 @@ function openShort(): u64 {
 function writeAsOpener(id: u64, text: string): u64 {
   authorize(ALICE);
   allowCalls(1);
-  const seq = new Stories().contribute(new stories.contribute_arguments(ALICE, id, text, false, false, <u64>text.length)).value;
+  const seq = new Stories().contribute(new stories.contribute_arguments(ALICE, id, text, false, false, <u64>text.length, true, 0)).value;
   checkpoint();
   return seq;
 }
@@ -209,7 +220,7 @@ function writeAsOpener(id: u64, text: string): u64 {
 function writeAsWriter(who: Uint8Array, id: u64, text: string): u64 {
   authorize(who);
   results([writer(), okCall()]);
-  const seq = new Stories().contribute(new stories.contribute_arguments(who, id, text, false, false, <u64>text.length)).value;
+  const seq = new Stories().contribute(new stories.contribute_arguments(who, id, text, false, false, <u64>text.length, true, 0)).value;
   checkpoint();
   return seq;
 }
@@ -274,7 +285,7 @@ let fResults: system_calls.exit_arguments[] = [];
 function failContribute(): void {
   authorize(fWho);
   results(fResults);
-  new Stories().contribute(new stories.contribute_arguments(fWho, fId, fText, false, false, fExpected));
+  new Stories().contribute(new stories.contribute_arguments(fWho, fId, fText, false, false, fExpected, true, 0));
 }
 
 function failEdit(): void {
@@ -311,7 +322,7 @@ function reset(): void {
 }
 
 function openArgs(opener: Uint8Array, kind: stories.story_kind, max: u64, c1: u32, c2: u32, title: string, text: string, expected: u64, free: u32): stories.open_story_arguments {
-  return new stories.open_story_arguments(opener, kind, title, max, c1, c2, PUBLIC, free, 0, text, false, expected, USDT);
+  return new stories.open_story_arguments(opener, kind, title, max, c1, c2, PUBLIC, free, 0, text, false, expected, USDT, true, 0);
 }
 
 // Alice tries to open with these settings; Shop and Ink answer `answers`.
@@ -376,7 +387,7 @@ describe("Stories: opening", () => {
     authorize(ALICE);
     allowCalls(2);
     const id = new Stories().open_story(new stories.open_story_arguments(
-      ALICE, SHORT, "Two tags", 10000, 1, 2, PUBLIC, 0, 0, "Hi", false, 2, USDT
+      ALICE, SHORT, "Two tags", 10000, 1, 2, PUBLIC, 0, 0, "Hi", false, 2, USDT, true, 0
     )).value;
     checkpoint();
     const st = story(id);
@@ -437,7 +448,7 @@ describe("Stories: private stories, allow-list and invites", () => {
     addEditor(1, CARA);
     authorize(CARA);
     allowCalls(1);
-    new Stories().contribute(new stories.contribute_arguments(CARA, 1, "Editor continues", false, false, 16));
+    new Stories().contribute(new stories.contribute_arguments(CARA, 1, "Editor continues", false, false, 16, true, 0));
     checkpoint();
     expect(segment(1, 2).text).toBe("Opener continues");
     expect(segment(1, 3).text).toBe("Editor continues");
@@ -741,10 +752,10 @@ describe("Stories: gaps the main suite does not reach", () => {
   it("refuses a missing category, a null title, null opening text and bad addresses", () => {
     openShort();
     fails(() => { tryOpen(openArgs(ALICE, SHORT, 10000, 0, 0, "T", "Hi", 2, 0), twoOk()); }, "STORIES: pick an active category");
-    fails(() => { tryOpen(new stories.open_story_arguments(ALICE, SHORT, null, 10000, 1, 0, PUBLIC, 0, 0, "Hi", false, 2, USDT), twoOk()); }, "STORIES: title must be 1 to 100 characters");
-    fails(() => { tryOpen(new stories.open_story_arguments(ALICE, SHORT, "T", 10000, 1, 0, PUBLIC, 0, 0, null, false, 0, USDT), twoOk()); }, "STORIES: text is empty");
-    fails(() => { tryOpen(new stories.open_story_arguments(ALICE, SHORT, "T", 10000, 1, 0, PUBLIC, 0, 0, "Hi", false, 2, new Uint8Array(3)), twoOk()); }, "STORIES: invalid token address");
-    fails(() => { tryOpen(new stories.open_story_arguments(new Uint8Array(4), SHORT, "T", 10000, 1, 0, PUBLIC, 0, 0, "Hi", false, 2, USDT), twoOk()); }, "STORIES: invalid opener address");
+    fails(() => { tryOpen(new stories.open_story_arguments(ALICE, SHORT, null, 10000, 1, 0, PUBLIC, 0, 0, "Hi", false, 2, USDT, true, 0), twoOk()); }, "STORIES: title must be 1 to 100 characters");
+    fails(() => { tryOpen(new stories.open_story_arguments(ALICE, SHORT, "T", 10000, 1, 0, PUBLIC, 0, 0, null, false, 0, USDT, true, 0), twoOk()); }, "STORIES: text is empty");
+    fails(() => { tryOpen(new stories.open_story_arguments(ALICE, SHORT, "T", 10000, 1, 0, PUBLIC, 0, 0, "Hi", false, 2, new Uint8Array(3), true, 0), twoOk()); }, "STORIES: invalid token address");
+    fails(() => { tryOpen(new stories.open_story_arguments(new Uint8Array(4), SHORT, "T", 10000, 1, 0, PUBLIC, 0, 0, "Hi", false, 2, USDT, true, 0), twoOk()); }, "STORIES: invalid opener address");
   });
 
   it("refuses updates, invites, close and archive while paused", () => {
