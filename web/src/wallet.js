@@ -26,7 +26,12 @@ import {
 
 export { VAULT_MANA_EXPLANATION };
 
-export const KONDOR_HINT = "If Kondor refuses the signature, tick Use free mana in its window. A normal wallet sometimes needs that box even when it holds test KOIN.";
+export const KONDOR_HINT_MAINNET = "If Kondor refuses the signature, tick Use free mana in its window.";
+export const KONDOR_HINT_TESTNET = "If Kondor keeps asking to “Refresh check”, cancel it and use the Test wallet (testnet only) in the wallet window.";
+/** Kept for older imports: the hint for the network this page uses. */
+export function kondorHint(mainnet) {
+  return mainnet ? KONDOR_HINT_MAINNET : KONDOR_HINT_TESTNET;
+}
 
 const SESSION_KEY = "swarmtales.wallet";
 
@@ -35,7 +40,7 @@ export function loadSavedSession() {
     const raw = sessionStorage.getItem(SESSION_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (!parsed || (parsed.kind !== "kondor" && parsed.kind !== "koinvault")) return null;
+    if (!parsed || (parsed.kind !== "kondor" && parsed.kind !== "koinvault" && parsed.kind !== "testwallet")) return null;
     return parsed;
   } catch {
     return null;
