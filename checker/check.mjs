@@ -9,8 +9,14 @@
  *        GOOGLE_BOOKS_KEY  Google Books: searches inside millions of books
  *        TAVILY_API_KEY    Tavily web search (free: 1,000 searches a month)
  *        BRAVE_API_KEY     Brave web search (Brave now needs a card; kept for anyone who has a key)
- *   4. hides a part on a high-confidence match, signing with the MODERATOR key,
- *      which can only hide and unhide. Every hide is a public event with a note.
+ *   4. REVIEW FIRST (the default): a possible match is NOT hidden. It is listed
+ *      in the run summary and in one GitHub issue, "Copy checker: parts to
+ *      review", so a person can look at it first. To hide it, run the
+ *      workflow by hand with "hide_part" (for example 4:7); to undo a hide,
+ *      use "unhide_part". Set the repository variable CHECKER_MODE=auto to let
+ *      the checker hide high-confidence matches by itself instead.
+ *      Hiding is signed with the MODERATOR key, which can only hide and
+ *      unhide. Every hide is a public event with a note.
  *   5. when a story fills up or enters its final edit, checks all of it once
  *      more against everything else, before it can be finished.
  *
@@ -28,6 +34,10 @@
  *                     print what each one found, and stop (to check the keys work)
  *   IGNORE_HOSTS      comma list of hosts never counted as a source
  *   STATE_FILE        where progress is kept between runs (default checker-state.json)
+ *   CHECKER_MODE      "review" (default): only list possible matches; "auto": hide them
+ *   HIDE_PART         "story:part": hide this part now (after a person reviewed it), then stop
+ *   UNHIDE_PART       "story:part": unhide this part now, then stop
+ *   GITHUB_TOKEN, GITHUB_REPOSITORY  (set by GitHub Actions) for the review issue
  *   DRY_RUN=1         never send anything
  */
 import fs from "fs";
@@ -43,6 +53,7 @@ const STORIES = env.STORIES_ADDRESS;
 const RPC = env.RPC || "https://testnet.koinosfoundation.org";
 const STATE_FILE = env.STATE_FILE || "checker-state.json";
 const DRY_RUN = env.DRY_RUN === "1";
+const AUTO = String(env.CHECKER_MODE || "").trim().toLowerCase() === "auto";
 const MONTHLY = Number(env.SEARCH_MONTHLY || 1800);
 const BOOKS_MONTHLY = Number(env.BOOKS_MONTHLY || 25000);
 const TAVILY_MONTHLY = Number(env.TAVILY_MONTHLY || 950);
@@ -73,7 +84,7 @@ function writeSummary(actions) {
   const file = env.GITHUB_STEP_SUMMARY;
   if (!file) return;
   const rows = actions.length
-    ? actions.map((a) => `| ${a.story} | ${a.seq} | ${a.reason === REASON.COPYRIGHT ? "web match" : "duplicate"} | ${a.note} | ${a.sent ? "hidden" : "would hide"} |`).join("\n")
+    ? actions.map((a) => `| ${a.story} | ${a.seq} | ${a.reason === REASON.COPYRIGHT ? "outside match" : "duplicate"} | ${a.note} | ${a.sent ? "hidden" : AUTO ? "would hide" : "to review"} |`).join("\n")
     : "| | | | nothing to hide | |";
   fs.appendFileSync(file, "## SwarmTales copy checker\n\n| story | part | why | note | action |\n|---|---|---|---|---|\n" + rows + "\n\n```\n" + log.join("\n") + "\n```\n");
 }
@@ -225,6 +236,70 @@ async function testPhrase(phrase) {
   }
 }
 
+/** The GitHub issue that collects parts to review (created once, then reused). */
+async function reportForReview(items) {
+  const token = env.GITHUB_TOKEN;
+  const repo = env.GITHUB_REPOSITORY;
+  if (!items.length || !token || !repo) return;
+  const api = (path, init) => fetch("https://api.github.com/repos/" + repo + path, {
+    ...init,
+    headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github+json", "Content-Type": "application/json" },
+  });
+  const title = "Copy checker: parts to review";
+  const found = await api("/issues?state=open&per_page=100&creator=github-actions%5Bbot%5D").then((r) => (r.ok ? r.json() : []));
+  let issue = Array.isArray(found) ? found.find((i) => i.title === title) : null;
+  if (!issue) {
+    const res = await api("/issues", { method: "POST", body: JSON.stringify({
+      title,
+      body: "The copy checker lists parts here that **might** be copied. Nothing has been hidden.\n\n" +
+        "For each one: open the part on the site and compare it with the source in the note.\n" +
+        "- **Copied:** Actions → Copy checker → Run workflow → type `story:part` (for example `4:7`) in **hide_part** → Run.\n" +
+        "- **Fine:** do nothing.\n\nClose this issue when the list is done; the next possible match opens a new one.",
+    }) });
+    if (!res.ok) {
+      note("Could not open the review issue (" + res.status + "). The list is in this run's summary.");
+      return;
+    }
+    issue = await res.json();
+  }
+  const site = "https://bawcejawn.github.io/Swarmtales/#/stories/";
+  const lines = items.map((a) => "- **" + a.story + ":" + a.seq + "**: " + a.note + " · [open the story](" + site + a.story + ")");
+  await api("/issues/" + issue.number + "/comments", { method: "POST", body: JSON.stringify({ body: "Possible matches found " + new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC:\n\n" + lines.join("\n") }) });
+  note("Listed " + items.length + " part(s) for review in issue #" + issue.number + ".");
+}
+
+/** Hide or unhide one part by hand, after a person reviewed it. */
+async function manualModeration(which, hidden) {
+  const m = /^\s*(\d+)\s*[:/ -]\s*(\d+)\s*$/.exec(which);
+  if (!m) throw new Error('Write the part as story:part, for example 4:7 (you wrote "' + which + '").');
+  if (!env.MODERATOR_WIF) throw new Error("The MODERATOR_WIF secret is not set, so nothing can be hidden.");
+  const provider = new Provider([RPC]);
+  const stories = new Contract({ id: STORIES, abi: abis.stories, provider });
+  const cfg = (await stories.functions.get_config({})).result || {};
+  const signer = Signer.fromWif(env.MODERATOR_WIF.trim());
+  signer.provider = provider;
+  if (signer.getAddress() !== cfg.moderator) throw new Error("The moderator key is not the contract's moderator (" + (cfg.moderator || "none") + ").");
+  const seg = (await stories.functions.get_segment({ story_id: m[1], seq: m[2] })).result || {};
+  if (!Number(seg.status)) throw new Error("Story " + m[1] + " has no part " + m[2] + ".");
+  const reason = hidden ? REASON.COPYRIGHT : Number(seg.moderation_reason || REASON.COPYRIGHT);
+  const why = hidden ? "copied text, confirmed by a person after the copy checker flagged it" : "reviewed by a person: not copied";
+  note((hidden ? "Hiding" : "Unhiding") + " story " + m[1] + " part " + m[2] + ": " + why);
+  if (DRY_RUN) return;
+  const mana = BigInt(await provider.getAccountRc(signer.getAddress()));
+  const limit = mana < 50000000n ? mana : 50000000n; // at most 0.5 mana (a hide uses about 0.05)
+  const tx = new Transaction({ signer, provider, options: { payer: signer.getAddress(), rcLimit: limit.toString() } });
+  await tx.pushOperation(await stories.encodeOperation({
+    name: "set_segment_hidden",
+    args: { actor: signer.getAddress(), story_id: m[1], seq: m[2], hidden, reason, note: why },
+  }));
+  await tx.prepare();
+  await tx.sign();
+  const receipt = await tx.send();
+  await tx.wait();
+  if (receipt && receipt.reverted) throw new Error("The chain refused: " + (receipt.logs || []).join(" "));
+  note("Done: transaction " + tx.transaction.id);
+}
+
 async function main() {
   if (env.TEST_PHRASE && env.TEST_PHRASE.trim()) {
     await testPhrase(env.TEST_PHRASE.trim());
@@ -232,6 +307,16 @@ async function main() {
     return;
   }
   if (!STORIES) throw new Error("Set STORIES_ADDRESS.");
+  if (env.HIDE_PART && env.HIDE_PART.trim()) {
+    await manualModeration(env.HIDE_PART.trim(), true);
+    writeSummary([]);
+    return;
+  }
+  if (env.UNHIDE_PART && env.UNHIDE_PART.trim()) {
+    await manualModeration(env.UNHIDE_PART.trim(), false);
+    writeSummary([]);
+    return;
+  }
   const provider = new Provider([RPC]);
   const stories = new Contract({ id: STORIES, abi: abis.stories, provider });
   const read = async (name, args) => (await stories.functions[name](args || {})).result || {};
@@ -246,7 +331,8 @@ async function main() {
       signer = null;
     }
   }
-  if (!signer) note("Report-only: nothing will be hidden this run.");
+  if (!AUTO) note("Review first: possible matches are listed for a person to check. Nothing is hidden automatically.");
+  else if (!signer) note("Report-only: nothing will be hidden this run.");
 
   const state = loadState();
   state.checked = state.checked || {};
@@ -270,6 +356,16 @@ async function main() {
 
   async function hide(storyId, seq, reason, why) {
     const action = { story: storyId, seq, reason, note: why.slice(0, 200), sent: false };
+    const key = storyId + ":" + seq;
+    state.flagged = state.flagged || {};
+    if (!AUTO) {
+      // List each part once, not every hour.
+      if (state.flagged[key]) return;
+      state.flagged[key] = true;
+      actions.push(action);
+      note("  TO REVIEW story " + storyId + " part " + seq + ": " + action.note);
+      return;
+    }
     actions.push(action);
     note("  HIDE story " + storyId + " part " + seq + ": " + action.note);
     if (!signer) return;
@@ -278,7 +374,7 @@ async function main() {
       note("  the moderator wallet has no mana; send it a little KOIN (it is never spent)");
       return;
     }
-    const limit = mana < 500000000n ? mana : 500000000n; // at most 5 mana
+    const limit = mana < 50000000n ? mana : 50000000n; // at most 0.5 mana (a hide uses about 0.05)
     const tx = new Transaction({ signer, provider, options: { payer: signer.getAddress(), rcLimit: limit.toString() } });
     await tx.pushOperation(await stories.encodeOperation({
       name: "set_segment_hidden",
@@ -350,6 +446,7 @@ async function main() {
   }
 
   saveState(state, index);
+  if (!AUTO) await reportForReview(actions).catch((error) => note("Review issue: " + (error && error.message ? error.message : String(error))));
   note("Done. " + actions.length + " part(s) flagged. Searches this run: " + searchesThisRun + "." +
     SERVICES.filter((s) => s.key()).map((s) => " " + s.label + " left this month: " + budgets[s.name].left() + ".").join(""));
   writeSummary(actions);

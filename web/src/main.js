@@ -986,8 +986,20 @@ function segmentView(block, story, storyId, ctx) {
       : "Removed by the story's editor.";
     body = h("p", { class: "seg-text seg-placeholder" }, [why]);
   } else if (segment.hidden) {
-    body = h("p", { class: "seg-text seg-placeholder" }, [
-      "This part is hidden while it's checked" + (REASON_LABELS[Number(segment.moderation_reason)] ? " (possibly " + REASON_LABELS[Number(segment.moderation_reason)] + ")" : "") + ".",
+    const askUrl = "https://github.com/bawcejawn/Swarmtales/issues/new?title=" +
+      encodeURIComponent("Review request: story " + storyId + " part " + block.seq) +
+      "&body=" + encodeURIComponent("I wrote this part myself (or have the right to use it). Please review it.\n\nStory " + storyId + ", part " + block.seq + "\nWallet: \nAnything that helps (drafts, where it was first posted): ");
+    body = h("div", {}, [
+      h("p", { class: "seg-text seg-placeholder" }, [
+        "This part is hidden while it's checked" + (REASON_LABELS[Number(segment.moderation_reason)] ? " (possibly " + REASON_LABELS[Number(segment.moderation_reason)] + ")" : "") + ".",
+      ]),
+      h("p", { class: "meta small" }, [
+        "Wrote it yourself? ",
+        SITE.copyrightEmail
+          ? h("a", { href: "mailto:" + SITE.copyrightEmail + "?subject=" + encodeURIComponent("Review request: story " + storyId + " part " + block.seq) }, ["Ask for a review"])
+          : h("a", { href: askUrl, target: "_blank", rel: "noopener noreferrer" }, ["Ask for a review"]),
+        ". A person looks at it, and it comes back if it's yours.",
+      ]),
     ]);
   } else {
     body = h("p", { class: "seg-text" }, [segment.text || ""]);

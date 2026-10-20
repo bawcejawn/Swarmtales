@@ -13,6 +13,11 @@ name: Copy checker
 #                 TAVILY_API_KEY    web search (Tavily free plan, 1,000 a month)
 #                 BRAVE_API_KEY     web search (Brave; now needs a card on file)
 #
+# Review first (default): possible matches are listed in an issue,
+# "Copy checker: parts to review". Nothing is hidden automatically. To hide a
+# part after looking at it: Run workflow with hide_part = story:part (e.g. 4:7).
+# To undo: unhide_part. Variable CHECKER_MODE=auto lets it hide by itself.
+#
 # To check the search keys: Actions > Copy checker > Run workflow, and type a
 # sentence from a published book in "test_phrase". Nothing is hidden in a test.
 
@@ -25,9 +30,18 @@ on:
         description: "Only test the search keys with this phrase (leave empty for a normal run)"
         required: false
         default: ""
+      hide_part:
+        description: "Hide this part after reviewing it, as story:part (for example 4:7)"
+        required: false
+        default: ""
+      unhide_part:
+        description: "Unhide this part, as story:part"
+        required: false
+        default: ""
 
 permissions:
   contents: read
+  issues: write    # the "parts to review" list
   actions: write   # only to keep this schedule from being paused after 60 quiet days
 
 concurrency:
@@ -66,6 +80,10 @@ jobs:
           GOOGLE_BOOKS_KEY: ${{ secrets.GOOGLE_BOOKS_KEY }}
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
           TEST_PHRASE: ${{ inputs.test_phrase }}
+          HIDE_PART: ${{ inputs.hide_part }}
+          UNHIDE_PART: ${{ inputs.unhide_part }}
+          CHECKER_MODE: ${{ vars.CHECKER_MODE }}
+          GITHUB_TOKEN: ${{ github.token }}
           STATE_FILE: checker-state.json
         run: node checker/check.mjs
       - name: Save progress

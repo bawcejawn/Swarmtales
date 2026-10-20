@@ -54,11 +54,28 @@ The checker stays under these limits by itself:
 
 After that, the normal hourly runs use the keys by themselves.
 
-## If something is hidden by mistake
+## Review first: nothing is hidden automatically
 
-The note on the hidden part says where the phrases were found. The admin or moderator can
-unhide it:
+The checker doesn't hide text by itself. When a part might be copied, it adds the part to one
+GitHub issue called **"Copy checker: parts to review"**. GitHub emails you when that happens.
+Each part is listed once.
 
-```powershell
-node deploy/deploy.js hide --actor $ADMIN --stories $STORIES --story <id> --seq <part> --reason copyright --unhide
-```
+For each listed part, open it on the site and compare it with the source named in the note.
+
+- **It's copied:** open https://github.com/bawcejawn/Swarmtales/actions/workflows/copy-checker.yml
+  → **Run workflow** → type the part as `story:part` (for example `4:7`) in **hide_part** →
+  **Run workflow**. The part is hidden on the chain, with the note "copied text, confirmed by
+  a person".
+- **It's fine:** do nothing.
+- **You hid something by mistake:** do the same, but type `story:part` in **unhide_part**.
+
+A hidden part shows readers an **Ask for a review** link, so its writer can tell you it's
+their own work.
+
+When you're comfortable with the checker's results, you can let it hide clear matches by
+itself: **Settings → Secrets and variables → Actions → Variables → New repository
+variable**, Name `CHECKER_MODE`, Value `auto`. Delete that variable to go back to review
+first.
+
+Three reports from different writers still hide a part right away, as before. That rule is
+in the Stories contract. Use **unhide_part** if a report was wrong.
