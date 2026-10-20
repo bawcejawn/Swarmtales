@@ -101,6 +101,8 @@ function route() {
   const path = raw.split("?")[0];
   const parts = path.split("/").filter(Boolean);
   const isId = (v) => !!v && /^[1-9][0-9]{0,15}$/.test(v);
+  if (parts[0] === "stories" && isId(parts[1]) && parts[2] === "finish") return { name: "finish", id: parts[1] };
+  if (parts[0] === "stories" && isId(parts[1]) && parts[2] === "book") return { name: "book", id: parts[1] };
   if (parts[0] === "stories" && isId(parts[1])) return { name: "story", id: parts[1] };
   if (parts[0] === "stories" || parts[0] === "discover") return { name: "discover" };
   if (parts[0] === "open") return { name: "open" };
@@ -503,6 +505,8 @@ function renderPage() {
   if (alerts.length) append(page, h("div", { class: "container" }, alerts));
   if (here.name === "discover") renderDiscover(page);
   else if (here.name === "story") renderReader(page, here.id);
+  else if (here.name === "finish") renderFinish(page, here.id);
+  else if (here.name === "book") renderBook(page, here.id);
   else if (here.name === "open") renderOpen(page);
   else if (here.name === "mine") renderMine(page);
   else if (here.name === "membership") renderMembership(page);
@@ -912,12 +916,36 @@ function renderReader(page, id) {
       percent: readOrder.length ? ((readOrder.indexOf(seq) + 1) / readOrder.length) * 100 : 0,
       title: story.title || "",
     });
+    // A bookmark saved to the wallet (from any device) wins when it's newer.
+    if (me) {
+      const chain = await read("stories", "get_reading_place", { reader: me, story_id: String(id) }).catch(() => null);
+      const local = reading.load(contracts.stories, id);
+      const chainAt = chain ? Number(chain.at || 0) * 1000 : 0;
+      if (chain && Number(chain.seq || 0) > 0 && (!local.mark || chainAt > local.mark.at)) {
+        reading.setMark(contracts.stories, id, { seq: Number(chain.seq), chapter: chain.chapter, percent: chain.percent, title: story.title }, undefined, chainAt);
+      }
+    }
     const progress = reading.load(contracts.stories, id);
     ctx.markSeq = progress.mark ? progress.mark.seq : 0;
+    const syncNote = h("p", { class: "meta small sync-note", "aria-live": "polite" });
+    ctx.syncNote = syncNote;
     ctx.toggleMark = (seq) => {
       const off = ctx.markSeq === seq;
-      reading.setMark(contracts.stories, id, off ? null : placeOf(seq));
+      const at = placeOf(seq);
+      reading.setMark(contracts.stories, id, off ? null : at);
       ctx.markSeq = off ? 0 : seq;
+      // With a wallet, the bookmark also goes on the blockchain so it follows
+      // the reader to any device. One confirmation; uses a little free mana.
+      if (me) {
+        syncNote.textContent = "Saving your bookmark to your wallet…";
+        encode("stories", "set_reading_place", {
+          reader: me, story_id: String(id), seq: String(off ? 0 : seq), chapter: off ? 0 : at.chapter, percent: off ? 0 : Math.round(at.percent),
+        }).then((op) => send([op], h("div"))).then((ok) => {
+          syncNote.textContent = ok ? (off ? "Bookmark removed from your wallet." : "Bookmark saved to your wallet: it's there on any device you connect.") : "Saved in this browser only.";
+        }).catch(() => { syncNote.textContent = "Saved in this browser only (your wallet didn't confirm)."; });
+      } else {
+        syncNote.textContent = off ? "" : "Saved in this browser. Connect a wallet to keep bookmarks on every device.";
+      }
       article.querySelectorAll(".seg").forEach((el) => {
         const on = Number(el.dataset.seq) === ctx.markSeq;
         el.classList.toggle("bookmarked", on);
@@ -978,6 +1006,7 @@ function renderReader(page, id) {
         h("label", { class: "check" }, [toggle, "Show who wrote what"]),
       ]),
       resumeBar,
+      syncNote,
       listen,
       article,
       composeAnchor
@@ -985,6 +1014,7 @@ function renderReader(page, id) {
     append(composeAnchor, composer(id, story, active, 0, flags));
 
     const aside = h("aside", { class: "reader-aside", "aria-label": "About this story" }, [
+      finishPanel(id, story, me),
       sharePanel(id, story, me, flags),
       chapters.length > 1
         ? h("nav", { "aria-label": "Contents" }, [
@@ -2238,10 +2268,12 @@ function renderMine(page) {
     h("h1", { class: "title" }, ["My stories"]),
     h("p", { class: "lede" }, ["Every story you opened or wrote in, including private ones that don't appear in Discover."])
   );
-  // Reading progress lives in this browser, so it shows even without a wallet.
-  const places = reading.list(contracts.stories).slice(0, 12);
-  if (places.length) {
-    append(container, h("section", { class: "mine-section" }, [
+  // Reading progress: this browser's places, plus bookmarks saved to the wallet.
+  const readingSlot = h("div");
+  append(container, readingSlot);
+  const showPlaces = (places) => {
+    if (!places.length) return replace(readingSlot);
+    replace(readingSlot, h("section", { class: "mine-section" }, [
       h("h2", { class: "h2" }, ["Continue reading"]),
       h("p", { class: "meta" }, ["Saved in this browser as you read. Bookmarks too."]),
       h("ul", { class: "reading-list" }, places.map((p) => h("li", { class: "reading-item" }, [
@@ -2259,6 +2291,23 @@ function renderMine(page) {
         ]),
       ]))),
     ]));
+  };
+  showPlaces(reading.list(contracts.stories).slice(0, 12));
+  if (currentAddress()) {
+    (async () => {
+      const me = currentAddress();
+      const res = await read("stories", "get_reading_places", { reader: me, start: "0", limit: 50 }).catch(() => null);
+      const chainPlaces = res && Array.isArray(res.values) ? res.values : [];
+      for (const cp of chainPlaces) {
+        const local = reading.load(contracts.stories, cp.story_id);
+        const at = Number(cp.at || 0) * 1000;
+        if (!local.mark || at > local.mark.at) {
+          const st = await read("stories", "get_story", { story_id: String(cp.story_id) }).catch(() => ({}));
+          reading.setMark(contracts.stories, cp.story_id, { seq: Number(cp.seq), chapter: cp.chapter, percent: cp.percent, title: st.title || "" }, undefined, at);
+        }
+      }
+      if (chainPlaces.length) showPlaces(reading.list(contracts.stories).slice(0, 12));
+    })().catch(() => {});
   }
   const address = currentAddress();
   if (!address) {
@@ -2535,6 +2584,262 @@ function watchReading(article, storyId, placeOf) {
   const start = () => { started = true; };
   window.addEventListener("scroll", start, { once: true, passive: true });
   window.addEventListener("hashchange", () => { observer.disconnect(); clearTimeout(timer); window.removeEventListener("scroll", start); }, { once: true });
+}
+
+/* ------------------------------------------------------------------ */
+/* finishing a story: close (free), final edit, publish                 */
+/* ------------------------------------------------------------------ */
+
+/** Can the opener close this story now? Mirrors the contract's rule. */
+function closeReadyLocal(story) {
+  const used = Number(story.used_chars || 0);
+  const max = Number(story.max_chars || 0);
+  return Number(story.status) === 2 || used >= kindMin(story) || used + 100 >= max;
+}
+
+/** The finished book as plain text, in reading order, with chapter headings. */
+function bookText(story, segments) {
+  const all = segments.map((segment, i) => ({ segment, index: i + 1, seq: i + 1, insertAfter: Number(segment.insert_after || 0) }));
+  const ordered = readingOrder(all).filter((b) => Number(b.segment.status) !== 2 && !b.segment.hidden);
+  const lines = [String(story.title || "Untitled")];
+  let chapter = 0;
+  for (const b of ordered) {
+    if (!chapter || b.segment.starts_chapter) {
+      chapter += 1;
+      lines.push("", "Chapter " + chapter, "");
+    }
+    lines.push(String(b.segment.text || ""));
+  }
+  return { text: lines.join("\n"), ordered };
+}
+
+/** Story page, opener only: what's left to finish the book. */
+function finishPanel(id, story, me) {
+  if (!me || story.opener !== me) return null;
+  const status = Number(story.status);
+  const box = h("section", { class: "card finish-panel", "aria-labelledby": "finish-title" }, [
+    h("h2", { class: "aside-title", id: "finish-title" }, ["Finish the book"]),
+  ]);
+  if (status === 4) {
+    append(box, h("p", { class: "body-2 small" }, ["This story is finished and published."]),
+      h("a", { class: "btn btn-secondary btn-small", href: "#/stories/" + id + "/book" }, ["Read or download the book"]));
+    return box;
+  }
+  if (status === 3) {
+    append(box,
+      h("p", { class: "body-2 small" }, ["Writing is closed. Review each part, then publish. " + num(story.final_cursor || 0) + " of " + num(story.segment_count || 0) + " parts reviewed."]),
+      h("a", { class: "btn btn-primary btn-small", href: "#/stories/" + id + "/finish" }, ["Continue the final edit"]));
+    return box;
+  }
+  if (status !== 1 && status !== 2) return null;
+  if (!closeReadyLocal(story)) {
+    append(box, h("p", { class: "meta small" }, [
+      "You can close this story for its final edit once it reaches " + num(kindMin(story)) + " characters (" +
+        num(Math.max(0, kindMin(story) - Number(story.used_chars || 0))) + " to go). Finishing is free.",
+    ]));
+    return box;
+  }
+  const statusBoxEl = statusBox();
+  append(box,
+    h("p", { class: "body-2 small" }, [
+      "Ready when you are. Finishing is free and takes three steps: ",
+      h("b", {}, ["close"]), " (writing stops), ", h("b", {}, ["final edit"]), " (keep, lightly fix, or remove each part), and ",
+      h("b", {}, ["publish"]), ". Leftover pool Ink comes back to you.",
+    ]),
+    h("button", { type: "button", class: "btn btn-primary btn-small", onClick: async (e) => {
+      e.target.disabled = true;
+      try {
+        const op = await encode("stories", "close_story", { opener: me, story_id: String(id), token: contracts.paymentToken });
+        if (await send([op], statusBoxEl)) location.hash = "#/stories/" + id + "/finish";
+      } catch (error) {
+        failure(statusBoxEl, error);
+      } finally {
+        e.target.disabled = false;
+      }
+    } }, ["Close writing and start the final edit"]),
+    statusBoxEl);
+  return box;
+}
+
+const FINAL_BATCH = 20;
+const FINAL_BATCH_UNITS = 20000;
+
+/** The final edit: parts in the order they were written, 20 at a time. */
+function renderFinish(page, id) {
+  setMeta("Final edit", "Review each part, then publish the finished book.");
+  const container = h("div", { class: "container page narrow" }, [loadingLine("Opening the final edit…")]);
+  append(page, container);
+  loadStory(id).then(async ({ story, segments }) => {
+    const me = currentAddress();
+    const head = [
+      h("p", { class: "breadcrumb" }, [h("a", { href: "#/stories/" + id }, ["← Back to the story"])]),
+      h("p", { class: "eyebrow" }, ["Final edit"]),
+      h("h1", { class: "title" }, [story.title || "Untitled"]),
+    ];
+    if (!me || story.opener !== me) {
+      replace(container, ...head, h("p", { class: "body-2" }, ["Only the story's opener can do the final edit. Connect the opener's wallet."]), connectButton());
+      return;
+    }
+    if (Number(story.status) === 4) {
+      replace(container, ...head, notice("ok", h("p", {}, ["This story is published. ", h("a", { href: "#/stories/" + id + "/book" }, ["Read or download the book"]), "."])));
+      return;
+    }
+    if (Number(story.status) !== 3) {
+      replace(container, ...head, h("p", { class: "body-2" }, ["Close the story first: on the story page, open “Finish the book”."]));
+      return;
+    }
+    const cursor = Number(story.final_cursor || 0);
+    const total = Number(story.segment_count || 0);
+    const status = statusBox();
+    const hiddenLeft = segments.filter((s, i) => i + 1 > cursor && Number(s.status) === 1 && s.hidden).length;
+    replace(container, ...head,
+      h("p", { class: "lede" }, ["Go through each part: keep it, tidy it lightly, or remove it. Most parts can simply be kept. " +
+        "Shortening or removing a part returns its Ink to the writer (or to the pool). Everything here is free."]),
+      h("div", { class: "progress-label" }, [h("span", {}, [num(cursor) + " of " + num(total) + " parts reviewed"])]));
+    if (cursor >= total) {
+      // Everything reviewed: publish.
+      const { text } = bookText(story, segments);
+      const hex = await sha256Hex(text);
+      const words = text.split(/\s+/).filter(Boolean).length;
+      const publish = h("button", { type: "button", class: "btn btn-primary" }, ["Publish the finished book"]);
+      publish.addEventListener("click", async () => {
+        publish.disabled = true;
+        try {
+          const bytes = new Uint8Array(hex.match(/../g).map((b) => parseInt(b, 16)));
+          const op = await encode("stories", "finalize", {
+            finalizer: me, story_id: String(id), pdf_uri: (siteBase() + "#/stories/" + id + "/book").slice(0, 200), pdf_hash: utils.encodeBase64url(bytes),
+          });
+          if (await send([op], status)) location.hash = "#/stories/" + id + "/book";
+        } catch (error) {
+          failure(status, error);
+        } finally {
+          publish.disabled = false;
+        }
+      });
+      append(container,
+        notice("ok", h("p", {}, ["Every part is reviewed. The finished book has about " + num(words) + " words."])),
+        h("p", { class: "body-2" }, [
+          "Publishing locks the book for good and records its fingerprint on the blockchain (",
+          h("span", { class: "mono small" }, [hex.slice(0, 16) + "…"]),
+          "), so anyone can check a copy is the real one. Readers can download it from the book page. Leftover pool Ink returns to you.",
+        ]),
+        h("div", { class: "actions" }, [publish]), status);
+      return;
+    }
+    // The next batch, in the order the contract expects.
+    const rows = [];
+    for (let seq = cursor + 1; seq <= total && rows.length < FINAL_BATCH; seq++) {
+      const seg = segments[seq - 1];
+      if (!seg || Number(seg.status) !== 1) continue; // removed parts are skipped by the contract
+      const mode = h("select", { "aria-label": "Part " + seq }, seg.hidden
+        ? [h("option", { value: "3" }, ["Remove (hidden part)"])]
+        : [h("option", { value: "1" }, ["Keep"]), h("option", { value: "2" }, ["Edit lightly"]), h("option", { value: "3" }, ["Remove"])]);
+      const original = Number(seg.original_cost || 0);
+      const allowance = Math.max(Math.floor(original / 10), Math.min(original, 20));
+      const maxCost = Number(seg.charged || 0) + allowance;
+      const area = h("textarea", { rows: "5", hidden: true }, []);
+      area.value = seg.text || "";
+      const counter = h("p", { class: "meta small", hidden: true });
+      const syncCount = () => { counter.textContent = num(inkCost(area.value.trim())) + " of at most " + num(maxCost) + " characters (light edits only)."; };
+      area.addEventListener("input", syncCount);
+      mode.addEventListener("change", () => { area.hidden = mode.value !== "2"; counter.hidden = mode.value !== "2"; syncCount(); });
+      const row = { seq, seg, mode, area, maxCost };
+      rows.push(row);
+      append(container, h("div", { class: "final-row" + (seg.hidden ? " seg-muted" : "") }, [
+        h("div", { class: "final-row-head" }, [
+          h("span", { class: "meta small" }, ["Part " + seq + " · " + shortAddress(seg.author) + (seg.hidden ? " · hidden" : "")]),
+          mode,
+        ]),
+        h("p", { class: "final-row-text" }, [seg.hidden ? "(hidden while it's checked: it can only be removed here, or restored on the story page first)" : clip(seg.text || "", 400)]),
+        area, counter,
+      ]));
+    }
+    const save = h("button", { type: "button", class: "btn btn-primary" }, ["Save these " + rows.length + " parts"]);
+    save.addEventListener("click", async () => {
+      save.disabled = true;
+      try {
+        const items = [];
+        let used = 0;
+        for (const r of rows) {
+          const m = Number(r.mode.value);
+          if (m === 2) {
+            const t = normalizePasted(r.area.value).trim();
+            const cost = inkCost(t);
+            const check = checkStoryText(t, true);
+            if (!check.ok) throw new Error("Part " + r.seq + ": " + check.reason);
+            if (cost > r.maxCost) throw new Error("Part " + r.seq + ": the edit makes it too long. Light edits only.");
+            if (used + cost > FINAL_BATCH_UNITS) break; // the rest goes in the next batch
+            used += cost;
+            items.push({ seq: String(r.seq), mode: 2, text: t, expected_cost: String(cost) });
+          } else {
+            items.push({ seq: String(r.seq), mode: m, text: "", expected_cost: "0" });
+          }
+        }
+        if (!items.length) throw new Error("Nothing to save.");
+        const op = await encode("stories", "submit_final_batch", { finalizer: me, story_id: String(id), items });
+        if (await send([op], status)) renderPage();
+      } catch (error) {
+        failure(status, error);
+      } finally {
+        save.disabled = false;
+      }
+    });
+    append(container,
+      hiddenLeft ? notice("warn", h("p", {}, [plural(hiddenLeft, "hidden part") + " left. Hidden parts must be removed here, or restored on the story page, before the book can be published."])) : null,
+      h("div", { class: "actions" }, [save, h("p", { class: "meta" }, ["One confirmation saves this group. Then the next group appears."])]),
+      status);
+  }).catch((error) => replace(container, notice("bad", h("p", {}, [explainFailure(error)]))));
+}
+
+/** The finished book: read, print or save as PDF, or download as text. Free. */
+function renderBook(page, id) {
+  const container = h("div", { class: "container page narrow book-page" }, [loadingLine("Opening the book…")]);
+  append(page, container);
+  loadStory(id).then(async ({ story, segments }) => {
+    setMeta(story.title || "Book", "A finished SwarmTales book.");
+    const { text, ordered } = bookText(story, segments);
+    const hex = await sha256Hex(text);
+    const onChain = story.pdf_hash ? Array.from(utils.decodeBase64url(story.pdf_hash), (b) => b.toString(16).padStart(2, "0")).join("") : "";
+    const finished = Number(story.status) === 4;
+    const writers = new Map();
+    for (const b of ordered) writers.set(b.segment.author, (writers.get(b.segment.author) || 0) + Number(b.segment.current_cost || 0));
+    const download = () => {
+      const blob = new Blob([text + "\n\nWritten on SwarmTales by: " + [...writers.keys()].join(", ") + "\n"], { type: "text/plain;charset=utf-8" });
+      const a = h("a", { href: URL.createObjectURL(blob), download: (story.title || "book").replace(/[^\w\- ]+/g, "").trim().slice(0, 60) + ".txt" });
+      document.body.append(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    };
+    const body = [];
+    let chapter = 0;
+    for (const b of ordered) {
+      if (!chapter || b.segment.starts_chapter) {
+        chapter += 1;
+        body.push(h("h2", { class: "h3 book-chapter" }, ["Chapter " + chapter]));
+      }
+      body.push(h("p", { class: "book-text" }, [b.segment.text || ""]));
+    }
+    replace(container,
+      h("div", { class: "no-print" }, [
+        h("p", { class: "breadcrumb" }, [h("a", { href: "#/stories/" + id }, ["← Back to the story"])]),
+        h("div", { class: "row" }, [
+          h("button", { type: "button", class: "btn btn-primary btn-small", onClick: () => window.print() }, ["Print or save as PDF"]),
+          h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: download }, ["Download as text"]),
+        ]),
+        finished
+          ? h("p", { class: "meta small" }, [onChain === hex
+            ? "✓ This matches the fingerprint recorded on the blockchain when the book was published."
+            : "This copy doesn't match the published fingerprint (the page may have changed since). The record on the blockchain is the original."])
+          : h("p", { class: "meta small" }, ["Preview: this story isn't published yet."]),
+      ]),
+      h("h1", { class: "title book-title" }, [story.title || "Untitled"]),
+      ...body,
+      h("section", { class: "book-credits" }, [
+        h("h2", { class: "h3" }, ["Written by"]),
+        h("ul", {}, [...writers.entries()].sort((a, b) => b[1] - a[1]).map(([w]) => h("li", { class: "mono small" }, [w]))),
+        h("p", { class: "meta small" }, ["Written together on SwarmTales. Every part is recorded on the Koinos blockchain, story " + id + "."]),
+      ]));
+  }).catch((error) => replace(container, notice("bad", h("p", {}, [explainFailure(error)]))));
 }
 
 /** The opener's writers' pool: balance and top-up. */
