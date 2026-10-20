@@ -57,6 +57,8 @@ const state = {
   excerpts: new Map(),
   discover: { tab: "open", kind: "all", category: 0 },
   showAuthors: readPref("st-show-authors", "1") === "1",
+  openKind: "short",
+  kondorAccounts: null, // accounts Kondor shared, while the person is choosing
 };
 
 const dialog = document.createElement("dialog");
@@ -1020,15 +1022,31 @@ function walletNote() {
 /* open a story                                                        */
 /* ------------------------------------------------------------------ */
 
+const OPEN_KINDS = {
+  short: { kind: 2, name: "short story", title: "Open a short story", min: 10000, max: 99999, priceKey: "shortPrice", starterKey: "starter_short",
+    blurb: "10,000 to 99,999 characters. Quick to fill, good for a first story." },
+  book: { kind: 1, name: "book", title: "Open a book", min: 100000, max: 1000000, priceKey: "bookPrice", starterKey: "starter_book",
+    blurb: "100,000 to 1,000,000 characters. A long project with many chapters and writers." },
+};
+
 function renderOpen(page) {
-  setMeta("Open a story", "Start a new collaborative short story on SwarmTales and invite others to write the next part.");
+  const kindInfo = OPEN_KINDS[state.openKind] || OPEN_KINDS.short;
+  setMeta("Open a story", "Start a new collaborative book or short story on SwarmTales and invite others to write the next part.");
   const container = h("div", { class: "container page" });
   append(page, container);
   append(container, 
     h("p", { class: "eyebrow" }, ["Start something"]),
-    h("h1", { class: "title" }, ["Open a short story"]),
+    h("h1", { class: "title" }, ["Open a story"]),
     h("p", { class: "lede" }, ["Give it a title and a first part. Then other writers take it from there."])
   );
+  const kindPicker = h("div", { class: "kind-picker", role: "group", "aria-label": "What are you opening?" },
+    Object.entries(OPEN_KINDS).map(([key, info]) => h("button", {
+      type: "button",
+      class: "kind-choice",
+      "aria-pressed": String(info === kindInfo),
+      onClick: () => { if (state.openKind !== key) { state.openKind = key; renderPage(); } },
+    }, [h("b", {}, [info.name.charAt(0).toUpperCase() + info.name.slice(1)]), h("span", {}, [info.blurb])])));
+  append(container, kindPicker);
   const body = h("div", { class: "split" });
   body.style.alignItems = "flex-start";
   body.style.marginTop = "40px";
@@ -1041,9 +1059,9 @@ function renderOpen(page) {
   const facts = h("div", { class: "card" }, [
     h("h2", { class: "h3" }, ["What opening includes"]),
     h("dl", { class: "facts" }, [
-      h("div", {}, [h("dt", {}, ["Price"]), h("dd", {}, [tokenAmount(state.overview.shortPrice)])]),
-      h("div", {}, [h("dt", {}, ["Starter Ink"]), h("dd", {}, [num(state.overview.shopCfg.starter_short) + " Ink"])]),
-      h("div", {}, [h("dt", {}, ["Length"]), h("dd", {}, ["10,000 to 99,999 characters"])]),
+      h("div", {}, [h("dt", {}, ["Price"]), h("dd", {}, [tokenAmount(state.overview[kindInfo.priceKey])])]),
+      h("div", {}, [h("dt", {}, ["Starter Ink"]), h("dd", {}, [num(state.overview.shopCfg[kindInfo.starterKey]) + " Ink"])]),
+      h("div", {}, [h("dt", {}, ["Length"]), h("dd", {}, [num(kindInfo.min) + " to " + num(kindInfo.max) + " characters"])]),
     ]),
     h("p", { class: "body-2 small" }, [
       "One confirmation in your wallet does two things: it lets the Shop take exactly the price above, then opens the story. The starter Ink pays for your first part.",
@@ -1065,7 +1083,7 @@ function renderOpen(page) {
     return;
   }
   const title = h("input", { type: "text", maxlength: "100", required: true, autocomplete: "off" });
-  const length = h("input", { type: "number", min: "10000", max: "99999", value: "10000", inputmode: "numeric" });
+  const length = h("input", { type: "number", min: String(kindInfo.min), max: String(kindInfo.max), value: String(kindInfo.min), inputmode: "numeric" });
   const categories = state.overview.categories.filter((item) => item.active);
   const cat1 = h("select", {}, [h("option", { value: "" }, ["Choose one"]), ...categories.map((item) => h("option", { value: String(item.id) }, [item.name]))]);
   const cat2 = h("select", {}, [h("option", { value: "0" }, ["None"]), ...categories.map((item) => h("option", { value: String(item.id) }, [item.name]))]);
@@ -1085,7 +1103,7 @@ function renderOpen(page) {
   const ai = h("input", { type: "checkbox" });
   const list = h("div");
   const status = statusBox();
-  const button = h("button", { type: "submit", class: "btn btn-primary" }, ["Open the story"]);
+  const button = h("button", { type: "submit", class: "btn btn-primary" }, ["Open the " + kindInfo.name]);
 
   append(formSlot, h("form", { onSubmit: (event) => { event.preventDefault(); go(); } }, [
     field("Title", title),
@@ -1093,7 +1111,7 @@ function renderOpen(page) {
       field("Category", cat1),
       field("Second category", cat2, "Optional"),
       field("Who can write", visibility),
-      field("Length", length, "In characters, 10,000 to 99,999"),
+      field("Length", length, "In characters, " + num(kindInfo.min) + " to " + num(kindInfo.max)),
     ]),
     field("The first part", opening, "At least " + (Number(minContribution()) || 1) + " characters. Readers see this first."),
     costLine,
@@ -1127,10 +1145,11 @@ function renderOpen(page) {
         editionMin: edition.value,
         cap: state.overview.storiesCfg.contribution_cap,
         inkBalance: state.account.ink,
-        starter: state.overview.shopCfg.starter_short || "0",
+        starter: state.overview.shopCfg[kindInfo.starterKey] || "0",
+        kind: kindInfo.kind,
         openCount: state.account.openCount,
         openLimit: state.overview.storiesCfg.open_limit,
-        price: state.overview.shortPrice,
+        price: state.overview[kindInfo.priceKey],
         tokenBalance: state.account.token,
         minContribution: minContribution(),
       });
@@ -1148,7 +1167,7 @@ function renderOpen(page) {
       const approve = await encode("token", "approve", { owner: address, spender: contracts.shop, value: plan.price });
       const open = await encode("stories", "open_story", {
         opener: address,
-        kind: 2,
+        kind: kindInfo.kind,
         title: title.value,
         max_chars: String(length.value),
         category_1: Number(cat1.value),
@@ -1606,7 +1625,7 @@ function renderDialog() {
       const when = formatUtc(Math.floor((state.wallet.getExpiry() || 0) / 1000));
       if (when) append(connected, h("p", { class: "meta" }, ["This pairing ends " + when + ". It doesn't renew itself."]));
     }
-    append(connected, h("div", { class: "row" }, [h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: async () => {
+    append(connected, h("div", { class: "row" }, [state.wallet.id === "kondor" ? h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: () => connectKondor(true) }, ["Use a different account"]) : null, h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: async () => {
       await state.wallet.disconnect();
       if (state.wallet === kondor || state.wallet === vault) state.wallet = null;
       state.account = null;
@@ -1616,14 +1635,7 @@ function renderDialog() {
     } }, ["Disconnect"])]));
     append(body, connected);
   }
-  append(body, h("div", { class: "wallet-option" }, [
-    h("h3", {}, ["Kondor"]),
-    h("p", {}, ["A free browser extension for Chrome, Brave and Edge on a computer. It asks you to confirm in a small window."]),
-    h("div", { class: "row" }, [
-      h("button", { type: "button", class: "btn btn-primary btn-small", onClick: connectKondor }, ["Connect Kondor"]),
-      h("a", { href: KONDOR_STORE, target: "_blank", rel: "noopener noreferrer" }, ["Install Kondor"]),
-    ]),
-  ]));
+  append(body, kondorSection());
   append(body, h("div", { class: "wallet-option" }, [h("h3", {}, ["KOIN Vault"]), vaultSection()]));
   replace(dialog, body);
 }
@@ -1676,12 +1688,70 @@ function vaultSection() {
   return box;
 }
 
-async function connectKondor() {
+function kondorSection() {
+  const box = h("div", { class: "wallet-option" }, [
+    h("h3", {}, ["Kondor"]),
+    h("p", {}, ["A free browser extension for Chrome, Brave and Edge on a computer. It asks you to confirm in a small window."]),
+  ]);
+  const list = state.kondorAccounts;
+  if (!list) {
+    append(box, h("div", { class: "row" }, [
+      h("button", { type: "button", class: "btn btn-primary btn-small", onClick: () => connectKondor(false) }, ["Connect Kondor"]),
+      h("a", { href: KONDOR_STORE, target: "_blank", rel: "noopener noreferrer" }, ["Install Kondor"]),
+    ]));
+    return box;
+  }
+  const current = currentAddress();
+  append(box,
+    h("p", { class: "body-2" }, [list.length === 1 ? "Kondor shared one account with this site:" : "Kondor shared " + list.length + " accounts. Pick the one to write with:"]),
+    h("ul", { class: "account-list" }, list.map((account) => h("li", {}, [
+      h("button", {
+        type: "button",
+        class: "account-choice",
+        "aria-pressed": String(account.address === current),
+        onClick: () => chooseKondorAccount(account.address),
+      }, [
+        avatar(account.address),
+        h("span", {}, [
+          account.name ? h("b", {}, [account.name]) : null,
+          h("span", { class: "mono" }, [account.address]),
+        ]),
+      ]),
+    ]))),
+    h("p", { class: "meta" }, [
+      "Don't see the account you want? Press Check again. Kondor opens its window, where you can tick every account you want to share with SwarmTales.",
+    ]),
+    h("div", { class: "row" }, [
+      h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: () => connectKondor(true) }, ["Check again"]),
+      h("button", { type: "button", class: "text-button", onClick: () => { state.kondorAccounts = null; renderDialog(); } }, ["Cancel"]),
+    ])
+  );
+  return box;
+}
+
+/** Ask Kondor which accounts it shares. With one account and no request to choose, use it. */
+async function connectKondor(choose) {
+  try {
+    const accounts = await kondor.listAccounts();
+    if (accounts.length === 1 && !choose) {
+      await chooseKondorAccount(accounts[0].address);
+      return;
+    }
+    state.kondorAccounts = accounts;
+    renderDialog();
+  } catch (error) {
+    const body = dialog.querySelector(".sheet-body") || dialog;
+    append(body, notice("bad", h("p", {}, [explainFailure(error)])));
+  }
+}
+
+async function chooseKondorAccount(address) {
   try {
     if (vault.getAddress() || vault.getPairingUri()) await vault.disconnect();
     state.vaultInfo = null;
-    await kondor.connect();
+    kondor.useAccount(address);
     state.wallet = kondor;
+    state.kondorAccounts = null;
     await refreshAccount();
     renderDialog();
     renderPage();

@@ -393,3 +393,25 @@ dialog.sheet::backdrop { background: rgba(27, 31, 42, 0.45); }
 .card-grid > .empty, .card-grid > .loading, .card-grid > .notice { grid-column: 1 / -1; }
 .trust-note svg { flex: 0 0 22px; width: 22px; height: 22px; margin-top: 2px; }
 .title + .lede, .display + .lede { margin-top: 16px; } .eyebrow + .title, .eyebrow + .display { margin-top: 8px; }
+
+/* Kondor account picker */
+.account-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.account-choice {
+  width: 100%; display: flex; gap: 12px; align-items: center; text-align: left; font: inherit; color: var(--ink);
+  background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 12px; padding: 10px 14px; min-height: 52px; cursor: pointer;
+}
+.account-choice:hover { border-color: var(--ink); }
+.account-choice[aria-pressed="true"] { border-color: var(--accent); background: var(--blue-bg); }
+.account-choice > span:last-child { min-width: 0; display: flex; flex-direction: column; }
+.account-choice .mono { font-size: 13px; color: var(--text-2); }
+
+/* Open a story: short story or book */
+.kind-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 32px; max-width: 760px; }
+.kind-choice {
+  display: flex; flex-direction: column; gap: 4px; text-align: left; font: inherit; color: var(--ink); cursor: pointer;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--radius); padding: 16px 18px; min-height: 44px;
+}
+.kind-choice b { font-family: var(--serif); font-size: 20px; }
+.kind-choice span { font-size: 14px; color: var(--text-2); }
+.kind-choice:hover { border-color: var(--ink); }
+.kind-choice[aria-pressed="true"] { border: 2px solid var(--accent); background: var(--blue-bg); padding: 15px 17px; }

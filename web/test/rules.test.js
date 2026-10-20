@@ -118,3 +118,14 @@ test("parts shorter than the minimum are refused unless they close the story", (
   assert.equal(assessWrite({ ...rule, usedChars: "9995", text: "The end" }).ok, false);
   assert.equal(assessWrite({ ...rule, usedChars: "9993", text: "The end" }).ok, true);
 });
+
+test("books use the book length range", () => {
+  const base = {
+    title: "A long tale", openingText: "The opening line of a very long book.", maxChars: "100000",
+    category1: "1", category2: "0", visibility: "1", freeChapters: 0, editionMin: "0", cap: "2000",
+    inkBalance: "0", starter: "20000", openCount: 0, openLimit: 3, price: "100000000", tokenBalance: "500000000", kind: 1,
+  };
+  assert.equal(assessOpen(base).ok, true);
+  assert.match(assessOpen({ ...base, maxChars: "99999" }).problems.join(" "), /A book must be 100,000 to 1,000,000/);
+  assert.match(assessOpen({ ...base, kind: 2 }).problems.join(" "), /short story must be 10,000 to 99,999/);
+});

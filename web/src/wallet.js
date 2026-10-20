@@ -77,15 +77,27 @@ export function createKondorWallet() {
   return {
     id: "kondor",
     label: "Kondor",
-    connect: async () => {
+    /**
+     * Every account Kondor shares with this site. Kondor decides which
+     * accounts to share; the page then lets the person pick one.
+     */
+    listAccounts: async () => {
       const accounts = await withTimeout(
         getAccounts(),
-        8000,
-        "Kondor did not answer. Install the Kondor extension, set it to this network, and try again."
+        60000,
+        "Kondor did not answer. Install the Kondor extension, unlock it, set it to this network, and try again."
       );
-      const first = accounts && accounts[0];
-      if (!first || !first.address) throw new Error("Kondor did not share an address.");
-      address = first.address;
+      const list = (Array.isArray(accounts) ? accounts : [])
+        .filter((a) => a && typeof a.address === "string" && a.address)
+        .map((a) => ({ address: a.address, name: typeof a.name === "string" ? a.name : "" }));
+      const seen = new Set();
+      const unique = list.filter((a) => (seen.has(a.address) ? false : seen.add(a.address)));
+      if (!unique.length) throw new Error("Kondor did not share an address.");
+      return unique;
+    },
+    useAccount: (chosen) => {
+      if (!chosen || typeof chosen !== "string") throw new Error("Pick an account.");
+      address = chosen;
       saveSession({ kind: "kondor", address });
       return address;
     },

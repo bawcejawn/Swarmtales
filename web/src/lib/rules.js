@@ -4,13 +4,14 @@
  * why a click would fail, in the same cases the contracts refuse.
  */
 
-import { checkStoryText, checkTitle, SHORT_MAX, SHORT_MIN } from "./text.js";
+import { BOOK_MAX, BOOK_MIN, checkStoryText, checkTitle, SHORT_MAX, SHORT_MIN } from "./text.js";
 import { asWhole } from "./money.js";
 
 export const STORY_STATUS_OPEN = 1;
 export const VIS_PUBLIC = 1;
 export const VIS_UNLISTED = 2;
 export const VIS_PRIVATE = 3;
+export const KIND_BOOK = 1;
 export const KIND_SHORT = 2;
 export const TIER_WRITER = 2;
 export const ITEM_WRITER_MONTH = 2;
@@ -115,14 +116,18 @@ export function assessOpen(input) {
   const cost = textCheck.ok ? BigInt(textCheck.cost) : 0n;
   if (!textCheck.ok) problems.push("Opening text: " + textCheck.reason);
 
+  const isBook = Number(input.kind || KIND_SHORT) === KIND_BOOK;
+  const lo = isBook ? BOOK_MIN : SHORT_MIN;
+  const hi = isBook ? BOOK_MAX : SHORT_MAX;
+  const range = lo.toLocaleString("en-US") + " to " + hi.toLocaleString("en-US");
   let maxChars = null;
   try {
     maxChars = asWhole(input.maxChars, "length");
   } catch {
-    problems.push("Length must be a whole number from 10,000 to 99,999.");
+    problems.push("Length must be a whole number from " + range + ".");
   }
-  if (maxChars != null && (maxChars < BigInt(SHORT_MIN) || maxChars > BigInt(SHORT_MAX))) {
-    problems.push("A short story must be 10,000 to 99,999 characters.");
+  if (maxChars != null && (maxChars < BigInt(lo) || maxChars > BigInt(hi))) {
+    problems.push((isBook ? "A book" : "A short story") + " must be " + range + " characters.");
   }
 
   const cap = whole(input.cap, "cap", null);
@@ -175,7 +180,7 @@ export function assessOpen(input) {
 
   const price = whole(input.price, "price", null);
   const tokenBalance = whole(input.tokenBalance, "token balance", null);
-  if (price == null || price === 0n) problems.push("Opening a short story has no price in this token yet.");
+  if (price == null || price === 0n) problems.push("Opening " + (isBook ? "a book" : "a short story") + " has no price in this token yet.");
   if (price != null && tokenBalance != null && tokenBalance < price) {
     problems.push("Your token balance is below the open price.");
   }
