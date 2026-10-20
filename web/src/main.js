@@ -907,7 +907,8 @@ function composer(id, story, active) {
 
   const area = h("textarea", { rows: "8", spellcheck: "true", "aria-describedby": "compose-count" });
   const chapter = h("input", { type: "checkbox" });
-  const ai = h("input", { type: "checkbox" });
+  const aiBox = aiToggle();
+  const ai = aiBox.input;
   const costText = h("b", {}, ["0 Ink"]);
   const shortText = h("span");
   const space = Math.max(0, Number(story.max_chars || 0) - Number(story.used_chars || 0));
@@ -937,10 +938,8 @@ function composer(id, story, active) {
       h("span", {}, [num(space) + " characters left in this story"]),
       h("span", { "aria-live": "polite" }, [shortText]),
     ]),
-    h("div", { class: "row" }, [
-      h("label", { class: "check" }, [chapter, "Start a new chapter"]),
-      h("label", { class: "check" }, [ai, "Written with AI help"]),
-    ]),
+    h("label", { class: "check" }, [chapter, "Start a new chapter"]),
+    aiBox.node,
     list,
     h("div", { class: "actions" }, [button, h("p", { class: "meta" }, ["Your wallet asks you to confirm. The Ink is used once your part is added."])]),
     walletNote(),
@@ -1007,6 +1006,23 @@ function composer(id, story, active) {
     }
   }
   return box;
+}
+
+/** "Written with AI help" checkbox, with what it does spelled out and a live preview of the label. */
+function aiToggle() {
+  const input = h("input", { type: "checkbox", "aria-describedby": "ai-help" });
+  // The example label is faded until ticked, so people can see what readers will see.
+  const example = h("span", { class: "tag-ai tag-ai-preview" }, ["Written with AI help"]);
+  input.addEventListener("change", () => example.classList.toggle("tag-ai-preview", !input.checked));
+  const node = h("div", { class: "ai-toggle" }, [
+    h("label", { class: "check" }, [input, "Written with AI help"]),
+    h("p", { class: "meta small", id: "ai-help" }, [
+      "Tick this if an AI tool wrote any of this part. Readers will see this label under it: ",
+      example,
+      " It costs the same Ink, and nothing else changes.",
+    ]),
+  ]);
+  return { input, node };
 }
 
 function walletNote() {
@@ -1092,15 +1108,23 @@ function renderOpen(page) {
     h("option", { value: "2" }, ["Unlisted: only people with the link find it"]),
     h("option", { value: "3" }, ["Private: only people you invite can write"]),
   ]);
-  const free = h("input", { type: "number", min: "0", max: "5", value: "0", inputmode: "numeric" });
-  const edition = h("input", { type: "number", min: "0", value: "0", inputmode: "numeric" });
+  const free = h("select", {}, [
+    h("option", { value: "0" }, ["None: members only"]),
+    h("option", { value: "1", selected: true }, ["The first chapter (recommended)"]),
+    h("option", { value: "2" }, ["The first 2 chapters"]),
+    h("option", { value: "3" }, ["The first 3 chapters"]),
+    h("option", { value: "4" }, ["The first 4 chapters"]),
+    h("option", { value: "5" }, ["The first 5 chapters"]),
+  ]);
+  const edition = h("input", { type: "number", min: "0", value: "1000", step: "100", inputmode: "numeric" });
   const opening = h("textarea", { rows: "8", spellcheck: "true" });
   const costLine = h("p", { class: "counter" }, ["0 Ink"]);
   opening.addEventListener("input", () => {
     const check = checkStoryText(opening.value, true);
     costLine.textContent = !opening.value ? "0 Ink" : check.ok ? num(inkCost(opening.value)) + " Ink, paid from your starter Ink" : check.reason;
   });
-  const ai = h("input", { type: "checkbox" });
+  const aiBox = aiToggle();
+  const ai = aiBox.input;
   const list = h("div");
   const status = statusBox();
   const button = h("button", { type: "submit", class: "btn btn-primary" }, ["Open the " + kindInfo.name]);
@@ -1115,13 +1139,14 @@ function renderOpen(page) {
     ]),
     field("The first part", opening, "At least " + (Number(minContribution()) || 1) + " characters. Readers see this first."),
     costLine,
-    h("label", { class: "check" }, [ai, "Written with AI help"]),
-    h("details", { class: "removed" }, [
-      h("summary", {}, ["More options"]),
-      h("div", { class: "form-grid" }, [
-        field("Free chapters", free, "0 to 5"),
-        field("Contributor Edition minimum", edition, "Characters a writer needs for a Contributor Edition. 0 for none."),
-      ]),
+    aiBox.node,
+    h("details", { class: "more-options" }, [
+      h("summary", {}, ["Reading preview and keepsake copies (optional)"]),
+      h("p", { class: "meta" }, ["You can leave these as they are. Both are saved with the story now and take effect when memberships and finished books launch."]),
+      field("Free preview for visitors", free,
+        "How many chapters someone without a membership can read before being asked to join. Writers and members can always read everything. While SwarmTales is in testing, every story is free to read."),
+      field("Words needed for a keepsake copy", edition,
+        "When the story is finished, every writer with at least this many characters in the final version gets a free Contributor Edition: a keepsake copy of the book with their name in the credits. 1,000 characters is about a long paragraph. Enter 0 to give one to every writer."),
     ]),
     list,
     h("div", { class: "actions" }, [button, h("p", { class: "meta" }, ["You hold " + tokenAmount(state.account.token) + "."])]),

@@ -160,10 +160,10 @@ export function assessOpen(input) {
   try {
     edition = asWhole(input.editionMin == null || input.editionMin === "" ? "0" : input.editionMin, "contributor edition");
   } catch {
-    problems.push("Contributor Edition minimum must be a whole number.");
+    problems.push("Words needed for a keepsake copy must be a whole number (0 or more).");
   }
   if (maxChars != null && edition > maxChars) {
-    problems.push("Contributor Edition minimum is above the story size.");
+    problems.push("Words needed for a keepsake copy can't be more than the story's length.");
   }
 
   const openCount = Number(input.openCount || 0);
