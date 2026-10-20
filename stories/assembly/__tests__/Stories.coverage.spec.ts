@@ -197,9 +197,11 @@ function configure(): void {
 
 function openAs(opener: Uint8Array, kind: stories.story_kind, max: u64, vis: stories.visibility, text: string): u64 {
   authorize(opener);
-  allowCalls(2);
+  allowCalls(3);
+  // Unlisted and private stories need a writers' pool of at least the kind's minimum.
+  const pool: u64 = vis == PUBLIC ? 0 : (kind == BOOK ? 100000 : 10000);
   const id = new Stories().open_story(new stories.open_story_arguments(
-    opener, kind, "My Tale", max, 1, 0, vis, 0, 0, text, false, <u64>text.length, USDT, true, 0
+    opener, kind, "My Tale", max, 1, 0, vis, 0, 0, text, false, <u64>text.length, USDT, true, 0, pool
   )).value;
   checkpoint();
   return id;
@@ -403,9 +405,15 @@ describe("Stories: opening", () => {
     expect(second.values[0]).toBe(id);
   });
 
-  it("lets anyone eligible write an unlisted story", () => {
+  it("lets only invited writers write an unlisted story", () => {
     const id = openAs(ALICE, SHORT, 10000, UNLISTED, "Quiet start.");
     expect(story(id).visibility).toBe(UNLISTED);
+    fWho = BOB; fId = id; fText = "A reader found the link"; fExpected = 23;
+    fResults = [writer(), okCall()];
+    fails(failContribute, "STORIES: only invited writers can write in this story");
+    authorize(ALICE);
+    new Stories().set_allowed(new stories.set_allowed_arguments(ALICE, id, [BOB], true));
+    checkpoint();
     writeAsWriter(BOB, id, "A reader found the link");
     expect(segment(id, 2).text).toBe("A reader found the link");
     expect(story(id).contributor_count).toBe(2);
@@ -449,7 +457,7 @@ describe("Stories: private stories, allow-list and invites", () => {
     writeAsOpener(1, "Opener continues");
     addEditor(1, CARA);
     authorize(CARA);
-    allowCalls(1);
+    results([writer(), okCall()]);
     new Stories().contribute(new stories.contribute_arguments(CARA, 1, "Editor continues", false, false, 16, true, 0));
     checkpoint();
     expect(segment(1, 2).text).toBe("Opener continues");

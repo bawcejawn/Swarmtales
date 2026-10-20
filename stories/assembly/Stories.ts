@@ -34,6 +34,20 @@
 //     or unblock by hand.
 //   - Every report, hide, unhide, takedown and block is a public event.
 //
+// INVITE-ONLY STORIES AND STORY FUNDS (October 2026)
+//   - Unlisted and private stories are invite-only for writing: the
+//     opener, editors and invited wallets. Everyone except the opener
+//     needs an active Writer month there (no promo trial).
+//   - The opener must set Ink aside in the story's fund (the writers'
+//     pool) when opening: at least the kind's minimum length (10,000 for a
+//     Short Story, 100,000 for a Book). It can be topped up later. Parts are paid from the fund while it has enough; otherwise
+//     the writer pays. Refunds of fund-paid parts go back to the fund, and
+//     what is left returns to the opener when the story is finalized or
+//     archived.
+//   - Opening costs the normal price for the first few open projects
+//     (default 3); each one beyond doubles it, until it reaches the
+//     ceiling (default 4x), up to the open limit.
+//
 // WHAT THIS CONTRACT DOES NOT DO
 //   - It never moves stablecoins and holds no money.
 //   - The admin cannot edit text, move or burn Ink, refund outside the
@@ -151,7 +165,10 @@ const CAP_MIN: u32 = 100;
 const CAP_MAX: u32 = 10000;
 const DEFAULT_TRIAL: u32 = 1000;
 const TRIAL_MAX: u32 = 5000;
-const DEFAULT_OPEN_LIMIT: u32 = 3;
+const DEFAULT_OPEN_LIMIT: u32 = 10;
+const DEFAULT_FULL_PRICE_PROJECTS: u32 = 3;
+const DEFAULT_MAX_PRICE_MULTIPLIER: u32 = 4;
+const MAX_PRICE_MULTIPLIER: u32 = 1024;
 const OPEN_LIMIT_MIN: u32 = 1;
 const OPEN_LIMIT_MAX: u32 = 10;
 const DEFAULT_ARCHIVE_DAYS: u32 = 60;
@@ -352,6 +369,11 @@ export class Stories {
     return this.accountStatus.get(args.account!)!;
   }
 
+  get_open_multiplier(args: stories.get_open_multiplier_arguments): stories.uint32 {
+    if (!this.isAddress(args.account)) return new stories.uint32(1);
+    return new stories.uint32(this.openMultiplier(this.openCount.get(args.account!)!.value, this.config.get()!));
+  }
+
   get_terms_accepted(args: stories.get_terms_accepted_arguments): stories.uint32 {
     if (!this.isAddress(args.account)) return new stories.uint32(0);
     return this.termsAccepted.get(args.account!)!;
@@ -381,6 +403,9 @@ export class Stories {
     const isBook = kind == stories.story_kind.KIND_BOOK;
     const lo = isBook ? BOOK_MIN : SHORT_MIN;
     const hi = isBook ? BOOK_MAX : SHORT_MAX;
+    // 0 = no fixed size: the story may grow to its kind's maximum, and the
+    // opener can close it any time after it reaches the kind's minimum.
+    if (args.max_chars == 0) args.max_chars = hi;
     System.require(args.max_chars >= lo && args.max_chars <= hi, isBook
       ? "STORIES: a Book must be 100,000 to 1,000,000 characters"
       : "STORIES: a Short Story must be 10,000 to 99,999 characters");
@@ -400,6 +425,15 @@ export class Stories {
 
     const open = this.openCount.get(opener)!;
     System.require(open.value < cfg.open_limit, "STORIES: you already have the maximum number of open projects");
+    if (args.visibility == stories.visibility.VISIBILITY_PUBLIC) {
+      System.require(args.fund == 0, "STORIES: only unlisted and private stories have a fund");
+    } else {
+      // The writers' pool must at least cover a story long enough to close.
+      System.require(args.fund >= lo, isBook
+        ? "STORIES: an unlisted or private Book needs a writers' pool of at least 100,000 Ink"
+        : "STORIES: an unlisted or private Short Story needs a writers' pool of at least 10,000 Ink");
+    }
+    const multiplier = this.openMultiplier(open.value, cfg);
 
     let storyId = cfg.next_story_id;
     if (storyId == 0) storyId = 1;
@@ -433,11 +467,13 @@ export class Stories {
     System.event("stories.story_opened_event", Protobuf.encode(ev, stories.story_opened_event.encode), [opener]);
 
     // 1) Shop takes the fee and mints the starter Ink to the opener.
-    const fee = new stories.shop_fee_call(opener, <u32>kind, token);
+    const fee = new stories.shop_fee_call(opener, <u32>kind, token, multiplier);
     this.callOut(shopId, SHOP_OPEN_FEE_ENTRY, Protobuf.encode(fee, stories.shop_fee_call.encode), [opener], "STORIES: open fee payment failed");
 
     // 2) The opening text is segment 1, paid in Ink like any other text.
-    this.writeSegment(storyId, st, opener, text, cost, true, args.ai_assisted, false, ink, args.terms_version, 0);
+    this.writeSegment(storyId, st, opener, text, cost, true, args.ai_assisted, false, ink, args.terms_version, 0, false);
+    // 3) Optional: Ink set aside for everyone's writing in this story.
+    if (args.fund > 0) this.depositFund(storyId, st, opener, args.fund, ink);
     this.leave();
     return new stories.uint64(storyId);
   }
@@ -643,14 +679,19 @@ export class Stories {
     }
 
     const privileged = this.isPrivileged(args.story_id, st, author);
-    if (st.visibility == stories.visibility.VISIBILITY_PRIVATE) {
+    const inviteOnly = st.visibility != stories.visibility.VISIBILITY_PUBLIC;
+    if (inviteOnly) {
       System.require(
         privileged || this.allowed.get(this.idAddrKey(args.story_id, author))!.value,
-        "STORIES: this story is private"
+        st.visibility == stories.visibility.VISIBILITY_PRIVATE ? "STORIES: this story is private" : "STORIES: only invited writers can write in this story"
       );
+      // Everyone but the opener needs a Writer month here (no promo trial).
+      if (!Arrays.equal(author, st.opener!)) {
+        System.require(this.isActiveWriter(author), "STORIES: an active Writer month is required to write in invite-only stories");
+      }
     }
     let trial = false;
-    if (!privileged && !this.isActiveWriter(author)) {
+    if (!inviteOnly && !privileged && !this.isActiveWriter(author)) {
       System.require(this.promoClaimed(author), "STORIES: an active Writer membership is required");
       const used = this.trialUsed.get(author)!;
       System.require(SafeMath.add(used.value, cost) <= <u64>cfg.trial_limit, "STORIES: trial writing limit reached");
@@ -659,7 +700,10 @@ export class Stories {
       trial = true;
     }
 
-    const seq = this.writeSegment(args.story_id, st, author, text, cost, args.starts_chapter, args.ai_assisted, trial, ink, args.terms_version, insertAfter);
+    // Paid from the story's fund when it has enough; otherwise by the writer.
+    const fromFund = inviteOnly && st.fund >= cost;
+    if (fromFund) st.fund = st.fund - cost;
+    const seq = this.writeSegment(args.story_id, st, author, text, cost, args.starts_chapter, args.ai_assisted, trial, ink, args.terms_version, insertAfter, fromFund);
     this.leave();
     return new stories.uint64(seq);
   }
@@ -697,12 +741,12 @@ export class Stories {
     st.used_chars = nextUsed;
     st.last_activity_at = now;
     if (Arrays.equal(editor, st.opener!)) st.opener_last_active = now;
-    this.applyRefund(args.story_id, st, seg.author!, refund);
+    const mint = this.settleRefund(args.story_id, st, seg, refund);
     this.maybeAutoLock(args.story_id, st, editor);
     this.putStory(args.story_id, st);
 
     this.emitChange(args.story_id, args.seq, editor, oldCost, newCost, refund, false, false, seg.author!);
-    if (refund > 0) this.refundInk(ink, seg.author!, refund, args.story_id, args.seq);
+    if (mint) this.refundInk(ink, seg.author!, refund, args.story_id, args.seq);
     this.leave();
     return new stories.empty_object();
   }
@@ -730,11 +774,11 @@ export class Stories {
     st.used_chars = SafeMath.sub(st.used_chars, oldCost);
     st.last_activity_at = now;
     if (Arrays.equal(editor, st.opener!)) st.opener_last_active = now;
-    this.applyRefund(args.story_id, st, seg.author!, refund);
+    const mint = this.settleRefund(args.story_id, st, seg, refund);
     this.putStory(args.story_id, st);
 
     this.emitChange(args.story_id, args.seq, editor, oldCost, 0, refund, true, false, seg.author!);
-    if (refund > 0) this.refundInk(ink, seg.author!, refund, args.story_id, args.seq);
+    if (mint) this.refundInk(ink, seg.author!, refund, args.story_id, args.seq);
     this.leave();
     return new stories.empty_object();
   }
@@ -899,14 +943,14 @@ export class Stories {
 
       seg.final_mode = item.mode;
       this.segments.put(key, seg);
-      this.applyRefund(args.story_id, st, seg.author!, refund);
+      const mint = this.settleRefund(args.story_id, st, seg, refund);
       this.addSurviving(args.story_id, seg.author!, seg.surviving);
       st.running_hash = this.foldHash(st.running_hash, next, <u8>item.mode, removed ? new Uint8Array(32) : seg.text_hash!);
       st.final_cursor = next;
       if (item.mode != stories.final_mode.FINAL_UNCHANGED) {
         this.emitChange(args.story_id, next, finalizer, oldCost, seg.current_cost, refund, removed, true, seg.author!);
       }
-      if (refund > 0) this.refundInk(ink, seg.author!, refund, args.story_id, next);
+      if (mint) this.refundInk(ink, seg.author!, refund, args.story_id, next);
     }
     this.skipRemoved(args.story_id, st);
     if (!st.finalizer_is_admin) st.opener_last_active = now;
@@ -937,10 +981,30 @@ export class Stories {
     st.pdf_hash = hash;
     if (!st.finalizer_is_admin) st.opener_last_active = this.now();
     this.decrementOpen(st.opener!);
+    const back = this.takeFundBack(args.story_id, st);
     this.putStory(args.story_id, st);
+    if (back > 0) this.returnFund(args.story_id, st, back);
     this.emitStatus(args.story_id, st.status, "finalized", finalizer);
     const ev = new stories.story_finalized_event(args.story_id, uri, hash, st.running_hash);
     System.event("stories.story_finalized_event", Protobuf.encode(ev, stories.story_finalized_event.encode), [st.opener!]);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  // Opener adds Ink to an invite-only story's fund.
+  top_up_fund(args: stories.top_up_fund_arguments): stories.empty_object {
+    this.enter();
+    this.requireNotPaused();
+    const opener = this.requireAddress(args.opener, "STORIES: invalid opener address");
+    this.requireSigner(opener, "STORIES: opener has not authorized this");
+    const ink = this.requireAddress(this.config.get()!.ink, "STORIES: Ink contract is not set");
+    const st = this.requireStory(args.story_id);
+    this.requireOpener(st, opener);
+    System.require(st.status == stories.story_status.STATUS_OPEN, "STORIES: a fund can only be topped up while the story is open");
+    System.require(st.visibility != stories.visibility.VISIBILITY_PUBLIC, "STORIES: only unlisted and private stories have a fund");
+    System.require(args.amount > 0, "STORIES: add at least 1 Ink");
+    st.opener_last_active = this.now();
+    this.depositFund(args.story_id, st, opener, args.amount, ink);
     this.leave();
     return new stories.empty_object();
   }
@@ -1110,7 +1174,9 @@ export class Stories {
     System.require(this.now() >= SafeMath.add(st.last_activity_at, wait), "STORIES: story has been active recently");
     st.status = stories.story_status.STATUS_ARCHIVED;
     this.decrementOpen(st.opener!);
+    const back = this.takeFundBack(args.story_id, st);
     this.putStory(args.story_id, st);
+    if (back > 0) this.returnFund(args.story_id, st, back);
     this.emitStatus(args.story_id, st.status, "archived", new Uint8Array(0));
     this.leave();
     return new stories.empty_object();
@@ -1169,14 +1235,20 @@ export class Stories {
     System.require(args.open_limit >= OPEN_LIMIT_MIN && args.open_limit <= OPEN_LIMIT_MAX, "STORIES: open-project limit must be 1 to 10");
     System.require(args.archive_days >= ARCHIVE_DAYS_MIN && args.archive_days <= DAYS_MAX, "STORIES: archive period must be 30 to 365 days");
     System.require(args.inactivity_days >= INACTIVITY_DAYS_MIN && args.inactivity_days <= DAYS_MAX, "STORIES: admin-finalize wait must be 30 to 365 days");
+    const fullPrice = args.full_price_projects == 0 ? DEFAULT_FULL_PRICE_PROJECTS : args.full_price_projects;
+    System.require(fullPrice <= OPEN_LIMIT_MAX, "STORIES: normal-price projects must be 1 to 10");
+    const maxMult = args.max_price_multiplier == 0 ? DEFAULT_MAX_PRICE_MULTIPLIER : args.max_price_multiplier;
+    System.require(maxMult <= MAX_PRICE_MULTIPLIER, "STORIES: the price ceiling must be 1 to 1024 times");
     const cfg = this.config.get()!;
     cfg.contribution_cap = args.contribution_cap;
     cfg.trial_limit = args.trial_limit;
     cfg.open_limit = args.open_limit;
     cfg.archive_days = args.archive_days;
     cfg.inactivity_days = args.inactivity_days;
+    cfg.full_price_projects = fullPrice;
+    cfg.max_price_multiplier = maxMult;
     this.saveConfig(cfg);
-    const ev = new stories.limits_event(args.contribution_cap, args.trial_limit, args.open_limit, args.archive_days, args.inactivity_days);
+    const ev = new stories.limits_event(args.contribution_cap, args.trial_limit, args.open_limit, args.archive_days, args.inactivity_days, fullPrice, maxMult);
     System.event("stories.limits_event", Protobuf.encode(ev, stories.limits_event.encode), []);
     this.leave();
     return new stories.empty_object();
@@ -1318,7 +1390,7 @@ export class Stories {
   // Append a new segment, update the story, then burn the Ink.
   private writeSegment(
     storyId: u64, st: stories.story, author: Uint8Array, text: string, cost: u64,
-    startsChapter: bool, aiAssisted: bool, trial: bool, ink: Uint8Array, termsVersion: u32, insertAfter: u64
+    startsChapter: bool, aiAssisted: bool, trial: bool, ink: Uint8Array, termsVersion: u32, insertAfter: u64, fromFund: bool
   ): u64 {
     const now = this.now();
     const seq = st.segment_count + 1;
@@ -1342,11 +1414,13 @@ export class Stories {
     seg.rights_confirmed = true;
     seg.terms_version = termsVersion;
     seg.insert_after = insertAfter;
+    seg.fund_paid = fromFund;
     this.segments.put(this.pairKey(storyId, seq), seg);
 
     st.segment_count = seq;
     st.used_chars = SafeMath.add(st.used_chars, cost);
-    st.total_burned = SafeMath.add(st.total_burned, cost);
+    // Fund Ink was already burned when it was deposited.
+    if (!fromFund) st.total_burned = SafeMath.add(st.total_burned, cost);
     if (chapter) st.chapter_count = st.chapter_count + 1;
     st.last_activity_at = now;
     if (Arrays.equal(author, st.opener!)) st.opener_last_active = now;
@@ -1368,11 +1442,13 @@ export class Stories {
     this.maybeAutoLock(storyId, st, author);
     this.putStory(storyId, st);
 
-    const ev = new stories.contribution_event(storyId, seq, author, cost, chapter, aiAssisted, hash, trial, true, termsVersion, insertAfter);
+    const ev = new stories.contribution_event(storyId, seq, author, cost, chapter, aiAssisted, hash, trial, true, termsVersion, insertAfter, fromFund);
     System.event("stories.contribution_event", Protobuf.encode(ev, stories.contribution_event.encode), [author]);
 
-    const burn = new stories.ink_burn_call(author, cost, BURN_CONTRIBUTION, "s:" + storyId.toString() + ":" + seq.toString());
-    this.callOut(ink, INK_BURN_ENTRY, Protobuf.encode(burn, stories.ink_burn_call.encode), [author], "STORIES: Ink burn failed");
+    if (!fromFund) {
+      const burn = new stories.ink_burn_call(author, cost, BURN_CONTRIBUTION, "s:" + storyId.toString() + ":" + seq.toString());
+      this.callOut(ink, INK_BURN_ENTRY, Protobuf.encode(burn, stories.ink_burn_call.encode), [author], "STORIES: Ink burn failed");
+    }
     return seq;
   }
 
@@ -1469,6 +1545,66 @@ export class Stories {
     const open = this.openCount.get(opener)!;
     if (open.value > 0) open.value = open.value - 1;
     this.openCount.put(opener, open);
+  }
+
+  // ===================================================================
+  // Story fund helpers
+  // ===================================================================
+
+  // 1 for the first few open projects, then 2, 4, 8... up to the ceiling.
+  private openMultiplier(openNow: u32, cfg: stories.config): u32 {
+    const full = cfg.full_price_projects == 0 ? DEFAULT_FULL_PRICE_PROJECTS : cfg.full_price_projects;
+    if (openNow < full) return 1;
+    const ceiling = cfg.max_price_multiplier == 0 ? DEFAULT_MAX_PRICE_MULTIPLIER : cfg.max_price_multiplier;
+    const steps = openNow - full + 1;
+    const doubled: u32 = steps >= 10 ? MAX_PRICE_MULTIPLIER : (<u32>1) << steps;
+    return doubled < ceiling ? doubled : ceiling;
+  }
+
+  // Burn the opener's Ink into the story's fund.
+  private depositFund(storyId: u64, st: stories.story, opener: Uint8Array, amount: u64, ink: Uint8Array): void {
+    st.fund = SafeMath.add(st.fund, amount);
+    st.fund_added = SafeMath.add(st.fund_added, amount);
+    st.total_burned = SafeMath.add(st.total_burned, amount);
+    this.putStory(storyId, st);
+    const ev = new stories.fund_event(storyId, opener, "deposit", amount, st.fund);
+    System.event("stories.fund_event", Protobuf.encode(ev, stories.fund_event.encode), [opener]);
+    const burn = new stories.ink_burn_call(opener, amount, BURN_CONTRIBUTION, "fund:" + storyId.toString());
+    this.callOut(ink, INK_BURN_ENTRY, Protobuf.encode(burn, stories.ink_burn_call.encode), [opener], "STORIES: Ink burn failed");
+  }
+
+  // A refund for a part: back to the fund if the fund paid for it (no mint),
+  // otherwise to the writer (returns true: mint it after saving).
+  private settleRefund(storyId: u64, st: stories.story, seg: stories.segment, refund: u64): bool {
+    if (refund == 0) return false;
+    if (seg.fund_paid) {
+      const key = this.idAddrKey(storyId, seg.author!);
+      const total = this.contributorTotals.get(key)!;
+      total.value = SafeMath.sub(total.value, refund);
+      this.contributorTotals.put(key, total);
+      st.fund = SafeMath.add(st.fund, refund);
+      return false;
+    }
+    this.applyRefund(storyId, st, seg.author!, refund);
+    return true;
+  }
+
+  // Empty the fund for its return to the opener (call before saving the story).
+  private takeFundBack(storyId: u64, st: stories.story): u64 {
+    const back = st.fund;
+    if (back == 0) return 0;
+    st.fund = 0;
+    st.total_refunded = SafeMath.add(st.total_refunded, back);
+    System.require(st.total_refunded <= st.total_burned, "STORIES: refund would exceed the Ink burned for this story");
+    return back;
+  }
+
+  private returnFund(storyId: u64, st: stories.story, back: u64): void {
+    const ink = this.requireAddress(this.config.get()!.ink, "STORIES: Ink contract is not set");
+    const ev = new stories.fund_event(storyId, st.opener!, "returned", back, 0);
+    System.event("stories.fund_event", Protobuf.encode(ev, stories.fund_event.encode), [st.opener!]);
+    const mint = new stories.ink_mint_call(st.opener!, back, MINT_REFUND, "fund-back:" + storyId.toString());
+    this.callOut(ink, INK_MINT_ENTRY, Protobuf.encode(mint, stories.ink_mint_call.encode), [st.opener!], "STORIES: Ink refund failed");
   }
 
   // ===================================================================

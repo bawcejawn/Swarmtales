@@ -190,9 +190,11 @@ function configure(): void {
 
 function openAs(opener: Uint8Array, kind: stories.story_kind, max: u64, vis: stories.visibility, text: string): u64 {
   authorize(opener);
-  allowCalls(2);
+  allowCalls(3);
+  // Unlisted and private stories need a writers' pool of at least the kind's minimum.
+  const pool: u64 = vis == PUBLIC ? 0 : (kind == BOOK ? 100000 : 10000);
   const id = new Stories().open_story(new stories.open_story_arguments(
-    opener, kind, "My Tale", max, 1, 0, vis, 0, 0, text, false, <u64>text.length, USDT, true, 0
+    opener, kind, "My Tale", max, 1, 0, vis, 0, 0, text, false, <u64>text.length, USDT, true, 0, pool
   )).value;
   checkpoint();
   return id;
@@ -378,7 +380,8 @@ describe("Stories: admin and settings", () => {
     expect(same(cfg.admin, STORIES)).toBe(true);
     expect(cfg.contribution_cap).toBe(10000);
     expect(cfg.trial_limit).toBe(1000);
-    expect(cfg.open_limit).toBe(3);
+    expect(cfg.open_limit).toBe(10);
+    expect(cfg.full_price_projects).toBe(0); // 0 means the default, 3
     expect(cfg.archive_days).toBe(60);
     expect(cfg.inactivity_days).toBe(30);
     expect(cfg.paused).toBe(false);
