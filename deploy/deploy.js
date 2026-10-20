@@ -12,13 +12,19 @@
  *  - The node's chain id must match the network before anything is signed.
  *  - The address derived from the key must match the address you expect
  *    (for an upload, that is the future contract address).
- *  - Every write is first run as a dry run (signed, sent with broadcast
- *    off, so it is not added to a block) to show the mana it will use.
- *    Nothing is sent for real until you type SEND.
+ *  - Every write is first run as a dry run to show the mana it will use.
+ *    The dry run is a fully SIGNED transaction sent to the node with
+ *    broadcast off: an honest node runs it without adding it to a block,
+ *    but a dishonest one could submit it. This script sends nothing for
+ *    real until you type SEND. On mainnet, --rpc may only name a listed
+ *    node, and wire-stories needs --treasury and --founder.
+ *  - Uploads print the wasm's sha256. Mainnet uploads need
+ *    --expect-sha256 <hex> and stop on any mismatch.
  *
  * Commands (run from the repository root, after building both contracts):
  *   node deploy/deploy.js status   --ink <addr> --shop <addr> --admin <addr> [--user <addr>] [--stories <addr>] [--story <id>]
- *   node deploy/deploy.js upload   ink|shop|stories --expect <contract wallet address> [--upgrade]
+ *   node deploy/deploy.js upload   ink|shop|stories --expect <contract wallet address> [--expect-sha256 <hex>] [--upgrade]
+ *       (--expect-sha256: required on mainnet; the upload stops unless the wasm matches it)
  *       (--upgrade, testnet only: replace the code of a contract that is already there; its stored data is kept)
  *   node deploy/deploy.js set-admin ink|shop|stories --contract <addr> --admin <addr>
  *   node deploy/deploy.js wire     --admin <addr> --ink <addr> --shop <addr> --treasury <addr> --founder <addr> [--replace-shop <old addr>]
@@ -29,7 +35,7 @@
  *   node deploy/deploy.js test-promo --admin <addr> --shop <addr>
  *   node deploy/deploy.js claim-promo --account <addr> --shop <addr> --campaign <id> --link-key <wif-from-the-promo-link> [--sign-for <addr>]
  *   node deploy/deploy.js user-checks --user <addr> --ink <addr> --shop <addr> --admin <addr>
- *       (dry runs only: each call must be REJECTED; nothing is ever sent)
+ *       (dry runs only: each call must be REJECTED; nothing is sent for real, though each dry run is signed)
  *
  * Stories (after building stories/ and uploading it):
  *   node deploy/deploy.js wire-stories --admin <addr> --ink <addr> --shop <addr> --stories <addr> [--treasury <addr>] [--founder <addr>] [--replace-stories <old addr>]
@@ -48,7 +54,7 @@
  *       (testnet: join a private story with a signed invite link. --sign-for signs for a
  *        DIFFERENT wallet on purpose, to show the contract refuses a copied signature)
  *   node deploy/deploy.js measure --user <addr> --ink <addr> --stories <addr> --story <id> [--emoji] [--sizes 100,500,1000,2000,4000]
- *       (dry runs only: mana for contributions of each size; nothing is ever sent)
+ *       (dry runs only: mana for contributions of each size; nothing is sent for real, though each dry run is signed)
  *   node deploy/deploy.js test-write --user <addr> --ink <addr> --stories <addr> --story <id> [--size 100] [--emoji] [--text "..."]
  *       (testnet only: one contribute; dry run, then SEND. Burns Ink.
  *        --user must be the opener, unless you add --not-opener (then the chain checks
@@ -278,7 +284,12 @@ async function dryRunThenSend(signer, provider, net, operations, summary) {
   if (receipt.logs && receipt.logs.length) console.log("Contract logs: " + receipt.logs.join(" | "));
 
   const answer = await readLine("Type SEND (capital letters) to do it for real, or anything else to stop: ");
-  if (!lib.isConfirmation(answer)) lib.fail("Stopped. Nothing was sent.");
+  if (!lib.isConfirmation(answer)) {
+    // The dry run was a fully signed transaction (AB-009): the node that ran it
+    // could still submit it until this wallet's next transaction uses its nonce.
+    lib.fail("Stopped. This script sent nothing for real. The dry run was signed, though: until " + payer +
+      " sends another transaction, the node at " + net.rpc + " could still submit it. If that matters, send any small transaction from this wallet.");
+  }
 
   const real = await buildTx(signer, provider, net, operations, lib.rcLimitFor(receipt.rc_used, available));
   let sent;
@@ -310,6 +321,9 @@ async function cmdUpload(args) {
   const abiText = readFileOrFail(c.abi, c.buildHint).toString("utf8");
   console.log("Uploading " + target + " (" + wasm.length + " bytes of wasm) to " + expected);
   const { net, provider } = await connect(args.flags);
+  // The exact build that will be uploaded (AB-006). Required on mainnet.
+  const sha = lib.checkWasmHash(wasm, args.flags["expect-sha256"], net.mainnet);
+  console.log("wasm sha256: " + sha + (args.flags["expect-sha256"] === undefined ? "" : "  (matches --expect-sha256)"));
 
   const meta = await provider.call("contract_meta_store.get_contract_meta", { contract_id: expected }).catch(() => ({}));
   if (meta && meta.meta) {
@@ -625,6 +639,7 @@ async function cmdWireStories(args) {
     treasury: f.treasury === undefined ? undefined : lib.requireAddress(f.treasury, "treasury"),
     founder: f.founder === undefined ? undefined : lib.requireAddress(f.founder, "founder"),
     replace: f["replace-stories"] === undefined ? undefined : lib.requireAddress(f["replace-stories"], "replace-stories"),
+    mainnet: net.mainnet,
   });
   // Retiring an older Stories contract: it loses its Ink burn and mint rights
   // in the same transaction, so only the new one can ever touch Ink.
