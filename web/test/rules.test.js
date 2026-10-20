@@ -110,3 +110,11 @@ test("writer membership needs tier 2 and a future paid_until", () => {
   assert.equal(isActiveWriter({ tier: 2, paid_until: "100" }, "100"), false);
   assert.equal(isActiveWriter({ tier: 1, paid_until: "200" }, "100"), false);
 });
+
+test("parts shorter than the minimum are refused unless they close the story", () => {
+  const rule = { ...openStory, minContribution: "20" };
+  assert.match(assessWrite({ ...rule, text: "Too short." }).problems.join(" "), /at least 20/);
+  assert.equal(assessWrite({ ...rule, text: "This line is long enough to count." }).ok, true);
+  assert.equal(assessWrite({ ...rule, usedChars: "9995", text: "The end" }).ok, false);
+  assert.equal(assessWrite({ ...rule, usedChars: "9993", text: "The end" }).ok, true);
+});

@@ -35,6 +35,32 @@ const FRIENDLY = {
     "That promo campaign has hit its daily cap.",
   "INK: insufficient balance":
     "The Ink balance is too low.",
+  "INK: not enough Ink":
+    "You don't have enough Ink for that. Get more from a promo link or a Writer month.",
+  "STORIES: text is shorter than the minimum (only the piece that fills the story may be shorter)":
+    "A part needs at least 20 characters. Only the very last piece that fills the story can be shorter.",
+  "STORIES: opening text is shorter than the minimum":
+    "The opening needs at least 20 characters.",
+  "STORIES: invite link rejected":
+    "This invite link didn't work for this wallet. Open the full link you were given, and join with your own wallet.",
+  "STORIES: invite has expired":
+    "This invite link has expired. Ask the story's opener for a new one.",
+  "STORIES: invite has no uses left":
+    "This invite link has been used up. Ask the story's opener for a new one.",
+  "STORIES: invite was revoked":
+    "The opener turned this invite link off.",
+  "STORIES: already on the allow-list":
+    "You're already invited to this story. You can write in it now.",
+  "STORIES: call SwarmTales directly from your wallet, not through another contract":
+    "SwarmTales only accepts requests sent straight from your own wallet.",
+  "SHOP: promo link rejected":
+    "This promo link didn't work for this wallet. Open the full link you were given, and claim with your own wallet.",
+  "SHOP: promo link already used":
+    "This one-time promo link has already been used.",
+  "SHOP: stablecoin payment did not arrive":
+    "The payment didn't arrive, so nothing was bought. Check your balance and try again.",
+  "SHOP: call SwarmTales directly from your wallet, not through another contract":
+    "SwarmTales only accepts requests sent straight from your own wallet.",
 };
 
 export function chainMessage(error) {

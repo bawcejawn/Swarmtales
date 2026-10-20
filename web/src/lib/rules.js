@@ -68,6 +68,11 @@ export function assessWrite(input) {
   if (textCheck.ok && space != null && cost > space) {
     problems.push("That text costs " + cost + " Ink, and this story has " + space + " left.");
   }
+  const minimum = whole(input.minContribution, "minimum length", 0n);
+  const closesStory = space != null && cost === space;
+  if (textCheck.ok && minimum > 0n && cost < minimum && !closesStory) {
+    problems.push("A part must be at least " + minimum + " characters, so each turn adds something. Only the very last part of a story may be shorter.");
+  }
   if (textCheck.ok && balance != null && cost > balance) {
     problems.push("Ink balance is " + balance + " and this text costs " + cost + ".");
   }
@@ -126,6 +131,11 @@ export function assessOpen(input) {
   }
   if (textCheck.ok && maxChars != null && cost > maxChars) {
     problems.push("The opening text is longer than the story length you chose.");
+  }
+
+  const openMin = whole(input.minContribution, "minimum length", 0n);
+  if (textCheck.ok && openMin > 0n && cost < openMin) {
+    problems.push("The opening text must be at least " + openMin + " characters.");
   }
 
   const c1 = Number(input.category1 || 0);
