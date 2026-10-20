@@ -122,6 +122,8 @@ function reset(): void {
   const c = new Stories();
   c.set_addresses(new stories.set_addresses_arguments(INK, SHOP));
   c.add_category(new stories.add_category_arguments("Fantasy"));
+  // Written for the original 2,000 per-part cap.
+  c.set_limits(new stories.set_limits_arguments(2000, 1000, 3, 60, 30));
   checkpoint();
 }
 

@@ -117,7 +117,7 @@ const MAX_EDITORS: u32 = 10;
 const MAX_ACCOUNTS_PER_CALL: i32 = 20;
 const MAX_FREE_CHAPTERS: u32 = 5;
 const MAX_BATCH_ITEMS: i32 = 20;
-const MAX_BATCH_UNITS: u64 = 8000;
+const MAX_BATCH_UNITS: u64 = 20000;
 const MAX_LIST: u32 = 50;
 const MAX_SEGMENT_READ: u32 = 10;
 const MAX_NEWLINE_RUN: i32 = 3;
@@ -146,9 +146,9 @@ const DEFAULT_STRIKE_LIMIT: u32 = 3;
 const STRIKE_LIMIT_MAX: u32 = 20;
 
 // ---------- adjustable limits: start value and hard bounds ----------
-const DEFAULT_CAP: u32 = 2000;
+const DEFAULT_CAP: u32 = 10000;
 const CAP_MIN: u32 = 100;
-const CAP_MAX: u32 = 4000;
+const CAP_MAX: u32 = 10000;
 const DEFAULT_TRIAL: u32 = 1000;
 const TRIAL_MAX: u32 = 5000;
 const DEFAULT_OPEN_LIMIT: u32 = 3;
@@ -437,7 +437,7 @@ export class Stories {
     this.callOut(shopId, SHOP_OPEN_FEE_ENTRY, Protobuf.encode(fee, stories.shop_fee_call.encode), [opener], "STORIES: open fee payment failed");
 
     // 2) The opening text is segment 1, paid in Ink like any other text.
-    this.writeSegment(storyId, st, opener, text, cost, true, args.ai_assisted, false, ink, args.terms_version);
+    this.writeSegment(storyId, st, opener, text, cost, true, args.ai_assisted, false, ink, args.terms_version, 0);
     this.leave();
     return new stories.uint64(storyId);
   }
@@ -624,6 +624,13 @@ export class Stories {
       "STORIES: text is shorter than the minimum (only the piece that fills the story may be shorter)"
     );
     this.requireRightsAndTerms(author, args.rights_confirmed, args.terms_version, cfg);
+    if (args.insert_after != 0) {
+      // Text added between parts: it is read right after the part it follows.
+      System.require(args.insert_after <= st.segment_count, "STORIES: unknown part to add text after");
+      const target = this.segments.get(this.pairKey(args.story_id, args.insert_after));
+      System.require(target != null && target!.status == stories.segment_status.SEGMENT_ACTIVE,
+        "STORIES: you can only add text after a part that is still in the story");
+    }
 
     const privileged = this.isPrivileged(args.story_id, st, author);
     if (st.visibility == stories.visibility.VISIBILITY_PRIVATE) {
@@ -642,7 +649,7 @@ export class Stories {
       trial = true;
     }
 
-    const seq = this.writeSegment(args.story_id, st, author, text, cost, args.starts_chapter, args.ai_assisted, trial, ink, args.terms_version);
+    const seq = this.writeSegment(args.story_id, st, author, text, cost, args.starts_chapter, args.ai_assisted, trial, ink, args.terms_version, args.insert_after);
     this.leave();
     return new stories.uint64(seq);
   }
@@ -858,7 +865,7 @@ export class Stories {
         System.require(newCost == item.expected_cost, "STORIES: Ink cost does not match expected_cost");
         System.require(newCost <= SafeMath.add(seg.charged, this.allowance(seg.original_cost)), "STORIES: edit grows the text too much (light edits only)");
         units = SafeMath.add(units, newCost);
-        System.require(units <= MAX_BATCH_UNITS, "STORIES: batch text is over 8,000 Ink units");
+        System.require(units <= MAX_BATCH_UNITS, "STORIES: batch text is over 20,000 Ink units");
         refund = seg.charged > newCost ? seg.charged - newCost : 0;
         seg.text = text;
         seg.text_hash = this.sha256(StringBytes.stringToBytes(text));
@@ -1147,7 +1154,7 @@ export class Stories {
   set_limits(args: stories.set_limits_arguments): stories.empty_object {
     this.enter();
     this.requireAdmin();
-    System.require(args.contribution_cap >= CAP_MIN && args.contribution_cap <= CAP_MAX, "STORIES: per-submission cap must be 100 to 4000");
+    System.require(args.contribution_cap >= CAP_MIN && args.contribution_cap <= CAP_MAX, "STORIES: per-submission cap must be 100 to 10000");
     System.require(args.trial_limit <= TRIAL_MAX, "STORIES: trial limit must be 0 to 5000");
     System.require(args.open_limit >= OPEN_LIMIT_MIN && args.open_limit <= OPEN_LIMIT_MAX, "STORIES: open-project limit must be 1 to 10");
     System.require(args.archive_days >= ARCHIVE_DAYS_MIN && args.archive_days <= DAYS_MAX, "STORIES: archive period must be 30 to 365 days");
@@ -1301,7 +1308,7 @@ export class Stories {
   // Append a new segment, update the story, then burn the Ink.
   private writeSegment(
     storyId: u64, st: stories.story, author: Uint8Array, text: string, cost: u64,
-    startsChapter: bool, aiAssisted: bool, trial: bool, ink: Uint8Array, termsVersion: u32
+    startsChapter: bool, aiAssisted: bool, trial: bool, ink: Uint8Array, termsVersion: u32, insertAfter: u64
   ): u64 {
     const now = this.now();
     const seq = st.segment_count + 1;
@@ -1324,6 +1331,7 @@ export class Stories {
     seg.created_at = now;
     seg.rights_confirmed = true;
     seg.terms_version = termsVersion;
+    seg.insert_after = insertAfter;
     this.segments.put(this.pairKey(storyId, seq), seg);
 
     st.segment_count = seq;
@@ -1350,7 +1358,7 @@ export class Stories {
     this.maybeAutoLock(storyId, st, author);
     this.putStory(storyId, st);
 
-    const ev = new stories.contribution_event(storyId, seq, author, cost, chapter, aiAssisted, hash, trial, true, termsVersion);
+    const ev = new stories.contribution_event(storyId, seq, author, cost, chapter, aiAssisted, hash, trial, true, termsVersion, insertAfter);
     System.event("stories.contribution_event", Protobuf.encode(ev, stories.contribution_event.encode), [author]);
 
     const burn = new stories.ink_burn_call(author, cost, BURN_CONTRIBUTION, "s:" + storyId.toString() + ":" + seq.toString());

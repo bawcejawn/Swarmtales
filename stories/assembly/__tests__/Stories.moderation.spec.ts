@@ -124,6 +124,8 @@ function reset(): void {
   authorize(STORIES);
   c().set_addresses(new stories.set_addresses_arguments(INK, SHOP));
   c().add_category(new stories.add_category_arguments("Fantasy"));
+  // Written for the original 2,000 per-part cap.
+  c().set_limits(new stories.set_limits_arguments(2000, 1000, 3, 60, 30));
   checkpoint();
 }
 
@@ -669,5 +671,64 @@ describe("Moderation: strikes and blocking", () => {
     checkpoint();
     openerWrites(1, "Alice writes one more line.");
     expect(story(1).segment_count).toBe(2);
+  });
+});
+
+// ---------- 10,000-character parts and adding text between parts ----------
+
+describe("Writing: 10,000-character parts and adding text between parts", () => {
+  beforeEach(() => { reset(); });
+
+  it("starts with a 10,000 per-part cap, and the admin may set up to 10,000", () => {
+    MockVM.reset();
+    MockVM.setContractId(STORIES);
+    setTime(START);
+    directly();
+    checkpoint();
+    expect(cfg().contribution_cap).toBe(10000);
+    authorize(STORIES);
+    c().set_limits(new stories.set_limits_arguments(10000, 1000, 3, 60, 30));
+    checkpoint();
+    fails(() => { authorize(STORIES); c().set_limits(new stories.set_limits_arguments(10001, 1000, 3, 60, 30)); },
+      "STORIES: per-submission cap must be 100 to 10000");
+  });
+
+  it("accepts a 10,000-character part at the default cap", () => {
+    directly(); authorize(STORIES);
+    c().set_limits(new stories.set_limits_arguments(10000, 1000, 3, 60, 30));
+    checkpoint();
+    directly(); authorize(ALICE); allowCalls(2);
+    const big = chars(10000);
+    c().open_story(new stories.open_story_arguments(ALICE, SHORT, "Big", 99999, 1, 0, PUBLIC, 0, 0, big, false, 10000, USDT, true, 0));
+    checkpoint();
+    expect(story(1).used_chars).toBe(10000);
+  });
+
+  it("adds text right after a chosen part, and records where", () => {
+    open(OPENING);                                   // 1
+    openerWrites(1, "The second part, at the end as usual.");   // 2
+    directly(); authorize(ALICE); allowCalls(1);
+    const text = "A new line slipped in after the opening.";
+    const seq = c().contribute(new stories.contribute_arguments(ALICE, 1, text, false, false, <u64>text.length, true, 0, 1)).value;
+    checkpoint();
+    expect(seq).toBe(3);
+    expect(seg(1, 3).insert_after).toBe(1);
+    expect(seg(1, 2).insert_after).toBe(0);
+  });
+
+  it("refuses adding after a part that doesn't exist or was removed", () => {
+    open(OPENING);
+    openerWrites(1, "The second part, at the end as usual.");
+    fails(() => {
+      directly(); authorize(ALICE); allowCalls(1);
+      c().contribute(new stories.contribute_arguments(ALICE, 1, "After a part that is not there.", false, false, 31, true, 0, 9));
+    }, "STORIES: unknown part to add text after");
+    directly(); authorize(ALICE); allowCalls(1);
+    c().remove_segment(new stories.remove_segment_arguments(ALICE, 1, 2));
+    checkpoint();
+    fails(() => {
+      directly(); authorize(ALICE); allowCalls(1);
+      c().contribute(new stories.contribute_arguments(ALICE, 1, "After a part that was removed.", false, false, 30, true, 0, 2));
+    }, "STORIES: you can only add text after a part that is still in the story");
   });
 });

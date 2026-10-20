@@ -187,6 +187,8 @@ function configure(): void {
   // they lower the new-text minimum to 1. The 20-character default is
   // tested on its own in "Stories: security fixes".
   c.set_min_contribution(new stories.set_min_contribution_arguments(1));
+  // These suites were written for the original 2,000 per-part cap.
+  c.set_limits(new stories.set_limits_arguments(2000, 1000, 3, 60, 30));
   c.add_category(new stories.add_category_arguments("Fantasy"));
   c.add_category(new stories.add_category_arguments("Sci-Fi"));
   c.add_category(new stories.add_category_arguments("Mystery & Thriller"));

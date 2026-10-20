@@ -180,6 +180,8 @@ function configure(): void {
   // they lower the new-text minimum to 1. The 20-character default is
   // tested on its own in "Stories: security fixes".
   c.set_min_contribution(new stories.set_min_contribution_arguments(1));
+  // These suites were written for the original 2,000 per-part cap.
+  c.set_limits(new stories.set_limits_arguments(2000, 1000, 3, 60, 30));
   c.add_category(new stories.add_category_arguments("Fantasy"));
   c.add_category(new stories.add_category_arguments("Sci-Fi"));
   c.add_category(new stories.add_category_arguments("Mystery & Thriller"));
@@ -374,7 +376,7 @@ describe("Stories: admin and settings", () => {
   it("starts with the contract as admin and the default limits", () => {
     const cfg = config();
     expect(same(cfg.admin, STORIES)).toBe(true);
-    expect(cfg.contribution_cap).toBe(2000);
+    expect(cfg.contribution_cap).toBe(10000);
     expect(cfg.trial_limit).toBe(1000);
     expect(cfg.open_limit).toBe(3);
     expect(cfg.archive_days).toBe(60);
@@ -414,15 +416,15 @@ describe("Stories: admin and settings", () => {
     fails(() => { authorize(STORIES); new Stories().set_addresses(new stories.set_addresses_arguments(INK, new Uint8Array(0))); }, "STORIES: invalid Shop address");
   });
 
-  it("accepts a per-submission cap from 100 to 4000 and nothing outside", () => {
-    setLimits(4000, 1000);
-    expect(config().contribution_cap).toBe(4000);
+  it("accepts a per-submission cap from 100 to 10000 and nothing outside", () => {
+    setLimits(10000, 1000);
+    expect(config().contribution_cap).toBe(10000);
     setLimits(100, 1000);
     expect(config().contribution_cap).toBe(100);
-    fCap = 4001;
-    fails(failLimits, "STORIES: per-submission cap must be 100 to 4000");
+    fCap = 10001;
+    fails(failLimits, "STORIES: per-submission cap must be 100 to 10000");
     fCap = 99;
-    fails(failLimits, "STORIES: per-submission cap must be 100 to 4000");
+    fails(failLimits, "STORIES: per-submission cap must be 100 to 10000");
   });
 
   it("refuses other limits outside their ranges", () => {
@@ -1139,7 +1141,7 @@ describe("Stories: the final edit", () => {
     fails(() => { authorize(STORIES); allowCalls(1); new Stories().submit_final_batch(new stories.submit_final_batch_arguments(STORIES, 1, [keep(1)])); }, "STORIES: only the opener may finalize this story");
   });
 
-  it("keeps final-pass growth inside the light-edit allowance and batches under 8,000", () => {
+  it("keeps final-pass growth inside the light-edit allowance, and allows big batches", () => {
     // Segment 1 is 17 long: it may grow by 17 at most.
     fails(() => { authorize(ALICE); allowCalls(1); new Stories().submit_final_batch(new stories.submit_final_batch_arguments(ALICE, 1, [edited(1, chars(35))])); }, "STORIES: edit grows the text too much (light edits only)");
     fails(() => { authorize(ALICE); allowCalls(1); new Stories().submit_final_batch(new stories.submit_final_batch_arguments(ALICE, 1, [new stories.final_item(1, stories.final_mode.FINAL_PENDING, "", 0)])); }, "STORIES: unknown final mode");
@@ -1148,13 +1150,10 @@ describe("Stories: the final edit", () => {
     batch(ALICE, 1, [edited(1, chars(34))]);
     // The story may now be slightly over its size; that is allowed in the final pass.
     expect(story(1).used_chars).toBe(10017);
-    fails(() => {
-      authorize(ALICE);
-      allowCalls(5);
-      new Stories().submit_final_batch(new stories.submit_final_batch_arguments(ALICE, 1, [
-        edited(2, chars(2000)), keep(4), edited(5, chars(2000)), edited(6, chars(2000)), edited(7, chars(2001))
-      ]));
-    }, "STORIES: batch text is over 8,000 Ink units");
+    // The batch text limit is now 20,000 (one 10,000-character part fits twice).
+    // A 10,000-character story can't reach it, so 8,001 units in one batch pass.
+    batch(ALICE, 1, [edited(2, chars(2000)), keep(4), edited(5, chars(2000)), edited(6, chars(2000)), edited(7, chars(2001))]);
+    expect(story(1).final_cursor).toBe(7);
   });
 
   it("checks the PDF link and hash", () => {
