@@ -26,7 +26,7 @@ import { VAULT_MANA_CEILING, formatMana, formatUnits, formatUtc, kondorManaNote,
 import { assessOpen, assessPromo, assessWrite, assessWriterBuy, isActiveWriter } from "./lib/rules.js";
 import { checkStoryText, inkCost } from "./lib/text.js";
 import {
-  KONDOR_HINT,
+  kondorHint,
   VAULT_MANA_EXPLANATION,
   clearSavedSession,
   createKondorWallet,
@@ -1030,8 +1030,8 @@ function walletNote() {
     const decision = state.account ? vaultManaDecision(state.account.mana, VAULT_MANA_CEILING) : null;
     return h("p", { class: "meta small" }, [decision && decision.blocked ? decision.message : VAULT_MANA_EXPLANATION]);
   }
-  const low = state.account ? kondorManaNote(state.account.mana) : "";
-  return h("p", { class: "meta small" }, [low || "If Kondor refuses, tick “Use free mana” in its window and try again."]);
+  const low = state.account ? kondorManaNote(state.account.mana, network.mainnet) : "";
+  return h("p", { class: "meta small" }, [low || kondorHint(network.mainnet)]);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1588,7 +1588,7 @@ async function send(operations, status) {
     : null;
   if (manaDecision && manaDecision.blocked) throw new Error(manaDecision.message);
   replace(status, notice("info", h("p", {}, [
-    state.wallet.id === "koinvault" ? "Sending the request to KOIN Vault…" : "Kondor should open now. Check the details, then confirm. " + KONDOR_HINT,
+    state.wallet.id === "koinvault" ? "Sending the request to KOIN Vault…" : "Kondor should open now. Check the details, then confirm. " + kondorHint(network.mainnet),
   ])));
   const sent = await state.wallet.signAndSend(operations, {
     onProgress(progress) {
@@ -1713,11 +1713,44 @@ function vaultSection() {
   return box;
 }
 
+function copyValue(text) {
+  const button = h("button", { type: "button", class: "text-button" }, ["Copy"]);
+  button.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      button.textContent = "Copied";
+    } catch {
+      button.textContent = "Select and copy it";
+    }
+  });
+  return h("div", { class: "copy-row" }, [h("code", { class: "mono" }, [text]), button]);
+}
+
+/** Kondor ships with an old testnet node and chain id. SwarmTales runs on the Foundation testnet. */
+function kondorTestnetSetup(open) {
+  return h("details", { class: "more-options", open: open || null }, [
+    h("summary", {}, ["Kondor on the testnet: one-time setup"]),
+    h("p", { class: "body-2" }, [
+      "Kondor's built-in testnet (“harbinger”) points at an older test network. Until you change it, Kondor can't check SwarmTales transactions and keeps asking you to “Refresh check”.",
+    ]),
+    h("ol", { class: "how-list" }, [
+      h("li", {}, ["Open Kondor. Click the menu, then ", h("b", {}, ["Settings"]), " (it opens Kondor Settings in a tab). Pick the ", h("b", {}, ["Networks"]), " tab."]),
+      h("li", {}, ["Under ", h("b", {}, ["Koinos Harbinger (testnet)"]), ", replace ", h("b", {}, ["RPC Nodes"]), " with:", copyValue(network.mainnet ? "" : network.rpc)]),
+      h("li", {}, ["Replace ", h("b", {}, ["Set Chain Id"]), " with:", copyValue(network.chainId)]),
+      h("li", {}, ["Click ", h("b", {}, ["Update Networks"]), ". In Kondor, make sure the testnet is selected, then try again here."]),
+    ]),
+    h("p", { class: "meta" }, [
+      "Don't press “Use free mana” on the testnet: Kondor's free-mana helper only exists on the old network. Your wallet's own mana, from holding tKOIN, pays instead.",
+    ]),
+  ]);
+}
+
 function kondorSection() {
   const box = h("div", { class: "wallet-option" }, [
     h("h3", {}, ["Kondor"]),
     h("p", {}, ["A free browser extension for Chrome, Brave and Edge on a computer. It asks you to confirm in a small window."]),
   ]);
+  if (!network.mainnet) append(box, kondorTestnetSetup(false));
   const list = state.kondorAccounts;
   if (!list) {
     append(box, h("div", { class: "row" }, [

@@ -422,3 +422,6 @@ dialog.sheet::backdrop { background: rgba(27, 31, 42, 0.45); }
 .more-options { margin-top: 24px; border: 1px solid var(--line); border-radius: 12px; padding: 4px 16px 16px; background: var(--surface-2); }
 .more-options summary { cursor: pointer; padding: 12px 0; font-weight: 600; min-height: 44px; }
 .more-options > p { margin: 0; }
+
+.copy-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 6px 0 0; }
+.copy-row code { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; overflow-wrap: anywhere; color: var(--ink); }

@@ -49,15 +49,19 @@ export function formatMana(rc) {
  * Extra sentence for Kondor when the account is under 1 mana.
  * Empty when mana is fine. The page still opens Kondor either way.
  */
-export function kondorManaNote(rc) {
+export function kondorManaNote(rc, mainnet) {
   let have;
   try {
     have = asWhole(rc == null || rc === "" ? "0" : rc, "mana");
   } catch {
-    return "This page could not read mana. If Kondor refuses the signature, tick Use free mana in its window.";
+    return mainnet
+      ? "This page could not read mana. If Kondor refuses the signature, tick Use free mana in its window."
+      : "This page could not read this account's mana. Mana comes from holding test KOIN.";
   }
   if (have < LOW_MANA_WARN) {
-    return "This account has under 1 mana. The page will still open Kondor. Tick Use free mana in its window, or the signature can be refused.";
+    return mainnet
+      ? "This account has under 1 mana. The page will still open Kondor. Tick Use free mana in its window, or the signature can be refused."
+      : "This account has under 1 mana, so Kondor will probably refuse. Mana comes from holding test KOIN: send this wallet some tKOIN first. Kondor's “Use free mana” doesn't work on this testnet.";
   }
   return "";
 }
