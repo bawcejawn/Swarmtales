@@ -85,7 +85,7 @@ function writeSummary(actions) {
   const file = env.GITHUB_STEP_SUMMARY;
   if (!file) return;
   const rows = actions.length
-    ? actions.map((a) => `| ${a.story} | ${a.seq} | ${a.kind === "note" ? "source note" : a.reason === REASON.COPYRIGHT ? "copied text" : "duplicate"} | ${a.note} | ${a.kind === "note" ? (a.sent ? "noted" : "would note") : a.sent ? "hidden" : "would hide"} |`).join("\n")
+    ? actions.map((a) => `| ${a.story} | ${a.seq} | ${a.kind === "note" ? "source note" : a.kind === "unhide" ? "brought back" : a.reason === REASON.COPYRIGHT ? "copied text" : "duplicate"} | ${a.note} | ${a.kind === "note" ? (a.sent ? "noted" : "would note") : a.kind === "unhide" ? (a.sent ? "unhidden" : "would unhide") : a.sent ? "hidden" : "would hide"} |`).join("\n")
     : "| | | | nothing to hide | |";
   fs.appendFileSync(file, "## SwarmTales copy checker\n\n| story | part | why | note | action |\n|---|---|---|---|---|\n" + rows + "\n\n```\n" + log.join("\n") + "\n```\n");
 }
@@ -226,7 +226,7 @@ async function webCheck(text, spendable, citation) {
   if (d.action === "none") return null;
   const where = labels.get(d.source);
   const cited = !!where && citationCovers(citation || "", where.source);
-  return { action: d.action, found: d.found, same: d.same, of: phrases.length, label: where ? where.label : "", cited };
+  return { action: d.action, found: d.found, same: d.same, of: phrases.length, label: where ? where.label : "", source: where ? where.source : null, cited };
 }
 
 async function testPhrase(phrase) {
@@ -299,6 +299,7 @@ async function main() {
   const actions = [];
 
   state.noted = state.noted || {};
+  state.hiddenByChecker = state.hiddenByChecker || {};
 
   /** Sign one Stories call with the moderator key (at most 0.5 mana; a hide uses about 0.05). */
   async function sendAsModerator(name, args) {
@@ -363,6 +364,8 @@ async function main() {
       if (web && web.cited) return "clean"; // the writer named this source
       if (web && web.action === "hide" && !seg.restored) {
         await hide(storyId, seq, REASON.COPYRIGHT, "copied text: " + web.found + " of " + web.of + " phrases found, " + web.same + " of them in " + web.label);
+        // Remembered so the part comes back by itself if its writer names this source.
+        state.hiddenByChecker[key] = { source: web.source, label: web.label };
         return "flagged";
       }
       if (web) {
@@ -371,6 +374,30 @@ async function main() {
       }
     }
     return "clean";
+  }
+
+  // Parts the checker hid: bring one back when its writer has named the source,
+  // and forget the ones the opener restored.
+  for (const key of Object.keys(state.hiddenByChecker)) {
+    try {
+      const [sid, sq] = key.split(":");
+      const seg = await read("get_segment", { story_id: sid, seq: sq });
+      const entry = state.hiddenByChecker[key];
+      if (!seg.hidden || Number(seg.status) !== 1) {
+        delete state.hiddenByChecker[key];
+        continue;
+      }
+      if (seg.citation && citationCovers(seg.citation, entry.source)) {
+        note("  UNHIDE story " + sid + " part " + sq + ": the writer named the source (" + seg.citation.slice(0, 80) + ")");
+        const ok = await sendAsModerator("set_segment_hidden", {
+          story_id: sid, seq: sq, hidden: false, reason: 0, note: "source cited by the writer",
+        });
+        actions.push({ story: sid, seq: sq, reason: REASON.COPYRIGHT, kind: "unhide", note: "source cited by the writer", sent: ok });
+        if (ok || !signer) delete state.hiddenByChecker[key];
+      }
+    } catch (error) {
+      note("  could not re-check " + key + ": " + (error && error.message ? error.message : String(error)));
+    }
   }
 
   let outOfSearches = false;

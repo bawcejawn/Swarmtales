@@ -41,7 +41,24 @@ function savePref(key, value) {
   }
 }
 
-/** items: [{ seq, text }] in reading order. Returns the player bar (or null if unsupported). */
+/**
+ * How natural a browser voice usually sounds. The free "Natural" / "Neural"
+ * voices (Microsoft Edge), Google's online voices (Chrome), and Apple's
+ * Enhanced / Premium voices are far less robotic than the basic ones.
+ */
+export function voiceScore(v) {
+  const name = String(v.name || "");
+  let score = 0;
+  if (/natural|neural|wavenet|journey|studio|premium|enhanced/i.test(name)) score += 100;
+  if (/siri/i.test(name)) score += 80;
+  if (/google/i.test(name)) score += 60;
+  if (/online/i.test(name)) score += 20;
+  if (/compact|espeak|robot|novelty|whisper|zarvox|trinoids|bells|bubbles|bad news|good news|cellos|organ|jester|superstar|wobble|albert|bahh|boing|deranged|hysterical|pipe organ/i.test(name)) score -= 200;
+  if (v.default) score += 5;
+  return score;
+}
+
+/** items: [{ seq, text, announce }] in reading order. Returns the player bar (or null if unsupported). */
 export function createReader(article, items) {
   const synth = typeof window !== "undefined" ? window.speechSynthesis : null;
   if (!synth || typeof SpeechSynthesisUtterance === "undefined" || !items.length) return null;
@@ -57,6 +74,11 @@ export function createReader(article, items) {
   speed.value = pref("st-read-speed", "1");
   const voice = h("select", { "aria-label": "Voice", hidden: true });
   const status = h("span", { class: "meta small", "aria-live": "polite" });
+  // Shown only when this browser has no natural-sounding voice.
+  const tip = h("p", { class: "meta small listen-tip", hidden: true }, [
+    "Voices sound robotic in this browser. For free natural voices, open SwarmTales in Microsoft Edge, or in Chrome while online. " +
+      "On iPhone or Mac: Settings \u2192 Accessibility \u2192 Spoken Content \u2192 Voices, and download an \u201cEnhanced\u201d voice.",
+  ]);
 
   const fillVoices = () => {
     const voices = synth.getVoices();
@@ -64,10 +86,16 @@ export function createReader(article, items) {
     if (!voices.length) return;
     const lang = (document.documentElement.lang || "en").slice(0, 2);
     const list = voices.filter((v) => v.lang && v.lang.toLowerCase().startsWith(lang));
-    const use = list.length ? list : voices;
-    voice.replaceChildren(...use.map((v) => h("option", { value: v.name }, [v.name + (v.localService ? "" : " (online)")])));
+    // Best-sounding voices first; the first one is the default.
+    const use = (list.length ? list : voices).slice().sort((a, b) => voiceScore(b) - voiceScore(a));
+    voice.replaceChildren(...use.map((v) => h("option", { value: v.name }, [
+      v.name.replace(/^Microsoft\s+|\s+Online\s*\(Natural\)|\s*-\s*English.*$/gi, "").trim() +
+        (voiceScore(v) >= 60 ? " \u2605" : "") + (v.lang ? " (" + v.lang + ")" : ""),
+    ])));
     const saved = pref("st-read-voice", "");
     if (saved && use.some((v) => v.name === saved)) voice.value = saved;
+    else if (use.length) voice.value = use[0].name;
+    tip.hidden = use.some((v) => voiceScore(v) >= 60);
   };
   fillVoices();
   if (typeof synth.addEventListener === "function") synth.addEventListener("voiceschanged", fillVoices);
@@ -111,7 +139,8 @@ export function createReader(article, items) {
       u.lang = chosen.lang;
     }
     u.rate = Number(speed.value) || 1;
-    u.onend = speakNext;
+    // A short pause after a chapter announcement.
+    u.onend = next.announce ? () => setTimeout(speakNext, 600) : speakNext;
     u.onerror = (e) => {
       if (e && (e.error === "interrupted" || e.error === "canceled")) return;
       status.textContent = "Your browser stopped reading. Press Listen to try again.";
@@ -124,7 +153,11 @@ export function createReader(article, items) {
     synth.cancel();
     const begin = fromSeq == null ? 0 : Math.max(0, items.findIndex((it) => it.seq === fromSeq));
     queue = [];
-    for (const item of items.slice(begin)) for (const text of pieces(item.text)) queue.push({ seq: item.seq, text });
+    items.slice(begin).forEach((item, i) => {
+      // "Chapter 2." before a chapter's first part (also when starting there).
+      if (item.announce && (i > 0 || fromSeq == null || item.seq === fromSeq)) queue.push({ seq: item.seq, text: item.announce, announce: true });
+      for (const text of pieces(item.text)) queue.push({ seq: item.seq, text });
+    });
     playing = true;
     paused = false;
     play.textContent = "❚❚ Pause";
@@ -166,6 +199,7 @@ export function createReader(article, items) {
     h("label", { class: "listen-opt" }, [h("span", { class: "visually-hidden" }, ["Speed"]), speed]),
     h("label", { class: "listen-opt" }, [h("span", { class: "visually-hidden" }, ["Voice"]), voice]),
     status,
+    tip,
   ]);
   bar.startFrom = start;
   return bar;
