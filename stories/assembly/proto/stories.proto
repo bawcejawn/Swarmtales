@@ -181,7 +181,7 @@ message segment {
   bool rights_confirmed = 19;    // the writer confirmed they wrote it or may use it
   uint32 terms_version = 20;     // Terms of Use version the writer accepted for this part
   // 0: read in order of writing. Otherwise this part is read right after
-  // part insert_after (several parts after the same one keep their order).
+  // part insert_after; the newest part added after the same part comes first.
   uint64 insert_after = 21 [jstype = JS_STRING];
 }
 
@@ -518,6 +518,9 @@ message contribute_arguments {
   bool rights_confirmed = 7;     // must be true: "I wrote this, or I have the right to use it"
   uint32 terms_version = 8;      // must equal the current Terms of Use version
   uint64 insert_after = 9 [jstype = JS_STRING]; // 0 = at the end; otherwise the part this text is read after
+  // Read right after this writer's previous part in this story (keeps a
+  // multi-part addition in one place). Ignores insert_after.
+  bool after_my_last = 10;
 }
 
 // @description Opener or editor lightly edits a segment of an OPEN story. Shortening refunds the author.

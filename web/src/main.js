@@ -25,7 +25,7 @@ import { explainFailure } from "./lib/errors.js";
 import { KIND, STORY_STATUS, TIER, VISIBILITY, label } from "./lib/labels.js";
 import { VAULT_MANA_CEILING, formatMana, formatUnits, formatUtc, kondorManaNote, shortAddress } from "./lib/money.js";
 import { assessOpen, assessPromo, assessWrite, assessWriterBuy, isActiveWriter } from "./lib/rules.js";
-import { MAX_PARTS_PER_SIGNATURE, checkStoryText, inkCost, normalizePasted, splitIntoParts } from "./lib/text.js";
+import { MAX_CHARS_PER_SIGNATURE, MAX_PARTS_PER_SIGNATURE, checkStoryText, inkCost, normalizePasted, splitIntoParts } from "./lib/text.js";
 import {
   kondorHint,
   VAULT_MANA_EXPLANATION,
@@ -41,6 +41,8 @@ import { createTestWallet, storedTestAddress } from "./testWallet.js";
 import { append, h, icons, replace } from "./ui/dom.js";
 import { renderHowSections } from "./ui/how.js";
 import { renderMarkdown } from "./ui/markdown.js";
+import { readingOrder } from "./lib/order.js";
+import { createReader } from "./ui/readAloud.js";
 
 const problems = configProblems();
 const kondor = createKondorWallet();
@@ -742,13 +744,22 @@ function renderReader(page, id) {
       );
       return;
     }
-    const active = [];
-    const removed = [];
-    bundle.segments.forEach((segment, index) => {
-      const block = { segment, index: index + 1 };
-      if (Number(segment.status) === 2) removed.push(block);
-      else active.push(block);
-    });
+    // Reading order: parts added between others are read where they were placed.
+    const all = bundle.segments.map((segment, i) => ({ segment, index: i + 1, seq: i + 1, insertAfter: Number(segment.insert_after || 0) }));
+    const ordered = readingOrder(all);
+    const active = ordered.filter((b) => Number(b.segment.status) !== 2);
+    const removed = all.filter((b) => Number(b.segment.status) === 2);
+    const me = currentAddress();
+    const flags = me ? await writerFlags(id, me).catch(() => ({ editor: false, allowed: false })) : { editor: false, allowed: false };
+    const storyOpen = Number(story.status) === 1;
+    const ctx = {
+      storyId: id,
+      story,
+      canEdit: storyOpen && !!me && (story.opener === me || flags.editor),
+      canAdd: storyOpen,
+      lastSeq: active.length ? active[active.length - 1].seq : 0,
+      active,
+    };
     const firstVisible = active.find((b) => !b.segment.hidden);
     const firstText = firstVisible ? firstVisible.segment.text : "";
     setMeta(story.title || "Untitled story", clip(firstText, 155) || "A collaborative story on SwarmTales.");
@@ -813,19 +824,22 @@ function renderReader(page, id) {
     if (!chapters.length) append(article, h("div", { class: "empty" }, [h("p", {}, ["No text has been written yet."])]));
     chapters.forEach((chapter, i) => {
       append(article, h("h3", { class: "chapter-title" + (i === 0 ? " first" : ""), id: "chapter-" + chapter.number }, ["Chapter " + chapter.number]));
-      for (const block of chapter.blocks) append(article, segmentView(block, story, id));
+      for (const block of chapter.blocks) append(article, segmentView(block, story, id, ctx));
     });
     if (removed.length) {
       const details = h("details", { class: "removed" }, [h("summary", {}, [plural(removed.length, "removed part") + " (kept on the record)"])]);
-      for (const block of removed) append(details, segmentView(block, story, id));
+      for (const block of removed) append(details, segmentView(block, story, id, null));
       append(article, details);
     }
 
+    const listen = createReader(article, active.filter((b) => !b.segment.hidden).map((b) => ({ seq: b.seq, text: b.segment.text || "" })));
+    ctx.listen = listen;
     append(column, 
       h("div", { class: "chapter-bar" }, [
         h("p", { class: "eyebrow muted" }, [cats.join(" · ") || label(KIND, story.kind)]),
         h("label", { class: "check" }, [toggle, "Show who wrote what"]),
       ]),
+      listen,
       article,
       composeAnchor
     );
@@ -882,7 +896,7 @@ const REASON_LABELS = {
   5: "a policy problem",
 };
 
-function segmentView(block, story, storyId) {
+function segmentView(block, story, storyId, ctx) {
   const segment = block.segment;
   const author = segment.author || "";
   const removed = Number(segment.status) === 2;
@@ -907,11 +921,125 @@ function segmentView(block, story, storyId) {
       ]));
     }
     if (segment.ai_assisted) notes.push(h("span", { class: "tag-ai" }, ["Written with AI help"]));
-    if (author !== currentAddress()) notes.push(reportControl(storyId, block.index));
   }
-  return h("div", { class: "seg" + (removed || segment.hidden ? " seg-muted" : "") }, [
+  const tools = h("div", { class: "seg-tools" });
+  const slot = h("div", { class: "seg-slot" });
+  if (ctx && !removed) {
+    const toggle = (name, make) => {
+      const open = slot.dataset.open === name;
+      replace(slot);
+      slot.dataset.open = "";
+      if (!open) {
+        slot.dataset.open = name;
+        append(slot, make());
+        const focus = slot.querySelector("textarea, button");
+        if (focus) focus.focus();
+      }
+    };
+    if (ctx.canAdd && block.seq !== ctx.lastSeq) {
+      append(tools, h("button", { type: "button", class: "text-button tool" }, ["+ Add text here"]));
+      tools.lastChild.addEventListener("click", () => toggle("add", () => composer(storyId, story, ctx.active, block.seq)));
+    }
+    if (ctx.canEdit && !segment.hidden) {
+      append(tools, h("button", { type: "button", class: "text-button tool" }, ["Edit"]));
+      tools.lastChild.addEventListener("click", () => toggle("edit", () => editPanel(storyId, block)));
+    }
+    if (ctx.canEdit) {
+      append(tools, h("button", { type: "button", class: "text-button tool" }, ["Remove"]));
+      tools.lastChild.addEventListener("click", () => toggle("remove", () => removePanel(storyId, block)));
+    }
+    if (!segment.hidden && typeof window !== "undefined" && window.speechSynthesis) {
+      append(tools, h("button", { type: "button", class: "text-button tool", onClick: () => ctx.listen && ctx.listen.startFrom(block.seq) }, ["Listen from here"]));
+    }
+    if (!segment.hidden && author !== currentAddress()) append(tools, reportControl(storyId, block.index));
+  }
+  return h("div", { class: "seg" + (removed || segment.hidden ? " seg-muted" : ""), dataset: { seq: String(block.seq || block.index) } }, [
     h("p", { class: "seg-author" }, [h("b", {}, [shortAddress(author)]), h("span", {}, [(author === story.opener ? "opener · " : "") + num(segment.current_cost || segment.charged) + " Ink"])]),
-    h("div", {}, [body, notes.length ? h("div", { class: "seg-notes" }, notes) : null]),
+    h("div", {}, [
+      body,
+      notes.length ? h("div", { class: "seg-notes" }, notes) : null,
+      tools.childNodes.length ? tools : null,
+      slot,
+    ]),
+  ]);
+}
+
+/** Light edit by the opener or an editor: the contract allows a little growth. */
+function editPanel(storyId, block) {
+  const seg = block.segment;
+  const original = Number(seg.original_cost || 0);
+  const allowance = Math.max(Math.floor(original / 10), Math.min(original, 20));
+  const maxCost = Number(seg.charged || 0) + allowance;
+  const area = h("textarea", { rows: "6", spellcheck: "true" });
+  area.value = seg.text || "";
+  const counter = h("p", { class: "meta" });
+  const update = () => {
+    const n = inkCost(normalizePasted(area.value).trim());
+    counter.textContent = num(n) + " of at most " + num(maxCost) + " characters. Edits are for tidying: the part can grow only a little. Shortening it returns Ink to " + shortAddress(seg.author) + ".";
+  };
+  area.addEventListener("input", update);
+  update();
+  const status = statusBox();
+  const save = h("button", { type: "submit", class: "btn btn-primary btn-small" }, ["Save edit"]);
+  return h("form", { class: "inline-panel card", onSubmit: async (event) => {
+    event.preventDefault();
+    save.disabled = true;
+    try {
+      const text = normalizePasted(area.value).trim();
+      const check = checkStoryText(text, true);
+      if (!check.ok) throw new Error(check.reason);
+      if (inkCost(text) > maxCost) throw new Error("That edit makes the part too long. Edits can only add up to " + num(allowance) + " characters.");
+      if (text === seg.text) throw new Error("Nothing has changed yet.");
+      const quoted = await quoteCost(text);
+      const op = await encode("stories", "edit_segment", {
+        editor: currentAddress(),
+        story_id: String(storyId),
+        seq: String(block.seq),
+        new_text: text,
+        expected_cost: quoted,
+      });
+      if (await send([op], status)) renderPage();
+    } catch (error) {
+      failure(status, error);
+    } finally {
+      save.disabled = false;
+    }
+  } }, [
+    h("h3", { class: "h3" }, ["Edit this part"]),
+    h("p", { class: "meta" }, ["The part stays credited to " + shortAddress(seg.author) + ", and readers see that it was edited."]),
+    area,
+    counter,
+    h("div", { class: "actions" }, [save]),
+    walletNote(),
+    status,
+  ]);
+}
+
+function removePanel(storyId, block) {
+  const seg = block.segment;
+  const status = statusBox();
+  const confirm = h("button", { type: "button", class: "btn btn-primary btn-small" }, ["Remove this part"]);
+  confirm.addEventListener("click", async () => {
+    confirm.disabled = true;
+    try {
+      const op = await encode("stories", "remove_segment", { editor: currentAddress(), story_id: String(storyId), seq: String(block.seq) });
+      if (await send([op], status)) renderPage();
+    } catch (error) {
+      failure(status, error);
+    } finally {
+      confirm.disabled = false;
+    }
+  });
+  return h("div", { class: "inline-panel card" }, [
+    h("h3", { class: "h3" }, ["Remove this part?"]),
+    h("p", { class: "body-2" }, [
+      seg.hidden
+        ? "This part is hidden while it's checked, so its Ink isn't returned."
+        : shortAddress(seg.author) + " gets their " + num(seg.charged) + " Ink back. The removal is recorded on the public record.",
+    ]),
+    h("div", { class: "actions" }, [confirm]),
+    walletNote(),
+    status,
   ]);
 }
 
@@ -1002,10 +1130,16 @@ function termsVersion() {
   return cfg && cfg.terms_version ? Number(cfg.terms_version) : 0;
 }
 
-function composer(id, story, active) {
-  const box = h("section", { class: "composer card", "aria-labelledby": "compose-title" });
+let composerCount = 0;
+function composer(id, story, active, insertAfter) {
+  const after = Number(insertAfter || 0);
+  composerCount += 1;
+  const uid = "compose-" + composerCount;
+  const box = h("section", { class: "composer card" + (after ? " inline-panel" : ""), "aria-labelledby": uid + "-title" });
   const lastAuthor = active.length ? active[active.length - 1].segment.author : "";
-  append(box, h("h2", { class: "h2", id: "compose-title" }, ["Write the next part"]));
+  append(box, after
+    ? h("h3", { class: "h3", id: uid + "-title" }, ["Add text after this part"])
+    : h("h2", { class: "h2", id: uid + "-title" }, ["Write the next part"]));
 
   const status = Number(story.status);
   if (status !== 1) {
@@ -1014,10 +1148,12 @@ function composer(id, story, active) {
     ]));
     return box;
   }
-  append(box, h("p", { class: "body-2" }, [
-    lastAuthor ? "Pick up where " + shortAddress(lastAuthor) + " left off. " : "",
-    "Your part is added to the end of the story, or starts a new chapter.",
-  ]));
+  append(box, h("p", { class: "body-2" }, after
+    ? ["Your text is read right after the part above, before what comes next."]
+    : [
+      lastAuthor ? "Pick up where " + shortAddress(lastAuthor) + " left off. " : "",
+      "Your part is added to the end of the story, or starts a new chapter. To add something in the middle, use “+ Add text here” under any part.",
+    ]));
 
   const address = currentAddress();
   if (!address) {
@@ -1036,7 +1172,7 @@ function composer(id, story, active) {
     return box;
   }
 
-  const area = h("textarea", { rows: "8", spellcheck: "true", "aria-describedby": "compose-count" });
+  const area = h("textarea", { rows: after ? "5" : "8", spellcheck: "true", "aria-describedby": uid + "-count" });
   area.addEventListener("paste", () => setTimeout(() => {
     const tidy = normalizePasted(area.value);
     if (tidy !== area.value) {
@@ -1071,7 +1207,9 @@ function composer(id, story, active) {
     else shortText.textContent = "";
     splitNote.textContent = parts.length > 1
       ? "Long text: it will be added as " + parts.length + " parts in a row" +
-        (parts.length > MAX_PARTS_PER_SIGNATURE ? ". That's more than " + MAX_PARTS_PER_SIGNATURE + " at once; send the first part of it, then the rest." : ", with one confirmation.")
+        (parts.length > MAX_PARTS_PER_SIGNATURE || cost > MAX_CHARS_PER_SIGNATURE
+          ? ". That's more than " + num(MAX_CHARS_PER_SIGNATURE) + " characters at once; send the first part of it, then the rest."
+          : ", with one confirmation.")
       : "";
   }
   area.addEventListener("input", update);
@@ -1079,7 +1217,7 @@ function composer(id, story, active) {
 
   const form = h("form", { onSubmit: (event) => { event.preventDefault(); go(); } }, [
     field("Your part", area),
-    h("div", { class: "counter", id: "compose-count" }, [
+    h("div", { class: "counter", id: uid + "-count" }, [
       costText,
       h("span", {}, ["You have " + num(state.account.ink) + " Ink"]),
       h("span", {}, [num(space) + " characters left in this story"]),
@@ -1105,8 +1243,8 @@ function composer(id, story, active) {
       const text = normalizePasted(area.value).trim();
       area.value = text;
       const parts = partsFor(text);
-      if (parts.length > MAX_PARTS_PER_SIGNATURE) {
-        append(list, problemsNotice(["That's more than " + MAX_PARTS_PER_SIGNATURE + " parts at once (about " + num(cap * MAX_PARTS_PER_SIGNATURE) + " characters). Send the first part of your text, then the rest."]));
+      if (parts.length > MAX_PARTS_PER_SIGNATURE || inkCost(text) > MAX_CHARS_PER_SIGNATURE) {
+        append(list, problemsNotice(["That's more than " + num(MAX_CHARS_PER_SIGNATURE) + " characters at once. Send the first part of your text, then the rest."]));
         return;
       }
       if (new Set(parts).size !== parts.length) {
@@ -1169,6 +1307,9 @@ function composer(id, story, active) {
           expected_ink: plans[i].cost,
           rights_confirmed: true,
           terms_version: termsVersion(),
+          // Later pieces of a split addition follow the piece before them.
+          insert_after: i === 0 ? String(after) : "0",
+          after_my_last: i > 0 && after > 0,
         }));
       }
       const sent = await send(ops, status2);

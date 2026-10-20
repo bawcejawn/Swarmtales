@@ -716,6 +716,23 @@ describe("Writing: 10,000-character parts and adding text between parts", () => 
     expect(seg(1, 2).insert_after).toBe(0);
   });
 
+  it("keeps a multi-part addition together with after_my_last", () => {
+    open(OPENING);                                                // 1
+    openerWrites(1, "The second part, at the end as usual.");     // 2
+    directly(); authorize(ALICE); allowCalls(2);
+    const a = "First piece, slipped in after the opening.";
+    const b = "Second piece, which must follow the first.";
+    c().contribute(new stories.contribute_arguments(ALICE, 1, a, false, false, <u64>a.length, true, 0, 1));
+    c().contribute(new stories.contribute_arguments(ALICE, 1, b, false, false, <u64>b.length, true, 0, 0, true));
+    checkpoint();
+    expect(seg(1, 3).insert_after).toBe(1);
+    expect(seg(1, 4).insert_after).toBe(3);
+    fails(() => {
+      directly(); authorize(BOB); MockVM.setCallContractResults([writerAnswer(), okCall()]);
+      c().contribute(new stories.contribute_arguments(BOB, 1, "Bob has never written here at all.", false, false, 34, true, 0, 0, true));
+    }, "STORIES: you have no earlier part in this story");
+  });
+
   it("refuses adding after a part that doesn't exist or was removed", () => {
     open(OPENING);
     openerWrites(1, "The second part, at the end as usual.");

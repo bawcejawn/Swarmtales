@@ -440,3 +440,19 @@ dialog.sheet::backdrop { background: rgba(27, 31, 42, 0.45); }
 .pack-list { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
 .pack { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
 .pack b { display: block; }
+
+/* Part tools: add here, edit, remove, listen, report */
+.seg-tools { display: flex; flex-wrap: wrap; gap: 0 16px; margin-top: 4px; }
+.seg-tools .tool, .seg-tools .report-toggle { font-size: 13px; font-weight: 500; color: var(--muted); min-height: 32px; padding: 4px 0; }
+.seg-tools .tool:hover { color: var(--accent); }
+.seg-tools { opacity: 0.85; }
+.seg:hover .seg-tools, .seg:focus-within .seg-tools { opacity: 1; }
+.inline-panel { margin: 12px 0 8px; padding: 20px; }
+.inline-panel textarea { margin-top: 8px; }
+.inline-panel .h3 { margin: 0; }
+
+/* Read aloud */
+.listen-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 12px 0 8px; }
+.listen-bar select { width: auto; min-height: 40px; padding: 6px 10px; font-size: 14px; }
+.listen-opt { display: inline-flex; }
+.seg.reading { background: var(--honey-bg); border-radius: 10px; box-shadow: 0 0 0 8px var(--honey-bg); }

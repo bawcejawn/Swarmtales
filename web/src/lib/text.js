@@ -110,6 +110,8 @@ export function normalizePasted(value) {
 }
 
 export const MAX_PARTS_PER_SIGNATURE = 10;
+// One confirmation carries at most this much text (about 4 mana measured on the testnet).
+export const MAX_CHARS_PER_SIGNATURE = 30000;
 
 function isHighSurrogate(code) {
   return code >= 0xd800 && code <= 0xdbff;

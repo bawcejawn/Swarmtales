@@ -3,9 +3,11 @@
  *
  * Each part has a sequence number (the order it was written) and
  * insert_after: 0 means "at the end", otherwise "right after part N".
- * Parts added after the same part keep the order they were written in, and
- * a part can itself be followed by parts added after it. This is the same
- * rule the PDF and NFT builders must use.
+ * When several parts were added after the same part, the newest one comes
+ * first (it was placed directly under that part, above the earlier ones).
+ * A part can itself be followed by parts added after it; a multi-part
+ * addition chains each piece after the previous one. This is the same rule
+ * the PDF and NFT builders must use.
  *
  * Input: [{ seq, insertAfter }]. Output: the same objects, in reading order.
  * Every part appears exactly once, even if its insert_after points nowhere.
@@ -34,7 +36,8 @@ export function readingOrder(parts) {
       seen.add(node.seq);
       out.push(node);
       const kids = children.get(Number(node.seq)) || [];
-      for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+      // Newest first: push the oldest first so the newest is popped first.
+      for (let i = 0; i < kids.length; i++) stack.push(kids[i]);
     }
   };
   for (const r of roots) visit(r);

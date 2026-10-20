@@ -624,10 +624,20 @@ export class Stories {
       "STORIES: text is shorter than the minimum (only the piece that fills the story may be shorter)"
     );
     this.requireRightsAndTerms(author, args.rights_confirmed, args.terms_version, cfg);
-    if (args.insert_after != 0) {
+    let insertAfter = args.insert_after;
+    if (args.after_my_last) {
+      // The next piece of a multi-part addition: right after this writer's
+      // previous part in this story.
+      const count = this.authorCount.get(author)!.value;
+      System.require(count > 0, "STORIES: you have no earlier part in this story");
+      const last = this.authorList.get(this.addrIdxKey(author, count - 1))!;
+      System.require(last.story_id == args.story_id, "STORIES: you have no earlier part in this story");
+      insertAfter = last.seq;
+    }
+    if (insertAfter != 0) {
       // Text added between parts: it is read right after the part it follows.
-      System.require(args.insert_after <= st.segment_count, "STORIES: unknown part to add text after");
-      const target = this.segments.get(this.pairKey(args.story_id, args.insert_after));
+      System.require(insertAfter <= st.segment_count, "STORIES: unknown part to add text after");
+      const target = this.segments.get(this.pairKey(args.story_id, insertAfter));
       System.require(target != null && target!.status == stories.segment_status.SEGMENT_ACTIVE,
         "STORIES: you can only add text after a part that is still in the story");
     }
@@ -649,7 +659,7 @@ export class Stories {
       trial = true;
     }
 
-    const seq = this.writeSegment(args.story_id, st, author, text, cost, args.starts_chapter, args.ai_assisted, trial, ink, args.terms_version, args.insert_after);
+    const seq = this.writeSegment(args.story_id, st, author, text, cost, args.starts_chapter, args.ai_assisted, trial, ink, args.terms_version, insertAfter);
     this.leave();
     return new stories.uint64(seq);
   }
