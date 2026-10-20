@@ -235,6 +235,20 @@ export async function writerFlags(storyId, address) {
 }
 
 /**
+ * Wait until a transaction is in a block (or the time runs out), so the page
+ * reads the new state afterwards. Returns the node's row, or null.
+ */
+export async function waitForInclusion(transactionId, ms = 90000) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    const row = await lookupTransaction(transactionId);
+    if (row && Array.isArray(row.containing_blocks) && row.containing_blocks.length) return row;
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  return lookupTransaction(transactionId);
+}
+
+/**
  * After a wallet reports a transaction id, ask the node whether it landed.
  * A missing receipt is not treated as success or failure.
  */
