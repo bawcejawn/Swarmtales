@@ -21,6 +21,21 @@
 //   - The admin cannot edit or remove text, move or burn Ink, refund
 //     outside the rules, or finalize except under the admin rule.
 //
+// SECURITY RULES ADDED AFTER THE OCTOBER 2026 REVIEW
+//   H1  Every action must be called directly by the transaction, never
+//       through another contract. Koinos' signature check only asks "did
+//       this wallet sign?", so without this rule any other app a user signs
+//       for could write, edit, close or invite in that user's name.
+//   H2  Invites are signed links. Only the PUBLIC address of a link key is
+//       stored. The private key lives in the link after the #, and joining
+//       needs a signature over "invite / this contract / story / invite /
+//       this wallet". Nothing secret is ever sent to the chain, and a copied
+//       signature only works for the wallet it names.
+//   M2  The final edit skips removed text in bounded steps (at most 50 per
+//       call). advance_final_cursor lets anyone push a long run along.
+//   New text must be at least 20 Ink units, except a piece that exactly
+//   fills the story's last space.
+//
 // INK COST OF TEXT
 //   Cost = number of UTF-16 code units (JavaScript's text.length).
 //   A letter costs 1, most emoji 2, some older emoji 1, skin tones and
@@ -81,8 +96,16 @@ const MAX_BATCH_UNITS: u64 = 8000;
 const MAX_LIST: u32 = 50;
 const MAX_SEGMENT_READ: u32 = 10;
 const MAX_NEWLINE_RUN: i32 = 3;
-const MIN_CODE: i32 = 8;
-const MAX_CODE: i32 = 64;
+const SIGNATURE_LENGTH: i32 = 65;
+// The browser signs exactly:
+//   sha256( "swarmtales/invite/v1" || stories (25) || story id (8, BE) || invite id (8, BE) || wallet (25) )
+const INVITE_DOMAIN = "swarmtales/invite/v1";
+// New text shorter than the minimum is refused, unless it exactly fills
+// the story. Starts at 20; the admin may set 1 to 200.
+const DEFAULT_MIN_CONTRIBUTION: u32 = 20;
+const MIN_CONTRIBUTION_MAX: u32 = 200;
+// The most removed segments the final edit folds in during one call.
+const MAX_SKIP_PER_CALL: u32 = 50;
 const MAX_INVITE_USES: u32 = 1000;
 const MAX_INVITE_DAYS: u64 = 365;
 const MAX_PDF_URI: i32 = 200;
@@ -138,6 +161,8 @@ export class Stories {
   authorCount: Storage.Map<Uint8Array, stories.uint64>;
   authorList: Storage.Map<Uint8Array, stories.segment_ref>;
   categories: Storage.Map<Uint8Array, stories.category>;
+  // How many removed segments this call may still fold in (fix M2).
+  skipBudget: u32 = MAX_SKIP_PER_CALL;
 
   constructor() {
     this.contractId = System.getContractId();
@@ -145,7 +170,8 @@ export class Stories {
     this.config = new Storage.Obj(id, CONFIG_SPACE_ID, stories.config.decode, stories.config.encode,
       () => new stories.config(
         new Uint8Array(0), false, new Uint8Array(0), new Uint8Array(0),
-        DEFAULT_CAP, DEFAULT_TRIAL, DEFAULT_OPEN_LIMIT, DEFAULT_ARCHIVE_DAYS, DEFAULT_INACTIVITY_DAYS, 0, 0
+        DEFAULT_CAP, DEFAULT_TRIAL, DEFAULT_OPEN_LIMIT, DEFAULT_ARCHIVE_DAYS, DEFAULT_INACTIVITY_DAYS, 0, 0,
+        DEFAULT_MIN_CONTRIBUTION
       ));
     this.lock = new Storage.Obj(id, LOCK_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
     this.stories = new Storage.Map(id, STORIES_SPACE_ID, stories.story.decode, stories.story.encode, null);
@@ -312,6 +338,7 @@ export class Stories {
     const cost = <u64>this.requireText(text, true);
     System.require(cost == args.expected_ink, "STORIES: Ink cost does not match expected_ink");
     System.require(cost <= <u64>cfg.contribution_cap, "STORIES: text is over the per-submission cap");
+    System.require(cost >= this.minContribution(cfg), "STORIES: opening text is shorter than the minimum");
 
     const open = this.openCount.get(opener)!;
     System.require(open.value < cfg.open_limit, "STORIES: you already have the maximum number of open projects");
@@ -447,7 +474,7 @@ export class Stories {
     const st = this.requireStory(args.story_id);
     this.requireOpener(st, opener);
     this.requireJoinable(st);
-    const code = this.requireCode(args.code);
+    const linkSigner = this.requireAddress(args.link_signer, "STORIES: invite needs a link key address");
     System.require(args.max_uses >= 1 && args.max_uses <= MAX_INVITE_USES, "STORIES: invite uses must be 1 to 1000");
     const now = this.now();
     System.require(args.expires_at > now, "STORIES: invite expiry must be in the future");
@@ -458,7 +485,7 @@ export class Stories {
     st.next_invite_id = SafeMath.add(inviteId, 1);
     st.opener_last_active = now;
     this.putStory(args.story_id, st);
-    this.invites.put(this.pairKey(args.story_id, inviteId), new stories.invite(this.sha256(StringBytes.stringToBytes(code)), args.max_uses, 0, args.expires_at, false));
+    this.invites.put(this.pairKey(args.story_id, inviteId), new stories.invite(linkSigner, args.max_uses, 0, args.expires_at, false));
     const ev = new stories.invite_event(args.story_id, inviteId, args.max_uses, args.expires_at, false);
     System.event("stories.invite_event", Protobuf.encode(ev, stories.invite_event.encode), [opener]);
     this.leave();
@@ -497,9 +524,12 @@ export class Stories {
     System.require(!row.revoked, "STORIES: invite was revoked");
     System.require(this.now() < row.expires_at, "STORIES: invite has expired");
     System.require(row.uses < row.max_uses, "STORIES: invite has no uses left");
-    const code = this.text(args.code);
-    System.require(code.length >= MIN_CODE && code.length <= MAX_CODE, "STORIES: invite code rejected");
-    System.require(Arrays.equal(this.sha256(StringBytes.stringToBytes(code)), row.code_hash), "STORIES: invite code rejected");
+    this.requireLinkSignature(
+      this.requireAddress(row.link_signer, "STORIES: invite link rejected"),
+      this.inviteDigest(args.story_id, args.invite_id, account),
+      args.signature,
+      "STORIES: invite link rejected"
+    );
     const allowKey = this.idAddrKey(args.story_id, account);
     System.require(!this.allowed.get(allowKey)!.value, "STORIES: already on the allow-list");
     this.allowed.put(allowKey, new stories.boole(true));
@@ -530,6 +560,10 @@ export class Stories {
     System.require(cost == args.expected_ink, "STORIES: Ink cost does not match expected_ink");
     System.require(cost <= <u64>cfg.contribution_cap, "STORIES: text is over the per-submission cap");
     System.require(SafeMath.add(st.used_chars, cost) <= st.max_chars, "STORIES: not enough space left in this story");
+    System.require(
+      cost >= this.minContribution(cfg) || SafeMath.add(st.used_chars, cost) == st.max_chars,
+      "STORIES: text is shorter than the minimum (only the piece that fills the story may be shorter)"
+    );
 
     const privileged = this.isPrivileged(args.story_id, st, author);
     if (st.visibility == stories.visibility.VISIBILITY_PRIVATE) {
@@ -681,6 +715,22 @@ export class Stories {
     return new stories.empty_object();
   }
 
+  // Anyone may push the final edit past a long run of removed text (fix M2).
+  advance_final_cursor(args: stories.advance_final_cursor_arguments): stories.empty_object {
+    this.enter();
+    this.requireNotPaused();
+    const st = this.requireStory(args.story_id);
+    System.require(st.status == stories.story_status.STATUS_EDITING, "STORIES: story is not in the final edit");
+    const before = st.final_cursor;
+    this.skipRemoved(args.story_id, st);
+    System.require(st.final_cursor > before, "STORIES: nothing to skip; the next segment still needs the finalizer");
+    this.putStory(args.story_id, st);
+    const ev = new stories.final_batch_event(args.story_id, st.final_cursor, st.running_hash);
+    System.event("stories.final_batch_event", Protobuf.encode(ev, stories.final_batch_event.encode), [st.opener!]);
+    this.leave();
+    return new stories.empty_object();
+  }
+
   admin_take_over(args: stories.admin_take_over_arguments): stories.empty_object {
     this.enter();
     this.requireAdmin();
@@ -723,6 +773,10 @@ export class Stories {
       const item = items[i];
       const next = st.final_cursor + 1;
       System.require(next <= st.segment_count, "STORIES: more items than segments");
+      System.require(
+        this.skipBudget > 0 || this.segments.get(this.pairKey(args.story_id, next))!.status != stories.segment_status.SEGMENT_REMOVED,
+        "STORIES: a long run of removed text is next; call advance_final_cursor first"
+      );
       System.require(item.seq == next, "STORIES: items must be in order, starting at the next unprocessed segment");
       const key = this.pairKey(args.story_id, next);
       const seg = this.segments.get(key)!;
@@ -891,6 +945,22 @@ export class Stories {
     return new stories.empty_object();
   }
 
+  set_min_contribution(args: stories.set_min_contribution_arguments): stories.empty_object {
+    this.enter();
+    this.requireAdmin();
+    System.require(
+      args.min_contribution >= 1 && args.min_contribution <= MIN_CONTRIBUTION_MAX,
+      "STORIES: minimum text length must be 1 to 200"
+    );
+    const cfg = this.config.get()!;
+    cfg.min_contribution = args.min_contribution;
+    this.saveConfig(cfg);
+    const ev = new stories.min_contribution_event(args.min_contribution);
+    System.event("stories.min_contribution_event", Protobuf.encode(ev, stories.min_contribution_event.encode), []);
+    this.leave();
+    return new stories.empty_object();
+  }
+
   add_category(args: stories.add_category_arguments): stories.uint32 {
     this.enter();
     this.requireAdmin();
@@ -1053,11 +1123,12 @@ export class Stories {
   // Segments removed before the lock are folded into the final hash
   // automatically, so the finalizer only submits live text.
   private skipRemoved(storyId: u64, st: stories.story): void {
-    while (st.final_cursor < st.segment_count) {
+    while (st.final_cursor < st.segment_count && this.skipBudget > 0) {
       const next = st.final_cursor + 1;
       const key = this.pairKey(storyId, next);
       const seg = this.segments.get(key)!;
       if (seg.status != stories.segment_status.SEGMENT_REMOVED) return;
+      this.skipBudget = this.skipBudget - 1;
       if (seg.final_mode == stories.final_mode.FINAL_PENDING) {
         seg.final_mode = stories.final_mode.FINAL_REMOVED;
         this.segments.put(key, seg);
@@ -1088,6 +1159,10 @@ export class Stories {
   private closeReady(st: stories.story): bool {
     const min = st.kind == stories.story_kind.KIND_BOOK ? BOOK_MIN : SHORT_MIN;
     return st.used_chars >= min || SafeMath.add(st.used_chars, CLOSE_SLACK) >= st.max_chars;
+  }
+
+  private minContribution(cfg: stories.config): u64 {
+    return cfg.min_contribution == 0 ? <u64>DEFAULT_MIN_CONTRIBUTION : <u64>cfg.min_contribution;
   }
 
   private decrementOpen(opener: Uint8Array): void {
@@ -1196,12 +1271,6 @@ export class Stories {
     const title = this.text(value);
     this.requireTextIn(title, MAX_TITLE, "STORIES: title must be 1 to 100 characters");
     return title;
-  }
-
-  private requireCode(value: string | null): string {
-    const code = this.text(value);
-    System.require(code.length >= MIN_CODE && code.length <= MAX_CODE && this.isPlainAscii(code), "STORIES: invite code must be 8 to 64 plain characters");
-    return code;
   }
 
   private isPlainAscii(value: string): bool {
@@ -1314,6 +1383,15 @@ export class Stories {
   // Held across the whole call, so a token, Shop, Ink or authority
   // contract cannot call back into Stories mid-transaction.
   private enter(): void {
+    // Fix H1: Stories is only ever called directly by a transaction. A
+    // call that arrives from another contract is some other app acting in
+    // a user's (or the admin's) name, and is refused before anything else.
+    const caller = System.getCaller().caller;
+    System.require(
+      caller == null || caller.length == 0,
+      "STORIES: call SwarmTales directly from your wallet, not through another contract"
+    );
+    this.skipBudget = MAX_SKIP_PER_CALL;
     const flag = this.lock.get()!;
     System.require(!flag.value, "STORIES: reentrant call");
     flag.value = true;
@@ -1425,6 +1503,23 @@ export class Stories {
 
   private u32IdKey(categoryId: u32, storyId: u64): Uint8Array {
     return this.join(this.u32Key(categoryId), this.u64Key(storyId));
+  }
+
+  // The 32-byte multihash digest an invite link key signs (fix H2).
+  private inviteDigest(storyId: u64, inviteId: u64, account: Uint8Array): Uint8Array {
+    const domain = StringBytes.stringToBytes(INVITE_DOMAIN);
+    const msg = this.join(this.join(this.join(domain, this.contractId), this.pairKey(storyId, inviteId)), account);
+    const digest = System.hash(Crypto.multicodec.sha2_256, msg);
+    System.require(digest != null, "STORIES: could not hash");
+    return digest!;
+  }
+
+  // The signature must recover to the invite's stored link key address.
+  private requireLinkSignature(signer: Uint8Array, digest: Uint8Array, signature: Uint8Array | null, message: string): void {
+    System.require(signature != null && signature.length == SIGNATURE_LENGTH, message);
+    const pub = System.recoverPublicKey(signature!, digest);
+    System.require(pub != null, message);
+    System.require(Arrays.equal(Crypto.addressFromPublicKey(pub!), signer), message);
   }
 
   // System.hash returns a multihash (code, length, digest). Keep the raw

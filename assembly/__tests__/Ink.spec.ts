@@ -77,6 +77,7 @@ describe("Ink: token details", () => {
   beforeEach(() => {
     MockVM.reset();
     MockVM.setContractId(CONTRACT_ID);
+    callDirectly();
   });
 
   it("reports name, symbol, decimals and zero starting supply", () => {
@@ -109,6 +110,7 @@ describe("Ink: minting", () => {
   beforeEach(() => {
     MockVM.reset();
     MockVM.setContractId(CONTRACT_ID);
+    callDirectly();
     setupMintersAndBurners();
   });
 
@@ -189,6 +191,7 @@ describe("Ink: burning", () => {
   beforeEach(() => {
     MockVM.reset();
     MockVM.setContractId(CONTRACT_ID);
+    callDirectly();
     setupMintersAndBurners();
     // Give Alice 1,000 Ink to work with.
     callAs(SHOP);
@@ -249,6 +252,7 @@ describe("Ink: admin controls", () => {
   beforeEach(() => {
     MockVM.reset();
     MockVM.setContractId(CONTRACT_ID);
+    callDirectly();
   });
 
   it("refuses minter changes from a non-admin", () => {
@@ -272,6 +276,7 @@ describe("Ink: admin controls", () => {
   it("can remove a minter", () => {
     setupMintersAndBurners();
     authorize(CONTRACT_ID);
+    callDirectly(); // admin actions are direct calls
     new Ink().set_minter(new ink.set_minter_arguments(SHOP, 0));
     expect(new Ink().get_minter_reasons(new ink.get_minter_reasons_arguments(SHOP)).value).toBe(0);
   });
@@ -279,6 +284,7 @@ describe("Ink: admin controls", () => {
   it("pause stops minting", () => {
     setupMintersAndBurners();
     authorize(CONTRACT_ID);
+    callDirectly(); // admin actions are direct calls
     new Ink().set_paused(new ink.set_paused_arguments(true));
     expect(new Ink().get_config(new ink.get_config_arguments()).paused).toBe(true);
 
@@ -290,6 +296,7 @@ describe("Ink: admin controls", () => {
 
   it("hands admin to a new address; the old admin loses control", () => {
     authorize(CONTRACT_ID);
+    callDirectly(); // admin actions are direct calls
     new Ink().set_admin(new ink.set_admin_arguments(ALICE));
     expect(Base58.encode(new Ink().get_config(new ink.get_config_arguments()).admin!)).toBe(Base58.encode(ALICE));
 
@@ -318,6 +325,7 @@ describe("Ink: extra mint checks", () => {
   beforeEach(() => {
     MockVM.reset();
     MockVM.setContractId(CONTRACT_ID);
+    callDirectly();
     setupMintersAndBurners();
   });
 
@@ -363,6 +371,7 @@ describe("Ink: extra mint checks", () => {
 
   it("honors a mask that allows only PROMO", () => {
     authorize(CONTRACT_ID);
+    callDirectly(); // admin actions are direct calls
     new Ink().set_minter(new ink.set_minter_arguments(SHOP, PROMO_ONLY));
     expect(new Ink().get_minter_reasons(new ink.get_minter_reasons_arguments(SHOP)).value).toBe(PROMO_ONLY);
 
@@ -380,6 +389,7 @@ describe("Ink: extra mint checks", () => {
 
   it("stops minting after the minter is removed, without crediting a failed mint", () => {
     authorize(CONTRACT_ID);
+    callDirectly(); // admin actions are direct calls
     new Ink().set_minter(new ink.set_minter_arguments(SHOP, 0));
     checkpoint();
 
@@ -409,6 +419,7 @@ describe("Ink: extra burn checks", () => {
   beforeEach(() => {
     MockVM.reset();
     MockVM.setContractId(CONTRACT_ID);
+    callDirectly();
     setupMintersAndBurners();
     callAs(SHOP);
     new Ink().mint(new ink.mint_arguments(ALICE, 1000, ink.mint_reason.MINT_PROMO, "campaign:1"));
@@ -416,6 +427,7 @@ describe("Ink: extra burn checks", () => {
 
   it("pause stops burning, and unpause allows it again", () => {
     authorize(CONTRACT_ID);
+    callDirectly(); // admin actions are direct calls
     new Ink().set_paused(new ink.set_paused_arguments(true));
     checkpoint();
 
@@ -429,6 +441,8 @@ describe("Ink: extra burn checks", () => {
     expect(balanceOf(ALICE)).toBe(1000);
 
     authorize(CONTRACT_ID);
+
+    callDirectly(); // admin actions are direct calls
     new Ink().set_paused(new ink.set_paused_arguments(false));
     callAs(STORIES);
     authorize(ALICE);
@@ -516,6 +530,7 @@ describe("Ink: extra burn checks", () => {
 
   it("stops burning after the burner is removed", () => {
     authorize(CONTRACT_ID);
+    callDirectly(); // admin actions are direct calls
     new Ink().set_burner(new ink.set_burner_arguments(STORIES, false));
     expect(new Ink().is_burner(new ink.is_burner_arguments(STORIES)).value).toBe(false);
     expect(new Ink().is_burner(new ink.is_burner_arguments(SHOP)).value).toBe(false);
@@ -536,6 +551,7 @@ describe("Ink: extra admin checks", () => {
   beforeEach(() => {
     MockVM.reset();
     MockVM.setContractId(CONTRACT_ID);
+    callDirectly();
   });
 
   it("refuses burner, pause, and admin changes from a stranger", () => {
@@ -546,6 +562,9 @@ describe("Ink: extra admin checks", () => {
     expect(() => {
       new Ink().set_burner(new ink.set_burner_arguments(MALLORY, true));
     }).toThrow();
+    checkpoint();
+    authorize(CONTRACT_ID);
+    callAs(MALLORY);
     expect(() => {
       new Ink().set_paused(new ink.set_paused_arguments(true));
     }).toThrow();
@@ -565,12 +584,15 @@ describe("Ink: extra admin checks", () => {
     expect(Base58.encode(new Ink().get_config(new ink.get_config_arguments()).admin!)).toBe(Base58.encode(CONTRACT_ID));
 
     authorize(CONTRACT_ID);
+
+    callDirectly(); // admin actions are direct calls
     new Ink().set_admin(new ink.set_admin_arguments(ALICE));
     expect(Base58.encode(new Ink().get_config(new ink.get_config_arguments()).admin!)).toBe(Base58.encode(ALICE));
   });
 
   it("rejects a new admin that is not a 25 byte address", () => {
     authorize(CONTRACT_ID);
+    callDirectly(); // admin actions are direct calls
     checkpoint();
     expect(() => {
       new Ink().set_admin(new ink.set_admin_arguments(new Uint8Array(24)));
@@ -583,6 +605,7 @@ describe("Ink: extra admin checks", () => {
 
   it("rejects reason bits that are not real mint reasons", () => {
     authorize(CONTRACT_ID);
+    callDirectly(); // admin actions are direct calls
     checkpoint();
     expect(() => {
       new Ink().set_minter(new ink.set_minter_arguments(SHOP, <u32>1 << 6));
@@ -595,6 +618,7 @@ describe("Ink: extra admin checks", () => {
 
   it("accepts every real mint reason and publishes the minter event", () => {
     authorize(CONTRACT_ID);
+    callDirectly(); // admin actions are direct calls
     new Ink().set_minter(new ink.set_minter_arguments(SHOP, ALL_MINT_REASONS));
     expect(new Ink().get_minter_reasons(new ink.get_minter_reasons_arguments(SHOP)).value).toBe(ALL_MINT_REASONS);
 
@@ -609,6 +633,7 @@ describe("Ink: extra admin checks", () => {
   it("still lets the admin remove a minter while minting is paused", () => {
     setupMintersAndBurners();
     authorize(CONTRACT_ID);
+    callDirectly(); // admin actions are direct calls
     new Ink().set_paused(new ink.set_paused_arguments(true));
     new Ink().set_minter(new ink.set_minter_arguments(SHOP, 0));
     expect(new Ink().get_minter_reasons(new ink.get_minter_reasons_arguments(SHOP)).value).toBe(0);
@@ -632,6 +657,7 @@ describe("Ink: null reads, masks, and overflow", () => {
   beforeEach(() => {
     MockVM.reset();
     MockVM.setContractId(CONTRACT_ID);
+    callDirectly();
   });
 
   it("treats a missing address as an empty account", () => {
@@ -667,6 +693,7 @@ describe("Ink: null reads, masks, and overflow", () => {
 
   it("lets the new admin change minters and refuses the old admin", () => {
     authorize(CONTRACT_ID);
+    callDirectly(); // admin actions are direct calls
     new Ink().set_admin(new ink.set_admin_arguments(ALICE));
     authorize(ALICE);
     new Ink().set_minter(new ink.set_minter_arguments(SHOP, SHOP_REASONS));
@@ -674,6 +701,8 @@ describe("Ink: null reads, masks, and overflow", () => {
     checkpoint();
 
     authorize(CONTRACT_ID);
+
+    callDirectly(); // admin actions are direct calls
     expect(() => {
       new Ink().set_minter(new ink.set_minter_arguments(SHOP, 0));
     }).toThrow();
@@ -691,6 +720,7 @@ describe("Ink: null reads, masks, and overflow", () => {
     for (let i = 0; i < reasons.length; i++) {
       const reason = reasons[i];
       authorize(CONTRACT_ID);
+      callDirectly(); // admin actions are direct calls
       new Ink().set_minter(new ink.set_minter_arguments(SHOP, <u32>1 << reason));
       callAs(SHOP);
       new Ink().mint(new ink.mint_arguments(ALICE, 1, <ink.mint_reason>reason, ""));
@@ -706,6 +736,7 @@ describe("Ink: null reads, masks, and overflow", () => {
 
   it("denies the refund bit when the mask is Shop's 30", () => {
     authorize(CONTRACT_ID);
+    callDirectly(); // admin actions are direct calls
     new Ink().set_minter(new ink.set_minter_arguments(SHOP, 30));
     callAs(SHOP);
     const c = new Ink();
@@ -741,5 +772,53 @@ describe("Ink: null reads, masks, and overflow", () => {
     expect(balanceOf(ALICE)).toBe(u64.MAX_VALUE);
     expect(balanceOf(MALLORY)).toBe(0);
     expect(supply()).toBe(u64.MAX_VALUE);
+  });
+});
+
+// Security fix H1: admin actions must come straight from a transaction.
+describe("Ink: admin only by direct call", () => {
+  beforeEach(() => {
+    MockVM.reset();
+    MockVM.setContractId(CONTRACT_ID);
+    callDirectly();
+  });
+
+  it("refuses admin changes that arrive through another contract, even with the admin's signature", () => {
+    checkpoint();
+    authorize(CONTRACT_ID);
+    callDirectly(); // admin actions are direct calls
+    callAs(MALLORY);
+    expect(() => {
+      new Ink().set_minter(new ink.set_minter_arguments(MALLORY, 0b111110));
+    }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("INK: call SwarmTales directly from your wallet, not through another contract");
+    checkpoint();
+    authorize(CONTRACT_ID);
+    callAs(MALLORY);
+    expect(() => {
+      new Ink().set_burner(new ink.set_burner_arguments(MALLORY, true));
+    }).toThrow();
+    checkpoint();
+    authorize(CONTRACT_ID);
+    callAs(MALLORY);
+    expect(() => {
+      new Ink().set_admin(new ink.set_admin_arguments(MALLORY));
+    }).toThrow();
+    checkpoint();
+    authorize(CONTRACT_ID);
+    callAs(MALLORY);
+    expect(() => {
+      new Ink().set_paused(new ink.set_paused_arguments(true));
+    }).toThrow();
+
+    callDirectly();
+    authorize(CONTRACT_ID);
+    expect(new Ink().get_minter_reasons(new ink.get_minter_reasons_arguments(MALLORY)).value).toBe(0);
+    expect(new Ink().is_burner(new ink.is_burner_arguments(MALLORY)).value).toBe(false);
+    expect(new Ink().get_config(new ink.get_config_arguments()).paused).toBe(false);
+
+    // The same change, sent directly, works.
+    new Ink().set_burner(new ink.set_burner_arguments(STORIES, true));
+    expect(new Ink().is_burner(new ink.is_burner_arguments(STORIES)).value).toBe(true);
   });
 });

@@ -96,6 +96,7 @@ message config {
   uint32 inactivity_days = 9;    // opener inactivity before the admin may take over
   uint64 next_story_id = 10 [jstype = JS_STRING];
   uint32 next_category_id = 11;
+  uint32 min_contribution = 12;  // shortest new text (default 20); the piece that fills the story is exempt
 }
 
 message story {
@@ -162,7 +163,9 @@ message segment_ref_list {
 }
 
 message invite {
-  bytes code_hash = 1;
+  // Public address of the invite's link key. The private half lives only
+  // in the invite link, after the #. Nothing secret is stored or sent.
+  bytes link_signer = 1 [(koinos.btype) = ADDRESS];
   uint32 max_uses = 2;
   uint32 uses = 3;
   uint64 expires_at = 4 [jstype = JS_STRING];
@@ -284,7 +287,7 @@ message is_allowed_arguments {
   bytes account = 2 [(koinos.btype) = ADDRESS];
 }
 
-// @description One invite (the code itself is never stored, only its hash)
+// @description One invite (only the public address of its link key is stored)
 // @read-only true
 // @result invite
 message get_invite_arguments {
@@ -401,13 +404,13 @@ message set_allowed_arguments {
   bool allowed = 4;
 }
 
-// @description Opener creates an invite code (8-64 characters) with a use limit and expiry
+// @description Opener creates an invite link: the PUBLIC address of a fresh link key, a use limit and an expiry
 // @read-only false
 // @result uint64
 message create_invite_arguments {
   bytes opener = 1 [(koinos.btype) = ADDRESS];
   uint64 story_id = 2 [jstype = JS_STRING];
-  string code = 3;
+  bytes link_signer = 3 [(koinos.btype) = ADDRESS];
   uint32 max_uses = 4;
   uint64 expires_at = 5 [jstype = JS_STRING];
 }
@@ -421,14 +424,16 @@ message revoke_invite_arguments {
   uint64 invite_id = 3 [jstype = JS_STRING];
 }
 
-// @description A wallet joins a story's allow-list with an invite code
+// @description A wallet joins a story's allow-list with a signed invite link.
+// signature = the link key's signature over
+//   sha256("swarmtales/invite/v1" || stories address || story id (8, BE) || invite id (8, BE) || account)
 // @read-only false
 // @result empty_object
 message join_with_invite_arguments {
   bytes account = 1 [(koinos.btype) = ADDRESS];
   uint64 story_id = 2 [jstype = JS_STRING];
   uint64 invite_id = 3 [jstype = JS_STRING];
-  string code = 4;
+  bytes signature = 4;
 }
 
 // ---------- Writing and editing ----------
@@ -483,6 +488,14 @@ message request_admin_finalize_arguments {
   bytes opener = 1 [(koinos.btype) = ADDRESS];
   uint64 story_id = 2 [jstype = JS_STRING];
   bool requested = 3;
+}
+
+// @description Anyone may fold up to 50 removed segments into the final edit's
+// progress. Only needed when a very long run of removed text would not fit in one call.
+// @read-only false
+// @result empty_object
+message advance_final_cursor_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
 }
 
 // @description Admin takes over the final edit (opener asked, or opener inactive 30+ days). No fee.
@@ -676,6 +689,17 @@ message category_event {
   uint32 category_id = 1;
   string name = 2;
   bool active = 3;
+}
+
+// @description Set the shortest allowed new text (1 to 200 Ink units). Starts at 20.
+// @read-only false
+// @result empty_object
+message set_min_contribution_arguments {
+  uint32 min_contribution = 1;
+}
+
+message min_contribution_event {
+  uint32 min_contribution = 1;
 }
 
 message limits_event {

@@ -23,6 +23,24 @@
 //   wallet's tokens on a signature alone. The buyer approves Shop for
 //   the full price, and Shop also requires the buyer's signature so a
 //   leftover approval cannot be spent by someone else.
+//   Shop does not trust the token's reply. It reads the treasury's and
+//   the founder's balances before and after, and refuses the purchase
+//   unless each one went up by exactly its share.
+//
+// WHO MAY CALL (security fix H1)
+//   Koinos' signature check only asks "did this wallet sign the
+//   transaction?", not "did this wallet call me?". Without more, any
+//   other app a user signs for could quietly call Shop as that user.
+//   So every user action and every admin action must be called directly
+//   by the transaction, never through another contract. The only
+//   contract allowed to call in is Stories, for the story fees.
+//
+// PROMO LINKS (security fix H3)
+//   No promo secret is ever sent to the chain. A campaign stores only the
+//   public address of a "link key". The private half lives in the share
+//   link, after the #. To claim, the browser signs
+//   "promo / this Shop / campaign id / this wallet" with that link key.
+//   A copied signature only works for the wallet it names.
 // =====================================================================
 
 import { System, Storage, authority, Protobuf, SafeMath, Crypto, StringBytes, Arrays, token } from "@koinos/sdk-as";
@@ -44,8 +62,12 @@ const FEE_DENOMINATOR: u64 = 10000;
 const MAX_MONTHS: u32 = 24;
 const MAX_DECIMALS: u32 = 18;
 const MAX_SYMBOL_LENGTH: i32 = 16;
-const MAX_CODE_LENGTH: i32 = 64;
-const MAX_CODES_PER_CALL: i32 = 20;
+const MAX_SIGNERS_PER_CALL: i32 = 20;
+const SIGNATURE_LENGTH: i32 = 65;
+
+// Domain separator for promo link signatures. The browser signs exactly:
+//   sha256( "swarmtales/promo/v1" || shop address (25) || campaign id (8, big-endian) || wallet (25) )
+const PROMO_DOMAIN = "swarmtales/promo/v1";
 
 // 30 days. Not an admin setting: shrinking it would let the admin
 // speed up Writer Ink claims. Changing it means a new contract.
@@ -55,6 +77,7 @@ const DAY_SECONDS: u64 = 86400;
 // sha256("transfer") and sha256("mint"), first 4 bytes. These are the
 // Koinos entry points of a KCS-4 token and of the Ink contract.
 const TOKEN_TRANSFER_ENTRY: u32 = 670398154;
+const TOKEN_BALANCE_OF_ENTRY: u32 = 1550980247; // 0x5c721497 "balance_of"
 const INK_MINT_ENTRY: u32 = 3698268091;
 
 const CODE_AVAILABLE: u32 = 1;
@@ -203,6 +226,12 @@ export class Shop {
     return this.promoClaimed.get(args.account!)!;
   }
 
+  // 0 = never added, 1 = waiting to be claimed, 2 = already claimed.
+  get_single_use_status(args: shop.get_single_use_status_arguments): shop.uint32 {
+    if (args.campaign_id == 0 || args.signer == null || args.signer!.length != ADDRESS_LENGTH) return new shop.uint32(0);
+    return this.singleUse.get(this.codeKey(args.campaign_id, args.signer!))!;
+  }
+
   // ===================================================================
   // Memberships and packs
   // ===================================================================
@@ -210,6 +239,7 @@ export class Shop {
   buy_membership(args: shop.buy_membership_arguments): shop.empty_object {
     this.requireNotPaused();
     this.enter();
+    this.requireDirectCall();
 
     const payer = this.requireAddress(args.payer, "SHOP: invalid payer address");
     this.requireSigner(payer, "SHOP: payer has not authorized this purchase");
@@ -273,6 +303,7 @@ export class Shop {
   claim_writer_ink(args: shop.claim_writer_ink_arguments): shop.empty_object {
     this.requireNotPaused();
     this.enter();
+    this.requireDirectCall();
 
     const account = this.requireAddress(args.account, "SHOP: invalid account address");
     this.requireSigner(account, "SHOP: account has not authorized this claim");
@@ -303,6 +334,7 @@ export class Shop {
   buy_pack(args: shop.buy_pack_arguments): shop.empty_object {
     this.requireNotPaused();
     this.enter();
+    this.requireDirectCall();
 
     const payer = this.requireAddress(args.payer, "SHOP: invalid payer address");
     this.requireSigner(payer, "SHOP: payer has not authorized this purchase");
@@ -390,6 +422,7 @@ export class Shop {
   claim_promo(args: shop.claim_promo_arguments): shop.empty_object {
     this.requireNotPaused();
     this.enter();
+    this.requireDirectCall();
 
     const account = this.requireAddress(args.account, "SHOP: invalid account address");
     this.requireSigner(account, "SHOP: account has not authorized this claim");
@@ -408,20 +441,22 @@ export class Shop {
     System.require(now >= row.starts_at, "SHOP: campaign has not started");
     System.require(now < row.ends_at, "SHOP: campaign has ended");
 
-    const code = this.text(args.code);
-    System.require(code.length > 0 && code.length <= MAX_CODE_LENGTH, "SHOP: invalid promo code");
-    const hash = this.sha256(code);
-
+    // Which link key must have signed? A shared campaign has one key for
+    // everyone. A single-use campaign has one key per link, and each key
+    // works once.
+    let signer: Uint8Array;
     if (row.single_use) {
-      const statusKey = this.codeKey(args.campaign_id, hash);
+      signer = this.requireAddress(args.signer, "SHOP: promo link rejected");
+      const statusKey = this.codeKey(args.campaign_id, signer);
       const status = this.singleUse.get(statusKey)!.value;
       System.require(status == CODE_AVAILABLE, status == CODE_USED
-        ? "SHOP: promo code already used"
-        : "SHOP: promo code rejected");
+        ? "SHOP: promo link already used"
+        : "SHOP: promo link rejected");
       this.singleUse.put(statusKey, new shop.uint32(CODE_USED));
     } else {
-      System.require(Arrays.equal(hash, row.code_hash), "SHOP: promo code rejected");
+      signer = this.requireAddress(row.link_signer, "SHOP: promo link rejected");
     }
+    this.requireLinkSignature(signer, this.promoDigest(args.campaign_id, account), args.signature, "SHOP: promo link rejected");
 
     const already = this.promoClaimed.get(account)!.value;
     System.require(already == 0, "SHOP: this wallet has already claimed a promo");
@@ -578,13 +613,16 @@ export class Shop {
     );
     System.require(args.ends_at > args.starts_at, "SHOP: campaign end must be after the start");
 
-    const code = this.text(args.code);
-    let codeHash = new Uint8Array(0);
+    // Only the PUBLIC address of the link key is stored. The private key
+    // stays in the share link and never touches the chain.
+    let linkSigner = new Uint8Array(0);
     if (args.single_use) {
-      System.require(code.length == 0, "SHOP: single-use campaigns take codes separately");
+      System.require(
+        args.link_signer == null || args.link_signer!.length == 0,
+        "SHOP: single-use campaigns add their link keys separately"
+      );
     } else {
-      System.require(code.length > 0 && code.length <= MAX_CODE_LENGTH, "SHOP: invalid promo code");
-      codeHash = this.sha256(code);
+      linkSigner = this.requireAddress(args.link_signer, "SHOP: a shared campaign needs a link key address");
     }
 
     const cfg = this.loadConfig();
@@ -594,7 +632,7 @@ export class Shop {
     this.saveConfig(cfg);
 
     const row = new shop.campaign(
-      codeHash,
+      linkSigner,
       args.amount,
       args.budget_total,
       0,
@@ -643,22 +681,22 @@ export class Shop {
     return new shop.empty_object();
   }
 
-  add_single_use_codes(args: shop.add_single_use_codes_arguments): shop.empty_object {
+  // Each single-use link has its own key. Only the public addresses are
+  // sent here, so publishing this transaction gives nothing away.
+  add_single_use_signers(args: shop.add_single_use_signers_arguments): shop.empty_object {
     this.enter();
     this.requireAdmin();
     const row = this.requireCampaign(args.campaign_id);
     System.require(row.single_use, "SHOP: campaign is not single-use");
-    const codes = args.codes;
-    System.require(codes.length > 0, "SHOP: no promo codes were provided");
-    System.require(codes.length <= MAX_CODES_PER_CALL, "SHOP: too many promo codes in one call");
+    const signers = args.signers;
+    System.require(signers.length > 0, "SHOP: no link keys were provided");
+    System.require(signers.length <= MAX_SIGNERS_PER_CALL, "SHOP: too many link keys in one call");
 
-    for (let i = 0; i < codes.length; i++) {
-      const code = codes[i];
-      System.require(code.length > 0 && code.length <= MAX_CODE_LENGTH, "SHOP: invalid promo code");
-      const hash = this.sha256(code);
-      const statusKey = this.codeKey(args.campaign_id, hash);
+    for (let i = 0; i < signers.length; i++) {
+      const signer = this.requireAddress(signers[i], "SHOP: invalid link key address");
+      const statusKey = this.codeKey(args.campaign_id, signer);
       const status = this.singleUse.get(statusKey)!.value;
-      System.require(status == 0, "SHOP: promo code already added");
+      System.require(status == 0, "SHOP: link key already added");
       this.singleUse.put(statusKey, new shop.uint32(CODE_AVAILABLE));
     }
     this.leave();
@@ -694,9 +732,32 @@ export class Shop {
     const treasuryAmount = SafeMath.sub(price, founderAmount);
     System.require(treasuryAmount > 0, "SHOP: treasury amount is zero");
 
+    // Security fix M1: check the outcome, not the token's answer.
+    // Read both balances first, move the money, then read them again.
+    // Treasury and founder may be the same wallet (common on a testnet),
+    // so in that case the whole price must arrive at that one address.
+    const sameWallet = Arrays.equal(treasury, founder);
+    const founderLeg = founderAmount > 0 && !sameWallet;
+    const treasuryBefore = this.readBalance(assetId, treasury);
+    const founderBefore = founderLeg ? this.readBalance(assetId, founder) : 0;
+
     this.transferToken(assetId, payer, treasury, treasuryAmount);
     if (founderAmount > 0) {
       this.transferToken(assetId, payer, founder, founderAmount);
+    }
+
+    const treasuryAfter = this.readBalance(assetId, treasury);
+    const treasuryExpected = sameWallet ? price : treasuryAmount;
+    System.require(
+      treasuryAfter >= treasuryBefore && treasuryAfter - treasuryBefore == treasuryExpected,
+      "SHOP: stablecoin payment did not arrive"
+    );
+    if (founderLeg) {
+      const founderAfter = this.readBalance(assetId, founder);
+      System.require(
+        founderAfter >= founderBefore && founderAfter - founderBefore == founderAmount,
+        "SHOP: stablecoin payment did not arrive"
+      );
     }
     if (inkAmount > 0) {
       this.mintInk(payer, inkAmount, inkReason, memo);
@@ -731,6 +792,16 @@ export class Shop {
     const args = new token.transfer_arguments(from, to, amount);
     const payload = Protobuf.encode(args, token.transfer_arguments.encode);
     this.callOut(assetId, TOKEN_TRANSFER_ENTRY, payload, [from, to], "SHOP: stablecoin transfer failed");
+  }
+
+  // A read of the token's own ledger. An empty answer means a balance of 0.
+  private readBalance(assetId: Uint8Array, owner: Uint8Array): u64 {
+    const args = new token.balance_of_arguments(owner);
+    const res = System.call(assetId, TOKEN_BALANCE_OF_ENTRY, Protobuf.encode(args, token.balance_of_arguments.encode));
+    System.require(res.code == 0, "SHOP: could not read the stablecoin balance");
+    const raw = res.res.object;
+    if (raw == null || raw!.length == 0) return 0;
+    return Protobuf.decode<token.balance_of_result>(raw!, token.balance_of_result.decode).value;
   }
 
   private mintInk(to: Uint8Array, amount: u64, reason: u32, memo: string): void {
@@ -788,10 +859,43 @@ export class Shop {
   }
 
   private requireAdmin(): void {
+    this.requireDirectCall();
     System.require(
       System.checkAuthority(authority.authorization_type.contract_call, this.getAdmin()),
       "SHOP: admin authority required"
     );
+  }
+
+  // Security fix H1. A transaction that calls Shop itself has no calling
+  // contract. Anything else is another app acting in the user's name.
+  private requireDirectCall(): void {
+    const caller = System.getCaller().caller;
+    System.require(
+      caller == null || caller.length == 0,
+      "SHOP: call SwarmTales directly from your wallet, not through another contract"
+    );
+  }
+
+  // The 32-byte multihash digest the link key signed.
+  private promoDigest(campaignId: u64, account: Uint8Array): Uint8Array {
+    const domain = StringBytes.stringToBytes(PROMO_DOMAIN);
+    const id = this.idKey(campaignId);
+    const msg = new Uint8Array(domain.length + ADDRESS_LENGTH + 8 + ADDRESS_LENGTH);
+    memory.copy(msg.dataStart, domain.dataStart, domain.length);
+    memory.copy(msg.dataStart + domain.length, this.contractId.dataStart, ADDRESS_LENGTH);
+    memory.copy(msg.dataStart + domain.length + ADDRESS_LENGTH, id.dataStart, 8);
+    memory.copy(msg.dataStart + domain.length + ADDRESS_LENGTH + 8, account.dataStart, ADDRESS_LENGTH);
+    const digest = System.hash(Crypto.multicodec.sha2_256, msg);
+    System.require(digest != null, "SHOP: could not hash the promo link");
+    return digest!;
+  }
+
+  // The signature must recover to the stored link key address.
+  private requireLinkSignature(signer: Uint8Array, digest: Uint8Array, signature: Uint8Array | null, message: string): void {
+    System.require(signature != null && signature.length == SIGNATURE_LENGTH, message);
+    const pub = System.recoverPublicKey(signature!, digest);
+    System.require(pub != null, message);
+    System.require(Arrays.equal(Crypto.addressFromPublicKey(pub!), signer), message);
   }
 
   private requireNotPaused(): void {
@@ -908,31 +1012,6 @@ export class Shop {
     memory.copy(key.dataStart, id.dataStart, 8);
     memory.copy(key.dataStart + 8, hash.dataStart, hash.length);
     return key;
-  }
-
-  // System.hash returns a multihash (code, length, digest). Store the
-  // raw 32-byte sha256 so the code itself is not kept on chain.
-  private sha256(value: string): Uint8Array {
-    const wrapped = System.hash(Crypto.multicodec.sha2_256, StringBytes.stringToBytes(value));
-    System.require(wrapped != null, "SHOP: could not hash promo code");
-    const bytes = wrapped!;
-    let i = 0;
-    while (i < bytes.length) {
-      const bite = bytes[i];
-      i++;
-      if ((bite & 0x80) == 0) break;
-    }
-    let size: u64 = 0;
-    let shift: u8 = 0;
-    while (i < bytes.length) {
-      const bite = bytes[i];
-      i++;
-      size = size | ((<u64>(bite & 0x7f)) << shift);
-      if ((bite & 0x80) == 0) break;
-      shift = <u8>(shift + 7);
-    }
-    System.require(size == 32 && i + 32 <= bytes.length, "SHOP: unexpected promo hash");
-    return bytes.slice(i, i + 32);
   }
 
   private requireCampaign(id: u64): shop.campaign {

@@ -323,7 +323,15 @@ export class Ink {
     return caller!;
   }
 
+  // Admin actions must come straight from a transaction (security fix H1).
+  // Koinos' signature check alone would also pass when some other contract,
+  // which the admin signed a transaction for, calls in the admin's name.
   private requireAdmin(): void {
+    const caller = System.getCaller().caller;
+    System.require(
+      caller == null || caller.length == 0,
+      "INK: call SwarmTales directly from your wallet, not through another contract"
+    );
     System.require(
       System.checkAuthority(authority.authorization_type.contract_call, this.getAdmin()),
       "INK: admin authority required"
