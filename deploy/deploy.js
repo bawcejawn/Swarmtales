@@ -497,13 +497,15 @@ async function cmdUserChecks(args) {
     ["User claims next month's Writer Ink early (nothing is due yet)",
       () => shopC.encodeOperation({ name: "claim_writer_ink", args: { account: user } })],
   ];
-  // A random, unrelated signature: it recovers to some address, but never
-  // the campaign's link key, so the contract must reject it.
-  const bogusSig = new Uint8Array(65);
-  bogusSig[0] = 31;
-  for (let i = 1; i < 65; i++) bogusSig[i] = (i * 7) & 0xff;
+  // A real, well-formed signature from a throwaway key that is NOT the
+  // campaign's link key. The network accepts its shape, so the refusal has
+  // to come from the Shop's own link check ("promo link rejected").
+  const { Signer: ProbeSigner } = koilib();
+  const probeKey = ProbeSigner.fromSeed("swarmtales-user-checks-probe-" + Date.now() + "-" + Math.random());
+  const probeMessage = lib.promoMessage(koilib().utils.decodeBase58(shop), String(f.campaign || "1"), koilib().utils.decodeBase58(user));
+  const bogusSig = await probeKey.signHash(lib.sha256(probeMessage));
   if (f.campaign) {
-    checks.push(["Claim a promo with a signature that is not from the campaign's link key",
+    checks.push(["Claim a promo with a signature from the wrong link key (the Shop must say \"promo link rejected\")",
       () => shopC.encodeOperation({ name: "claim_promo", args: { account: user, campaign_id: String(f.campaign), signer: "", signature: koilib().utils.encodeBase64url(bogusSig) } })]);
   }
 

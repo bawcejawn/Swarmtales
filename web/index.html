@@ -3,15 +3,27 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="SwarmTales on the Koinos testnet. Read and write group stories. Ink is a writing allowance, not money." />
-    <title>SwarmTales</title>
+    <title>SwarmTales · Stories written by many hands</title>
+    <meta name="description" content="SwarmTales is collaborative fiction: read a chapter, then write the next part. Reading is free. Every contribution is credited on the Koinos blockchain." />
+    <meta name="theme-color" content="#F7F6F2" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="SwarmTales" />
+    <meta property="og:title" content="SwarmTales · Stories written by many hands" />
+    <meta property="og:description" content="Read a chapter, then write the next part. When a story is full, it becomes a finished book with everyone's name in the credits." />
+    <meta name="twitter:card" content="summary" />
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="./src/style.css" />
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <main class="prerender">
+        <h1>SwarmTales</h1>
+        <p>Stories written by many hands. Read a chapter, then write the next part. When a story is full, it becomes a finished book with everyone's name in the credits.</p>
+        <p>Reading is free. Writing uses Ink, a writing allowance with no cash value that can't be sold, sent, or traded.</p>
+      </main>
+    </div>
     <noscript>
-      <p>SwarmTales needs JavaScript. It still does not use a server: the page talks to the public Koinos node from your browser.</p>
+      <p class="prerender">SwarmTales reads stories straight from the public Koinos network in your browser, so it needs JavaScript turned on.</p>
     </noscript>
     <script type="module" src="./src/main.js"></script>
   </body>

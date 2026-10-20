@@ -35,11 +35,15 @@ export const NETWORKS = {
 
 export const ACTIVE = "testnet";
 
-/** Addresses that were live on the Foundation testnet when this page was written. */
+/**
+ * The security-fixed contracts, deployed fresh to the Foundation testnet on
+ * 19 October 2026 (rehearsal in docs/TESTNET_REHEARSAL.md). The older,
+ * pre-fix copies (195trf…, 1Jfgg…, 1JHak…) are no longer used by this site.
+ */
 export const TESTNET_ADDRESSES = {
-  ink: "195trftAvPnqeoPmHeGmxtwNYVUVdghm5x",
-  shop: "1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth",
-  stories: "1JHakWJRXpAExjEuBik1posc8PXYYpugeN",
+  ink: "1EbuyYK1kso7GbZamHCU2LRhXaEyePkXpf",
+  shop: "14zbNPeH6Janw4gneuEhieXVmaQBsk8WDD",
+  stories: "15YAvNkBACg7PpiEkCYVN95fnajbp1EkwZ",
   treasury: "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6",
   paymentToken: "1FaSvLjQJsCJKq5ybmGsMMQs8RQYyVv8ju",
 };
