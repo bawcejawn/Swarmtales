@@ -114,3 +114,20 @@ export function buildPromoLink(base, campaignId, secret) {
 export function buildInviteLink(base, storyId, inviteId, secret) {
   return base + "#/join/" + storyId + "/" + inviteId + "?k=" + encodeURIComponent(secret);
 }
+
+/**
+ * Which invite holds this link's key (AB-008). Looks at the story's invites
+ * from `before` (next_invite_id read before sending) up to the current
+ * counter, and returns the id whose link_signer is `linkSigner`, or null.
+ * The id is read back from the chain, never guessed, so a link is only
+ * shown for an invite that exists and opens with this key.
+ */
+export async function findInviteId({ before, linkSigner, readInvite, readNextId, max = 20 }) {
+  const first = Math.max(1, Number(before) || 1);
+  const next = Number(await readNextId().catch(() => 0)) || 0;
+  for (let id = first; id < next && id < first + max; id++) {
+    const invite = await readInvite(id).catch(() => null);
+    if (invite && invite.link_signer === linkSigner) return id;
+  }
+  return null;
+}

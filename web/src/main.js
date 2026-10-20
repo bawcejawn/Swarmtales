@@ -38,7 +38,7 @@ import {
   saveSession,
 } from "./wallet.js";
 import { fetchVaultConfig, vaultManaDecision, vaultPairingDecision } from "./lib/vaultApi.js";
-import { buildInviteLink, generateLinkKey, linkSecretFromHash, signInviteJoin, signPromoClaim } from "./lib/links.js";
+import { buildInviteLink, findInviteId, generateLinkKey, linkSecretFromHash, signInviteJoin, signPromoClaim } from "./lib/links.js";
 import { createTestWallet, storedTestAddress } from "./testWallet.js";
 import { append, h, icons, replace } from "./ui/dom.js";
 import { renderHowSections } from "./ui/how.js";
@@ -2423,9 +2423,17 @@ function sharePanel(id, story, me, flags) {
           opener: me, story_id: String(id), link_signer: key.address, max_uses: n, expires_at: expires,
         });
         const before = Number((await read("stories", "get_story", { story_id: String(id) })).next_invite_id || 1);
-        if (await send([op], status)) {
-          // The invite id is the story's invite counter before this one.
-          const inviteId = before || 1;
+        const sent = await send([op], status);
+        // Read the invite back and use the id that holds this link's key
+        // (AB-008): never a link for an invite that isn't on the record.
+        const showLink = async () => {
+          const inviteId = await findInviteId({
+            before,
+            linkSigner: key.address,
+            readNextId: async () => Number((await read("stories", "get_story", { story_id: String(id) })).next_invite_id || 0),
+            readInvite: (n) => read("stories", "get_invite", { story_id: String(id), invite_id: String(n) }),
+          });
+          if (!inviteId) return false;
           const invite = buildInviteLink(siteBase(), id, inviteId, key.secret);
           replace(out,
             notice("ok", [
@@ -2435,7 +2443,31 @@ function sharePanel(id, story, me, flags) {
             h("div", { class: "row" }, [copyButton(invite, "Copy invite link")]),
             h("p", { class: "meta small" }, ["Copy it now: this page can't show it again. Anyone who has it can join, so send it privately."])
           );
-        }
+          return true;
+        };
+        if (sent && await showLink()) return;
+        // Not confirmed yet, or not found: this page still holds the link's
+        // key, so the opener can look again instead of losing the link.
+        const stillMissing = h("p", { class: "meta small" });
+        const again = h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: async () => {
+          again.disabled = true;
+          stillMissing.textContent = "";
+          try {
+            if (!(await showLink())) stillMissing.textContent = "It isn't on the record yet. Try again in a minute.";
+          } catch (error) {
+            stillMissing.textContent = explainFailure(error);
+          } finally {
+            again.disabled = false;
+          }
+        } }, ["Look for the invite again"]);
+        replace(out,
+          notice("warn", h("p", {}, [
+            sent ? "The invite was sent, but we couldn't find it on the record yet." : "This invite isn't confirmed, so there's no link to share yet.",
+            " Keep this page open and look again in a minute. If it never appears, create a new invite: this one's link can't be used.",
+          ])),
+          h("div", { class: "row" }, [again]),
+          stillMissing
+        );
       } catch (error) {
         failure(status, error);
       } finally {
