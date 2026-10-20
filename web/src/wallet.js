@@ -35,7 +35,7 @@ export function loadSavedSession() {
     const raw = sessionStorage.getItem(SESSION_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    if (!parsed || (parsed.kind !== "kondor" && parsed.kind !== "koinvault")) return null;
+    if (!parsed || (parsed.kind !== "kondor" && parsed.kind !== "koinvault" && parsed.kind !== "testwallet")) return null;
     return parsed;
   } catch {
     return null;

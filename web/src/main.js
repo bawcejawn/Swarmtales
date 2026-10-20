@@ -32,15 +32,19 @@ import {
   createKondorWallet,
   createVaultWallet,
   loadSavedSession,
+  saveSession,
 } from "./wallet.js";
 import { fetchVaultConfig, vaultManaDecision, vaultPairingDecision } from "./lib/vaultApi.js";
 import { linkSecretFromHash, signInviteJoin, signPromoClaim } from "./lib/links.js";
+import { createTestWallet, storedTestAddress } from "./testWallet.js";
 import { append, h, icons, replace } from "./ui/dom.js";
 import { renderHowSections } from "./ui/how.js";
 
 const problems = configProblems();
 const kondor = createKondorWallet();
 const vault = createVaultWallet(network);
+// Testnet only: null on mainnet, so none of its screens appear there.
+const testWallet = createTestWallet(network);
 const KONDOR_STORE = "https://chrome.google.com/webstore/detail/kondor/ghipkefkpgkladckmlmdnadmcchefhjl";
 
 const state = {
@@ -106,6 +110,7 @@ function currentAddress() {
 }
 
 function walletName() {
+  if (state.wallet && state.wallet.id === "testwallet") return "Test wallet";
   return state.wallet && state.wallet.id === "koinvault" ? "KOIN Vault" : "Kondor";
 }
 
@@ -419,7 +424,10 @@ async function start() {
     state.chainError = explainFailure(error);
   }
   const saved = loadSavedSession();
-  if (saved && saved.kind === "kondor") {
+  if (saved && saved.kind === "testwallet" && testWallet) {
+    testWallet.restore();
+    state.wallet = testWallet.getAddress() ? testWallet : null;
+  } else if (saved && saved.kind === "kondor") {
     kondor.restore(saved);
     state.wallet = kondor;
   } else if (saved && saved.kind === "koinvault") {
@@ -1026,6 +1034,9 @@ function aiToggle() {
 }
 
 function walletNote() {
+  if (state.wallet && state.wallet.id === "testwallet") {
+    return h("p", { class: "meta small" }, ["Signed by the test wallet in this browser. It needs tKOIN for mana."]);
+  }
   if (state.wallet && state.wallet.id === "koinvault") {
     const decision = state.account ? vaultManaDecision(state.account.mana, VAULT_MANA_CEILING) : null;
     return h("p", { class: "meta small" }, [decision && decision.blocked ? decision.message : VAULT_MANA_EXPLANATION]);
@@ -1588,6 +1599,7 @@ async function send(operations, status) {
     : null;
   if (manaDecision && manaDecision.blocked) throw new Error(manaDecision.message);
   replace(status, notice("info", h("p", {}, [
+    state.wallet.id === "testwallet" ? "Signing with the test wallet and sending…" :
     state.wallet.id === "koinvault" ? "Sending the request to KOIN Vault…" : "Kondor should open now. Check the details, then confirm. " + KONDOR_HINT,
   ])));
   const sent = await state.wallet.signAndSend(operations, {
@@ -1652,7 +1664,8 @@ function renderDialog() {
     }
     append(connected, h("div", { class: "row" }, [state.wallet.id === "kondor" ? h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: () => connectKondor(true) }, ["Use a different account"]) : null, h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: async () => {
       await state.wallet.disconnect();
-      if (state.wallet === kondor || state.wallet === vault) state.wallet = null;
+      if (state.wallet === kondor || state.wallet === vault || state.wallet === testWallet) state.wallet = null;
+      clearSavedSession();
       state.account = null;
       renderChip();
       renderDialog();
@@ -1661,6 +1674,7 @@ function renderDialog() {
     append(body, connected);
   }
   append(body, kondorSection());
+  if (testWallet) append(body, testWalletSection());
   append(body, h("div", { class: "wallet-option" }, [h("h3", {}, ["KOIN Vault"]), vaultSection()]));
   replace(dialog, body);
 }
@@ -1786,9 +1800,76 @@ async function chooseKondorAccount(address) {
   }
 }
 
+/** Testnet only: a throwaway key kept in this browser. */
+function testWalletSection() {
+  const existing = storedTestAddress();
+  const using = state.wallet === testWallet;
+  const box = h("div", { class: "wallet-option" }, [
+    h("h3", {}, ["Test wallet (testnet only)"]),
+    h("p", {}, [
+      "A throwaway wallet kept in this browser, for trying SwarmTales without an extension. ",
+      "It only exists on the testnet. Only ever send it test KOIN (tKOIN).",
+    ]),
+  ]);
+  if (existing) {
+    append(box,
+      h("p", { class: "meta" }, ["Address (send tKOIN here so it has mana):"]),
+      h("p", { class: "mono" }, [existing]),
+      h("div", { class: "row" }, [
+        using ? null : h("button", { type: "button", class: "btn btn-primary btn-small", onClick: useTestWallet }, ["Use the test wallet"]),
+        h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: async () => {
+          try {
+            await navigator.clipboard.writeText(existing);
+          } catch {
+            /* the address is shown above */
+          }
+        } }, ["Copy address"]),
+      ]),
+      h("details", { class: "more-options" }, [
+        h("summary", {}, ["Forget this test wallet"]),
+        h("p", { class: "meta" }, ["This deletes the key from this browser. Any tKOIN, Ink or stories on it can't be used again. There's no undo."]),
+        h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: () => {
+          testWallet.forget();
+          if (state.wallet === testWallet) {
+            state.wallet = null;
+            state.account = null;
+            clearSavedSession();
+          }
+          renderChip();
+          renderDialog();
+          renderPage();
+        } }, ["Delete the test key"]),
+      ])
+    );
+  } else {
+    append(box,
+      h("p", { class: "meta" }, ["After you create it, send it some tKOIN from Kondor's own Send screen. Holding tKOIN gives it mana, so it can sign."]),
+      h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: useTestWallet }, ["Create a test wallet"])
+    );
+  }
+  return box;
+}
+
+async function useTestWallet() {
+  try {
+    if (vault.getAddress() || vault.getPairingUri()) await vault.disconnect();
+    state.vaultInfo = null;
+    state.kondorAccounts = null;
+    await testWallet.connect();
+    state.wallet = testWallet;
+    saveSession({ kind: "testwallet" });
+    await refreshAccount();
+    renderDialog();
+    renderPage();
+  } catch (error) {
+    const body = dialog.querySelector(".sheet-body") || dialog;
+    append(body, notice("bad", h("p", {}, [explainFailure(error)])));
+  }
+}
+
 async function connectVault() {
   try {
-    if (state.wallet === kondor) {
+    if (state.wallet === kondor || state.wallet === testWallet) {
       await kondor.disconnect();
       state.wallet = null;
       state.account = null;
