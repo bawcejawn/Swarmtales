@@ -7,7 +7,7 @@ import "@fontsource/ibm-plex-sans/latin-600.css";
 import "./style.css";
 
 import { utils } from "koilib";
-import { contracts, configProblems, network } from "./config.js";
+import { SITE, contracts, configProblems, network } from "./config.js";
 import {
   encode,
   listStories,
@@ -15,6 +15,7 @@ import {
   loadOverview,
   loadStory,
   lookupTransaction,
+  hasReported,
   quoteCost,
   read,
   verifyChain,
@@ -24,7 +25,7 @@ import { explainFailure } from "./lib/errors.js";
 import { KIND, STORY_STATUS, TIER, VISIBILITY, label } from "./lib/labels.js";
 import { VAULT_MANA_CEILING, formatMana, formatUnits, formatUtc, kondorManaNote, shortAddress } from "./lib/money.js";
 import { assessOpen, assessPromo, assessWrite, assessWriterBuy, isActiveWriter } from "./lib/rules.js";
-import { checkStoryText, inkCost } from "./lib/text.js";
+import { MAX_PARTS_PER_SIGNATURE, checkStoryText, inkCost, normalizePasted, splitIntoParts } from "./lib/text.js";
 import {
   kondorHint,
   VAULT_MANA_EXPLANATION,
@@ -39,6 +40,7 @@ import { linkSecretFromHash, signInviteJoin, signPromoClaim } from "./lib/links.
 import { createTestWallet, storedTestAddress } from "./testWallet.js";
 import { append, h, icons, replace } from "./ui/dom.js";
 import { renderHowSections } from "./ui/how.js";
+import { renderMarkdown } from "./ui/markdown.js";
 
 const problems = configProblems();
 const kondor = createKondorWallet();
@@ -99,6 +101,8 @@ function route() {
   if (parts[0] === "stories" || parts[0] === "discover") return { name: "discover" };
   if (parts[0] === "open") return { name: "open" };
   if (parts[0] === "how") return { name: "how" };
+  if (parts[0] === "terms") return { name: "terms" };
+  if (parts[0] === "report") return { name: "report" };
   if (parts[0] === "shop" || parts[0] === "membership") return { name: "membership" };
   if (parts[0] === "promo" && isId(parts[1])) return { name: "promo", campaign: parts[1] };
   if (parts[0] === "join" && isId(parts[1]) && isId(parts[2])) return { name: "join", storyId: parts[1], inviteId: parts[2] };
@@ -270,7 +274,7 @@ async function firstLine(id) {
   try {
     const page = await read("stories", "get_segments", { story_id: String(id), start: "1", limit: 3 });
     const values = page && Array.isArray(page.values) ? page.values : [];
-    const first = values.find((segment) => Number(segment.status) !== 2);
+    const first = values.find((segment) => Number(segment.status) !== 2 && !segment.hidden);
     text = first ? String(first.text || "") : "";
   } catch {
     text = "";
@@ -360,7 +364,12 @@ function boot() {
           "Ink is a writing allowance for SwarmTales. It has no cash value and can't be sold, sent, or traded. SwarmTales is for creative fun, not investment. ",
           "This site is a set of static pages: it reads the public Koinos network from your browser, and you sign with your own wallet. It never asks for a private key.",
         ]),
-        h("p", {}, [h("a", { href: "#/how" }, ["How it works"]), " · ", h("a", { href: "https://github.com/bawcejawn/Swarmtales", rel: "noopener" }, ["Source code"])]),
+        h("p", {}, [
+          h("a", { href: "#/how" }, ["How it works"]), " · ",
+          h("a", { href: "#/terms" }, ["Terms of Use"]), " · ",
+          h("a", { href: "#/report" }, ["Report copied text"]), " · ",
+          h("a", { href: "https://github.com/bawcejawn/Swarmtales", rel: "noopener" }, ["Source code"]),
+        ]),
         h("details", {}, [
           h("summary", {}, ["Contract addresses on " + network.name]),
           h("dl", { class: "addr-list" }, [
@@ -462,6 +471,8 @@ function renderPage() {
   else if (here.name === "promo") renderPromo(page, here.campaign);
   else if (here.name === "join") renderJoin(page, here.storyId, here.inviteId);
   else if (here.name === "how") renderHow(page);
+  else if (here.name === "terms") renderTerms(page);
+  else if (here.name === "report") renderReportPage(page);
   else renderHome(page);
   const heading = page.querySelector("h1");
   if (heading) heading.setAttribute("tabindex", "-1");
@@ -738,7 +749,8 @@ function renderReader(page, id) {
       if (Number(segment.status) === 2) removed.push(block);
       else active.push(block);
     });
-    const firstText = active.length ? active[0].segment.text : "";
+    const firstVisible = active.find((b) => !b.segment.hidden);
+    const firstText = firstVisible ? firstVisible.segment.text : "";
     setMeta(story.title || "Untitled story", clip(firstText, 155) || "A collaborative story on SwarmTales.");
 
     // Chapters: a new chapter starts at the first part and at every part marked starts_chapter.
@@ -801,11 +813,11 @@ function renderReader(page, id) {
     if (!chapters.length) append(article, h("div", { class: "empty" }, [h("p", {}, ["No text has been written yet."])]));
     chapters.forEach((chapter, i) => {
       append(article, h("h3", { class: "chapter-title" + (i === 0 ? " first" : ""), id: "chapter-" + chapter.number }, ["Chapter " + chapter.number]));
-      for (const block of chapter.blocks) append(article, segmentView(block, story));
+      for (const block of chapter.blocks) append(article, segmentView(block, story, id));
     });
     if (removed.length) {
       const details = h("details", { class: "removed" }, [h("summary", {}, [plural(removed.length, "removed part") + " (kept on the record)"])]);
-      for (const block of removed) append(details, segmentView(block, story));
+      for (const block of removed) append(details, segmentView(block, story, id));
       append(article, details);
     }
 
@@ -862,25 +874,132 @@ function renderReader(page, id) {
   });
 }
 
-function segmentView(block, story) {
+const REASON_LABELS = {
+  1: "copied from someone else's work",
+  2: "a duplicate of text already on SwarmTales",
+  3: "spam",
+  4: "unlawful or abusive content",
+  5: "a policy problem",
+};
+
+function segmentView(block, story, storyId) {
   const segment = block.segment;
   const author = segment.author || "";
-  const edited = segment.last_edited_by && segment.last_edited_by !== "" && Number(segment.last_edited_at || 0) > 0;
+  const removed = Number(segment.status) === 2;
+  const edited = !removed && segment.last_edited_by && segment.last_edited_by !== "" && Number(segment.last_edited_at || 0) > 0;
   const notes = [];
-  if (edited) {
-    notes.push(h("span", { class: "edit-note" }, [
-      "Edited by " + shortAddress(segment.last_edited_by) + (formatUtc(segment.last_edited_at) ? " on " + formatUtc(segment.last_edited_at).split(",")[0] : "") +
-        ". Credit stays with " + shortAddress(author) + "; the first version is kept on the public record.",
-    ]));
+  let body;
+  if (removed) {
+    const why = segment.taken_down
+      ? "Removed for good: " + (REASON_LABELS[Number(segment.moderation_reason)] || "a policy problem") + "."
+      : "Removed by the story's editor.";
+    body = h("p", { class: "seg-text seg-placeholder" }, [why]);
+  } else if (segment.hidden) {
+    body = h("p", { class: "seg-text seg-placeholder" }, [
+      "This part is hidden while it's checked" + (REASON_LABELS[Number(segment.moderation_reason)] ? " (possibly " + REASON_LABELS[Number(segment.moderation_reason)] + ")" : "") + ".",
+    ]);
+  } else {
+    body = h("p", { class: "seg-text" }, [segment.text || ""]);
+    if (edited) {
+      notes.push(h("span", { class: "edit-note" }, [
+        "Edited by " + shortAddress(segment.last_edited_by) + (formatUtc(segment.last_edited_at) ? " on " + formatUtc(segment.last_edited_at).split(",")[0] : "") +
+          ". Credit stays with " + shortAddress(author) + "; the first version is kept on the public record.",
+      ]));
+    }
+    if (segment.ai_assisted) notes.push(h("span", { class: "tag-ai" }, ["Written with AI help"]));
+    if (author !== currentAddress()) notes.push(reportControl(storyId, block.index));
   }
-  if (segment.ai_assisted) notes.push(h("span", { class: "tag-ai" }, ["Written with AI help"]));
-  return h("div", { class: "seg" }, [
+  return h("div", { class: "seg" + (removed || segment.hidden ? " seg-muted" : "") }, [
     h("p", { class: "seg-author" }, [h("b", {}, [shortAddress(author)]), h("span", {}, [(author === story.opener ? "opener · " : "") + num(segment.current_cost || segment.charged) + " Ink"])]),
-    h("div", {}, [
-      h("p", { class: "seg-text" }, [segment.text || ""]),
-      notes.length ? h("div", { class: "seg-notes" }, notes) : null,
+    h("div", {}, [body, notes.length ? h("div", { class: "seg-notes" }, notes) : null]),
+  ]);
+}
+
+/** "Report" under a part: a small form that logs the report on the blockchain. */
+function reportControl(storyId, seq) {
+  const wrap = h("span", { class: "report" });
+  const open = h("button", { type: "button", class: "text-button report-toggle", "aria-expanded": "false" }, ["Report"]);
+  append(wrap, open);
+  open.addEventListener("click", async () => {
+    if (wrap.querySelector(".report-form")) {
+      wrap.querySelector(".report-form").remove();
+      open.setAttribute("aria-expanded", "false");
+      return;
+    }
+    open.setAttribute("aria-expanded", "true");
+    const panel = h("div", { class: "report-form card" });
+    append(wrap, panel);
+    const address = currentAddress();
+    if (!address) {
+      append(panel,
+        h("p", { class: "body-2" }, ["Connect a wallet to report this part. Reports are recorded on the blockchain."]),
+        h("div", { class: "row" }, [connectButton(), h("a", { href: "#/report" }, ["Own the copyright? Send a notice instead"])])
+      );
+      return;
+    }
+    if (await hasReported(storyId, seq, address)) {
+      append(panel, h("p", { class: "body-2" }, ["You've already reported this part. Thank you."]));
+      return;
+    }
+    const reason = h("select", {}, [
+      h("option", { value: "1" }, ["Copied from someone else's work"]),
+      h("option", { value: "3" }, ["Spam"]),
+      h("option", { value: "4" }, ["Unlawful or abusive"]),
+      h("option", { value: "5" }, ["Something else"]),
+    ]);
+    const note = h("input", { type: "text", maxlength: "200", placeholder: "Optional: where it's copied from, or what's wrong" });
+    const status = statusBox();
+    const sendButton = h("button", { type: "submit", class: "btn btn-secondary btn-small" }, ["Send report"]);
+    append(panel, h("form", { onSubmit: async (event) => {
+      event.preventDefault();
+      sendButton.disabled = true;
+      try {
+        const clean = normalizePasted(note.value).replace(/\n/g, " ").trim();
+        if (clean && !checkStoryText(clean, false).ok) throw new Error("The note has characters that aren't allowed. Use plain text.");
+        const op = await encode("stories", "report_segment", {
+          reporter: address,
+          story_id: String(storyId),
+          seq: String(seq),
+          reason: Number(reason.value),
+          note: clean,
+        });
+        const sent = await send([op], status);
+        if (sent) replace(panel, h("p", { class: "body-2" }, ["Reported. Thank you. If enough writers report it, it's hidden while it's checked."]));
+      } catch (error) {
+        failure(status, error);
+      } finally {
+        sendButton.disabled = false;
+      }
+    } }, [
+      field("Why are you reporting it?", reason),
+      field("Details", note, "Up to 200 characters. Reports are public."),
+      h("div", { class: "actions" }, [sendButton, h("a", { href: "#/report" }, ["How reports work"])]),
+      status,
+    ]));
+  });
+  return wrap;
+}
+
+/** The required "I wrote this" confirmation, with a link to the Terms. */
+function rightsBox() {
+  const input = h("input", { type: "checkbox", required: true });
+  const version = termsVersion();
+  const node = h("div", { class: "rights" }, [
+    h("label", { class: "check" }, [input, h("span", {}, [
+      h("b", {}, ["I wrote this myself, or I have the right to use it."]),
+      " Any short quotes are credited.",
+    ])]),
+    h("p", { class: "meta small" }, [
+      "Required for every part. Copied text is hidden or removed, without a refund. ",
+      h("a", { href: "#/terms" }, ["Terms of Use" + (version ? " (version " + version + ")" : "")]),
     ]),
   ]);
+  return { input, node };
+}
+
+function termsVersion() {
+  const cfg = state.overview && state.overview.storiesCfg;
+  return cfg && cfg.terms_version ? Number(cfg.terms_version) : 0;
 }
 
 function composer(id, story, active) {
@@ -912,8 +1031,19 @@ function composer(id, story, active) {
     append(box, state.accountError ? notice("bad", h("p", {}, [state.accountError])) : loadingLine("Reading your Ink…"));
     return box;
   }
+  if (state.account.blocked) {
+    append(box, notice("warn", h("p", {}, ["This wallet can no longer write on SwarmTales, after repeated takedowns of copied text. ", h("a", { href: "#/terms" }, ["Terms of Use"])])));
+    return box;
+  }
 
   const area = h("textarea", { rows: "8", spellcheck: "true", "aria-describedby": "compose-count" });
+  area.addEventListener("paste", () => setTimeout(() => {
+    const tidy = normalizePasted(area.value);
+    if (tidy !== area.value) {
+      area.value = tidy;
+      update();
+    }
+  }, 0));
   const chapter = h("input", { type: "checkbox" });
   const aiBox = aiToggle();
   const ai = aiBox.input;
@@ -921,19 +1051,28 @@ function composer(id, story, active) {
   const shortText = h("span");
   const space = Math.max(0, Number(story.max_chars || 0) - Number(story.used_chars || 0));
   const min = Number(minContribution());
+  const cap = Number(state.overview.storiesCfg.contribution_cap || 2000);
+  const rights = rightsBox();
+  const splitNote = h("span");
+  const partsFor = (text) => splitIntoParts(text, cap, min, inkCost(normalizePasted(text).trim()) === space);
   const list = h("div");
   const status2 = statusBox();
   const button = h("button", { type: "submit", class: "btn btn-primary" }, ["Sign and add to the story"]);
 
   function update() {
-    const text = area.value;
-    const check = checkStoryText(text, true);
-    const cost = text ? inkCost(text) : 0;
+    const text = normalizePasted(area.value).trim();
+    const parts = text ? partsFor(text) : [];
+    const cost = parts.reduce((sum, p) => sum + inkCost(p), 0);
     costText.textContent = num(cost) + " Ink";
+    const bad = parts.map((p) => checkStoryText(p, true)).find((c) => !c.ok);
     if (!text) shortText.textContent = min ? "At least " + min + " characters" : "";
-    else if (!check.ok) shortText.textContent = check.reason;
+    else if (bad) shortText.textContent = bad.reason;
     else if (min && cost < min && cost !== space) shortText.textContent = num(min - cost) + " more to reach the " + min + "-character minimum";
     else shortText.textContent = "";
+    splitNote.textContent = parts.length > 1
+      ? "Long text: it will be added as " + parts.length + " parts in a row" +
+        (parts.length > MAX_PARTS_PER_SIGNATURE ? ". That's more than " + MAX_PARTS_PER_SIGNATURE + " at once; send the first part of it, then the rest." : ", with one confirmation.")
+      : "";
   }
   area.addEventListener("input", update);
   update();
@@ -945,9 +1084,11 @@ function composer(id, story, active) {
       h("span", {}, ["You have " + num(state.account.ink) + " Ink"]),
       h("span", {}, [num(space) + " characters left in this story"]),
       h("span", { "aria-live": "polite" }, [shortText]),
+      h("span", { "aria-live": "polite" }, [splitNote]),
     ]),
     h("label", { class: "check" }, [chapter, "Start a new chapter"]),
     aiBox.node,
+    rights.node,
     list,
     h("div", { class: "actions" }, [button, h("p", { class: "meta" }, ["Your wallet asks you to confirm. The Ink is used once your part is added."])]),
     walletNote(),
@@ -961,44 +1102,76 @@ function composer(id, story, active) {
     button.disabled = true;
     try {
       const flags = await writerFlags(id, address);
-      const plan = assessWrite({
-        text: area.value,
-        cap: state.overview.storiesCfg.contribution_cap,
-        maxChars: story.max_chars,
-        usedChars: story.used_chars || "0",
-        balance: state.account.ink,
-        status: story.status,
-        visibility: story.visibility,
-        privileged: story.opener === address || flags.editor,
-        allowed: flags.allowed,
-        writerActive: isActiveWriter(state.account.membership, state.account.now),
-        promoClaimed: state.account.promo !== "0",
-        trialUsed: state.account.trial,
-        trialLimit: state.overview.storiesCfg.trial_limit,
-        minContribution: minContribution(),
-      });
-      if (!plan.ok) {
-        append(list, problemsNotice(plan.problems));
-        if (plan.problems.some((p) => /Writer month|Ink balance|Trial/.test(p))) {
-          append(list, h("p", { class: "meta" }, [h("a", { href: "#/membership" }, ["Get more Ink on the Membership page"])]));
-        }
+      const text = normalizePasted(area.value).trim();
+      area.value = text;
+      const parts = partsFor(text);
+      if (parts.length > MAX_PARTS_PER_SIGNATURE) {
+        append(list, problemsNotice(["That's more than " + MAX_PARTS_PER_SIGNATURE + " parts at once (about " + num(cap * MAX_PARTS_PER_SIGNATURE) + " characters). Send the first part of your text, then the rest."]));
         return;
+      }
+      if (new Set(parts).size !== parts.length) {
+        append(list, problemsNotice(["Two of the parts would be exactly the same text. Each part has to be new."]));
+        return;
+      }
+      // Check each part in order, as the contract will.
+      let used = BigInt(story.used_chars || "0");
+      let balance = BigInt(state.account.ink || "0");
+      let trialUsed = BigInt(state.account.trial || "0");
+      const plans = [];
+      for (const part of parts.length ? parts : [""]) {
+        const plan = assessWrite({
+          text: part,
+          cap: state.overview.storiesCfg.contribution_cap,
+          maxChars: story.max_chars,
+          usedChars: used.toString(),
+          balance: balance.toString(),
+          status: story.status,
+          visibility: story.visibility,
+          privileged: story.opener === address || flags.editor,
+          allowed: flags.allowed,
+          writerActive: isActiveWriter(state.account.membership, state.account.now),
+          promoClaimed: state.account.promo !== "0",
+          trialUsed: trialUsed.toString(),
+          trialLimit: state.overview.storiesCfg.trial_limit,
+          minContribution: minContribution(),
+          rightsConfirmed: rights.input.checked,
+          blocked: state.account.blocked,
+        });
+        if (!plan.ok) {
+          const where = parts.length > 1 ? ["Part " + (plans.length + 1) + " of " + parts.length + ":"] : [];
+          append(list, problemsNotice(where.concat(plan.problems)));
+          if (plan.problems.some((p) => /Writer month|Ink balance|Trial/.test(p))) {
+            append(list, h("p", { class: "meta" }, [h("a", { href: "#/membership" }, ["Get more Ink on the Membership page"])]));
+          }
+          return;
+        }
+        plans.push(plan);
+        const cost = BigInt(plan.cost);
+        used += cost;
+        balance -= cost;
+        if (plan.usesTrial) trialUsed += cost;
       }
       status2.textContent = "Checking the Ink count with the story contract…";
-      const quoted = await quoteCost(area.value);
-      if (quoted !== plan.cost) {
-        replace(status2, notice("warn", h("p", {}, ["The network counted " + quoted + " Ink and this page counted " + plan.cost + ". Nothing was signed."])));
+      const quoted = await Promise.all(parts.map((part) => quoteCost(part)));
+      const mismatch = quoted.findIndex((q, i) => q !== plans[i].cost);
+      if (mismatch >= 0) {
+        replace(status2, notice("warn", h("p", {}, ["The network counted " + quoted[mismatch] + " Ink and this page counted " + plans[mismatch].cost + ". Nothing was signed."])));
         return;
       }
-      const op = await encode("stories", "contribute", {
-        author: address,
-        story_id: String(id),
-        text: area.value,
-        starts_chapter: chapter.checked,
-        ai_assisted: ai.checked,
-        expected_ink: plan.cost,
-      });
-      const sent = await send([op], status2);
+      const ops = [];
+      for (let i = 0; i < parts.length; i++) {
+        ops.push(await encode("stories", "contribute", {
+          author: address,
+          story_id: String(id),
+          text: parts[i],
+          starts_chapter: i === 0 && chapter.checked,
+          ai_assisted: ai.checked,
+          expected_ink: plans[i].cost,
+          rights_confirmed: true,
+          terms_version: termsVersion(),
+        }));
+      }
+      const sent = await send(ops, status2);
       if (sent) {
         area.value = "";
         update();
@@ -1130,6 +1303,14 @@ function renderOpen(page) {
   const edition = h("input", { type: "number", min: "0", value: "1000", step: "100", inputmode: "numeric" });
   const opening = h("textarea", { rows: "8", spellcheck: "true" });
   const costLine = h("p", { class: "counter" }, ["0 Ink"]);
+  const openRights = rightsBox();
+  opening.addEventListener("paste", () => setTimeout(() => {
+    const tidy = normalizePasted(opening.value);
+    if (tidy !== opening.value) {
+      opening.value = tidy;
+      opening.dispatchEvent(new Event("input"));
+    }
+  }, 0));
   opening.addEventListener("input", () => {
     const check = checkStoryText(opening.value, true);
     costLine.textContent = !opening.value ? "0 Ink" : check.ok ? num(inkCost(opening.value)) + " Ink, paid from your starter Ink" : check.reason;
@@ -1151,6 +1332,7 @@ function renderOpen(page) {
     field("The first part", opening, "At least " + (Number(minContribution()) || 1) + " characters. Readers see this first."),
     costLine,
     aiBox.node,
+    openRights.node,
     h("details", { class: "more-options" }, [
       h("summary", {}, ["Reading preview and keepsake copies (optional)"]),
       h("p", { class: "meta" }, ["You can leave these as they are. Both are saved with the story now and take effect when memberships and finished books launch."]),
@@ -1170,6 +1352,7 @@ function renderOpen(page) {
     status.replaceChildren();
     button.disabled = true;
     try {
+      opening.value = normalizePasted(opening.value).trim();
       const plan = assessOpen({
         title: title.value,
         openingText: opening.value,
@@ -1188,6 +1371,8 @@ function renderOpen(page) {
         price: state.overview[kindInfo.priceKey],
         tokenBalance: state.account.token,
         minContribution: minContribution(),
+        rightsConfirmed: openRights.input.checked,
+        blocked: state.account.blocked,
       });
       if (!plan.ok) {
         append(list, problemsNotice(plan.problems));
@@ -1215,6 +1400,8 @@ function renderOpen(page) {
         ai_assisted: ai.checked,
         expected_ink: plan.cost,
         token: contracts.paymentToken,
+        rights_confirmed: true,
+        terms_version: termsVersion(),
       });
       const sent = await send([approve, open], status);
       if (sent) {
@@ -1560,6 +1747,116 @@ function renderJoin(page, storyId, inviteId) {
   }).catch((error) => {
     replace(card, notice("bad", h("p", {}, [explainFailure(error)])));
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* terms of use and reporting                                          */
+/* ------------------------------------------------------------------ */
+
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function chainTermsHashHex() {
+  const raw = state.overview && state.overview.storiesCfg && state.overview.storiesCfg.terms_hash;
+  if (!raw) return "";
+  try {
+    return Array.from(utils.decodeBase64url(raw), (b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return "";
+  }
+}
+
+function renderTerms(page) {
+  setMeta("Terms of Use", "The SwarmTales Terms of Use: your writing, what you may post, how copied text is handled, and Ink.");
+  const container = h("div", { class: "container page" });
+  const column = h("div", { class: "reader-column stack" }, [loadingLine("Loading the Terms of Use…")]);
+  append(page, container);
+  append(container, column);
+  const version = termsVersion() || 1;
+  fetch(SITE.termsPath + "v" + version + ".md", { cache: "no-cache" })
+    .then((res) => {
+      if (!res.ok) throw new Error("The Terms of Use file could not be loaded.");
+      return res.text();
+    })
+    .then(async (text) => {
+      const local = await sha256Hex(text).catch(() => "");
+      const onChain = chainTermsHashHex();
+      let check;
+      if (!onChain) {
+        check = notice("info", h("p", {}, ["These terms are not yet published on the blockchain. Once they are, this page checks that the text matches the published fingerprint."]));
+      } else if (onChain === local) {
+        check = notice("ok", h("p", {}, ["Version " + version + ". This text matches the fingerprint recorded on the blockchain, so it hasn't been changed since it was published."]));
+      } else {
+        check = notice("bad", h("p", {}, ["Warning: this text does not match the fingerprint recorded on the blockchain for version " + version + ". Please report this."]));
+      }
+      replace(column, ...renderMarkdown(text), check);
+    })
+    .catch((error) => replace(column, notice("bad", h("p", {}, [explainFailure(error)]))));
+}
+
+function renderReportPage(page) {
+  setMeta("Report copied text", "How to report copied text on SwarmTales, and how rights holders send a copyright notice.");
+  const email = SITE.copyrightEmail;
+  const container = h("div", { class: "container page" });
+  append(page, container);
+  append(container, h("div", { class: "reader-column stack" }, [
+    h("p", { class: "eyebrow" }, ["Keeping stories original"]),
+    h("h1", { class: "title" }, ["Report copied text"]),
+    h("p", { class: "lede" }, ["SwarmTales stories should be written by the people who post them. Here's how to tell us when something isn't."]),
+
+    h("section", { class: "how-section" }, [
+      h("h2", { class: "h3" }, ["If you're a reader or a writer"]),
+      h("p", { class: "body-2" }, ["Every part of a story has a small ", h("b", {}, ["Report"]), " link under it. Pick a reason and, if you like, say where it was copied from. Your report is recorded publicly on the blockchain."]),
+      h("ul", { class: "how-list" }, [
+        h("li", {}, ["Each wallet can report a part once."]),
+        h("li", {}, ["When three different wallets that have written on SwarmTales report the same part, it's hidden automatically while it's checked."]),
+        h("li", {}, ["An automated checker also compares new writing with other stories and with well-known books, and hides close matches."]),
+        h("li", {}, ["Hidden parts don't appear on SwarmTales, in the finished book, or in collectible editions."]),
+      ]),
+    ]),
+
+    h("section", { class: "how-section" }, [
+      h("h2", { class: "h3" }, ["If you own the copyright"]),
+      h("p", { class: "body-2" }, [
+        "Send a copyright notice by email to ",
+        email ? h("a", { href: "mailto:" + email }, [email]) : h("b", {}, ["(the contact address is being set up)"]),
+        ". You don't need a wallet. Please include:",
+      ]),
+      h("ol", { class: "how-list" }, [
+        h("li", {}, ["Your name, and your signature (typing your full name is fine)."]),
+        h("li", {}, ["The work you own that was copied."]),
+        h("li", {}, ["Where it was copied on SwarmTales: the link to the story and the part number (or quote its first words)."]),
+        h("li", {}, ["How to contact you: address, phone number and email."]),
+        h("li", {}, ["A statement that you believe in good faith the use isn't authorized by you, your agent, or the law."]),
+        h("li", {}, ["A statement that the information in your notice is accurate and, under penalty of perjury, that you are the owner or are authorized to act for the owner."]),
+      ]),
+      h("p", { class: "body-2" }, ["What happens next:"]),
+      h("ul", { class: "how-list" }, [
+        h("li", {}, ["The part is hidden promptly."]),
+        h("li", {}, ["The writer can send a counter-notice. If none arrives within 14 days, the part is taken down for good: its text is cleared from SwarmTales' contract storage, it's left out of future editions, and the writer isn't refunded."]),
+        h("li", {}, ["Each takedown counts against the writer. After three, their wallet can no longer write on SwarmTales."]),
+        h("li", {}, ["The blockchain records that the part was hidden or taken down and why, with a reference number. Your personal details are never put on the blockchain."]),
+      ]),
+    ]),
+
+    h("section", { class: "how-section" }, [
+      h("h2", { class: "h3" }, ["If your part was hidden and you think that's wrong"]),
+      h("p", { class: "body-2" }, [
+        "Send a counter-notice to the same address: your name and signature, which part was hidden, a statement under penalty of perjury that you believe it was hidden by mistake, and your contact details with consent to the jurisdiction of the courts where you live. ",
+        "If the person who complained doesn't start a court case within 10 to 14 business days, the part is shown again.",
+      ]),
+    ]),
+
+    h("section", { class: "how-section" }, [
+      h("h2", { class: "h3" }, ["Good to know"]),
+      h("p", { class: "body-2" }, [
+        "SwarmTales runs on a public blockchain. Removing a part clears it from SwarmTales and its contract, but copies in the blockchain's history can't be erased by anyone. ",
+        "Read the ", h("a", { href: "#/terms" }, ["Terms of Use"]), " for the full rules.",
+      ]),
+    ]),
+  ]));
 }
 
 /* ------------------------------------------------------------------ */

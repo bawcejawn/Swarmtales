@@ -43,8 +43,13 @@ function whole(value, label, fallback) {
  * Can this wallet add `text` to this story?
  * privileged: opener or editor. allowed: on a private story's list.
  */
+export const RIGHTS_PROBLEM = "Tick “I wrote this myself, or I have the right to use it” first.";
+export const BLOCKED_PROBLEM = "This wallet can no longer write on SwarmTales, after repeated takedowns of copied text.";
+
 export function assessWrite(input) {
   const problems = [];
+  if (input.blocked) problems.push(BLOCKED_PROBLEM);
+  if (!input.rightsConfirmed) problems.push(RIGHTS_PROBLEM);
   const textCheck = checkStoryText(input.text, true);
   const cost = textCheck.ok ? BigInt(textCheck.cost) : 0n;
   if (!textCheck.ok) problems.push(textCheck.reason);
@@ -110,6 +115,8 @@ export function assessWrite(input) {
 
 export function assessOpen(input) {
   const problems = [];
+  if (input.blocked) problems.push(BLOCKED_PROBLEM);
+  if (!input.rightsConfirmed) problems.push(RIGHTS_PROBLEM);
   const title = checkTitle(input.title);
   if (!title.ok) problems.push(title.reason);
   const textCheck = checkStoryText(input.openingText, true);

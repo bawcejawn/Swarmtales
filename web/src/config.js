@@ -99,3 +99,15 @@ export function assertExpectedChain(actual) {
     );
   }
 }
+
+/**
+ * Site settings that are not contract addresses.
+ * copyrightEmail: where rights holders send copyright notices. It appears
+ * on the "Report copied text" page. Use an address you check (a free one is
+ * fine). It must also be the email in the US Copyright Office DMCA agent
+ * registration. Leave "" until it exists; the page then says so.
+ */
+export const SITE = {
+  copyrightEmail: "",
+  termsPath: "terms/",
+};

@@ -1,4 +1,22 @@
 const FRIENDLY = {
+  "STORIES: confirm that you wrote this text or have the right to use it":
+    "Tick “I wrote this myself, or I have the right to use it” before you add a part.",
+  "STORIES: the Terms of Use have changed; reload the page and accept the current version":
+    "The Terms of Use were updated. Reload the page, read what changed, and confirm again.",
+  "STORIES: this exact text is already in this story":
+    "That exact text is already in this story. Each part has to be new.",
+  "STORIES: this wallet can no longer write on SwarmTales (repeated takedowns)":
+    "This wallet can no longer write on SwarmTales, after repeated takedowns of copied text.",
+  "STORIES: you cannot report your own part":
+    "You can't report your own part.",
+  "STORIES: you already reported this part":
+    "You've already reported this part. Thank you.",
+  "STORIES: this part is already hidden while it is checked":
+    "This part is already hidden while it's checked.",
+  "STORIES: some parts are hidden while they are checked; unhide or remove them first":
+    "Some parts are hidden while they're checked. The story can be finished once they're cleared or removed.",
+  "STORIES: a hidden part can only be removed in the final edit (or unhidden first)":
+    "A hidden part can only be removed in the final edit, unless it's cleared first.",
   "STORIES: an active Writer membership is required":
     "You need an active Writer month to write in someone else's story, unless you have claimed a promo and still have trial characters left. The person who opened the story can write without a Writer month.",
   "STORIES: text is over the per-submission cap":
