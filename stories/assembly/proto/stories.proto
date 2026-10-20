@@ -195,6 +195,10 @@ message segment {
   string citation = 23;          // the writer's own source note, e.g. a quoted book and author (up to 200 characters)
   string source_note = 24;       // added by the copy checker: where parts of this text also appear (does not hide it)
   bool restored = 25;            // brought back by the story's opener or an editor after being hidden
+  // Who supplied the current words when an opener, editor or finalizer
+  // rewrote the part (empty while the text is the writer's own). Kept when
+  // the part is removed. A takedown strikes this wallet instead of the writer.
+  bytes text_by = 26 [(koinos.btype) = ADDRESS];
 }
 
 // A wallet's standing under the repeat-infringer policy.
@@ -991,6 +995,7 @@ message moderation_event {
   bytes author = 6 [(koinos.btype) = ADDRESS];
   string note = 7;
   bytes text_hash = 8;           // fingerprint of the text at the time
+  bytes struck = 9 [(koinos.btype) = ADDRESS];   // takedowns: the wallet that got the strike (the writer, or whoever rewrote the part)
 }
 
 message citation_event {

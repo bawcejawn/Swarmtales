@@ -8,9 +8,11 @@
 //     starter Ink, then Stories burns Ink for the opening text. One
 //     transaction: if any part fails, nothing happens.
 //   - Writing burns the writer's own Ink (Ink checks their signature).
-//   - Editors may shorten or remove text while a story is OPEN. The
-//     ORIGINAL author is re-credited through Ink mint, reason REFUND,
-//     the only mint reason Stories is allowed.
+//   - Editors may rewrite (within the light-edit allowance), shorten or
+//     remove text while a story is OPEN. The ORIGINAL author is
+//     re-credited through Ink mint, reason REFUND, the only mint reason
+//     Stories is allowed. A rewrite by anyone but the writer is recorded
+//     on the part (text_by).
 //   - Closing (opener pays the close fee through Shop), the final edit
 //     in ordered batches, surviving characters, and finalize.
 //   - The 3-open-projects limit, the promo trial, private allow-lists
@@ -28,7 +30,9 @@
 //     on the record but block finalizing until unhidden or removed.
 //   - The admin alone may take a part down for good, at any stage. Its
 //     text is cleared from contract storage and no Ink is refunded.
-//   - Every takedown is a strike against the writer. At the strike limit
+//   - Every takedown is a strike against whoever put the words there: the
+//     writer, or the opener, editor or finalizer who last rewrote the part
+//     (so nobody can rewrite a rival's part to get them blocked). At the strike limit
 //     (default 3) the wallet is blocked from opening, writing and
 //     reporting (the repeat-infringer policy). The admin can also block
 //     or unblock by hand.
@@ -50,9 +54,11 @@
 //
 // WHAT THIS CONTRACT DOES NOT DO
 //   - It never moves stablecoins and holds no money.
-//   - The admin cannot edit text, move or burn Ink, refund outside the
-//     rules, or finalize except under the admin rule. It can only remove
-//     text through a recorded takedown.
+//   - The admin cannot move or burn Ink, refund outside the rules, or
+//     finalize except under the admin rule. It edits text only as the
+//     finalizer after admin_take_over, under the same light-edit limits
+//     (recorded in text_by); otherwise it can only remove text through a
+//     recorded takedown.
 //   - The moderator can only hide and unhide. It cannot remove text,
 //     touch Ink, or change any setting.
 //
@@ -764,6 +770,7 @@ export class Stories {
     seg.charged = seg.charged - refund;
     seg.last_edited_by = editor;
     seg.last_edited_at = now;
+    seg.text_by = this.rewriter(seg, editor);
     this.segments.put(key, seg);
 
     st.used_chars = nextUsed;
@@ -952,6 +959,7 @@ export class Stories {
         seg.charged = seg.charged - refund;
         seg.last_edited_by = finalizer;
         seg.last_edited_at = now;
+        seg.text_by = this.rewriter(seg, finalizer);
         seg.surviving = newCost < seg.charged ? newCost : seg.charged;
         // The final pass may grow text a little past max_chars (grammar
         // fixes in a full book). Growth stays inside the light-edit allowance.
@@ -1205,11 +1213,15 @@ export class Stories {
     seg.moderation_reason = args.reason;
     this.segments.put(key, seg);
     this.putStory(args.story_id, st);
-    this.addStrike(seg.author!, admin);
+    // The strike goes to whoever put these words there: the writer, or the
+    // opener, editor or finalizer who last rewrote the part (AB-001).
+    const struck = seg.text_by != null && seg.text_by!.length == ADDRESS_LENGTH ? seg.text_by! : seg.author!;
+    this.addStrike(struck, admin);
 
     const ev = new stories.moderation_event(args.story_id, args.seq, stories.moderation_action.ACTION_TAKEDOWN,
-      args.reason, admin, seg.author, note, fingerprint);
-    System.event("stories.moderation_event", Protobuf.encode(ev, stories.moderation_event.encode), [seg.author!]);
+      args.reason, admin, seg.author, note, fingerprint, struck);
+    const impacted = Arrays.equal(struck, seg.author!) ? [seg.author!] : [seg.author!, struck];
+    System.event("stories.moderation_event", Protobuf.encode(ev, stories.moderation_event.encode), impacted);
     this.leave();
     return new stories.empty_object();
   }
@@ -1588,6 +1600,12 @@ export class Stories {
   private refundInk(ink: Uint8Array, author: Uint8Array, amount: u64, storyId: u64, seq: u64): void {
     const mint = new stories.ink_mint_call(author, amount, MINT_REFUND, "r:" + storyId.toString() + ":" + seq.toString());
     this.callOut(ink, INK_MINT_ENTRY, Protobuf.encode(mint, stories.ink_mint_call.encode), [author], "STORIES: Ink refund failed");
+  }
+
+  // Who the part's words now belong to after `by` rewrote them: nobody
+  // extra when the writer edits their own part, otherwise `by`.
+  private rewriter(seg: stories.segment, by: Uint8Array): Uint8Array | null {
+    return Arrays.equal(by, seg.author!) ? null : by;
   }
 
   private clearSegment(seg: stories.segment, by: Uint8Array, now: u64): void {

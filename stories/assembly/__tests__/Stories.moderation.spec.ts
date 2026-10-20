@@ -674,6 +674,115 @@ describe("Moderation: strikes and blocking", () => {
   });
 });
 
+// ---------- AB-001: rewritten text is the rewriter's responsibility ----------
+
+function addEditor(id: u64, who: Uint8Array): void {
+  directly(); authorize(ALICE);
+  c().set_editor(new stories.set_editor_arguments(ALICE, id, who, true));
+  checkpoint();
+}
+
+function rewrite(as: Uint8Array, id: u64, seq: u64, text: string): void {
+  directly(); authorize(as); allowCalls(1);
+  c().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length));
+  checkpoint();
+}
+
+function strikes(who: Uint8Array): u32 {
+  return c().get_account_status(new stories.get_account_status_arguments(who)).strikes;
+}
+
+describe("Moderation: a takedown strikes whoever put the words there (AB-001)", () => {
+  beforeEach(() => { reset(); });
+
+  it("strikes the editor, not the writer, when an editor rewrote the part", () => {
+    open(OPENING);
+    writerWrites(BOB, 1, "Bob writes a quiet scene by the sea.");     // 2
+    addEditor(1, CAROL);
+    rewrite(CAROL, 1, 2, "Carol pastes a line from a famous book");   // different words, about the same length
+    takedown(1, 2);
+    expect(strikes(BOB)).toBe(0);
+    expect(strikes(CAROL)).toBe(1);
+  });
+
+  it("cannot be used to block a writer: three rewrites block the editor instead", () => {
+    open(OPENING);
+    writerWrites(BOB, 1, "Bob writes the first of three scenes.");   // 2
+    writerWrites(BOB, 1, "Bob writes the second of three scenes.");  // 3
+    writerWrites(BOB, 1, "Bob writes the third of three scenes.");   // 4
+    addEditor(1, CAROL);
+    rewrite(CAROL, 1, 2, "Carol pastes page one of a novel here.");
+    rewrite(CAROL, 1, 3, "Carol pastes page two of a novel here..");
+    rewrite(CAROL, 1, 4, "Carol pastes page three of a novel..");
+    takedown(1, 2);
+    takedown(1, 3);
+    takedown(1, 4);
+    expect(c().get_account_status(new stories.get_account_status_arguments(BOB)).blocked).toBe(false);
+    expect(c().get_account_status(new stories.get_account_status_arguments(CAROL)).blocked).toBe(true);
+    writerWrites(BOB, 1, "Bob can still write after all of this.");
+    expect(story(1).segment_count).toBe(5);
+  });
+
+  it("strikes the opener who rewrote a writer's part in the final edit", () => {
+    open(OPENING);                                                     // 1: 28
+    const line = "Bob writes a scene for the final edit.";             // 2: 38
+    writerWrites(BOB, 1, line);
+    for (let i = 0; i < 4; i++) openerWrites(1, chars(2000));          // 3..6
+    openerWrites(1, chars(1972 - line.length));                       // 7: story locks
+    closeStory(1);
+    const swapped = "Alice swaps in a page from a novel....";
+    batch(1, [keep(1), new stories.final_item(2, stories.final_mode.FINAL_EDITED, swapped, <u64>swapped.length)]);
+    takedown(1, 2);
+    expect(strikes(BOB)).toBe(0);
+    expect(strikes(ALICE)).toBe(1);
+  });
+
+  it("still strikes the editor after they rewrote the part and then removed it", () => {
+    open(OPENING);
+    writerWrites(BOB, 1, "Bob writes a quiet scene by the sea.");
+    addEditor(1, CAROL);
+    rewrite(CAROL, 1, 2, "Carol pastes a line from a famous book");
+    directly(); authorize(CAROL); allowCalls(1);
+    c().remove_segment(new stories.remove_segment_arguments(CAROL, 1, 2));
+    checkpoint();
+    takedown(1, 2);
+    expect(strikes(BOB)).toBe(0);
+    expect(strikes(CAROL)).toBe(1);
+  });
+
+  it("strikes the writer when nobody rewrote the part, even if an editor removed it", () => {
+    open(OPENING);
+    writerWrites(BOB, 1, "Bob pastes a paragraph from a novel.");
+    addEditor(1, CAROL);
+    directly(); authorize(CAROL); allowCalls(1);
+    c().remove_segment(new stories.remove_segment_arguments(CAROL, 1, 2));
+    checkpoint();
+    takedown(1, 2);
+    expect(strikes(BOB)).toBe(1);
+    expect(strikes(CAROL)).toBe(0);
+  });
+
+  it("records the rewriter on the part and the struck wallet in the event", () => {
+    open(OPENING);
+    writerWrites(BOB, 1, "Bob writes a quiet scene by the sea.");     // 2
+    openerWrites(1, "Alice writes a scene of her own here.");          // 3
+    addEditor(1, CAROL);
+    expect(seg(1, 2).text_by).toBeNull();
+    rewrite(CAROL, 1, 2, "Carol pastes a line from a famous book");
+    expect(seg(1, 2).author!).toStrictEqual(BOB);
+    expect(seg(1, 2).text_by!).toStrictEqual(CAROL);
+    rewrite(ALICE, 1, 3, "Alice fixes a typo in her own scene..");    // a writer editing their own part
+    expect(seg(1, 3).text_by).toBeNull();
+    takedown(1, 2);
+    const ev = lastModeration();
+    expect(ev.author!).toStrictEqual(BOB);
+    expect(ev.struck!).toStrictEqual(CAROL);
+    takedown(1, 3);
+    expect(lastModeration().struck!).toStrictEqual(ALICE);
+    expect(strikes(ALICE)).toBe(1);
+  });
+});
+
 // ---------- 10,000-character parts and adding text between parts ----------
 
 describe("Writing: 10,000-character parts and adding text between parts", () => {
