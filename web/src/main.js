@@ -15,7 +15,7 @@ import {
   loadOverview,
   loadStory,
   lookupTransaction,
-  waitForInclusion,
+  waitForConfirmation,
   hasReported,
   quoteCost,
   read,
@@ -23,6 +23,7 @@ import {
   writerFlags,
 } from "./chain.js";
 import { explainFailure } from "./lib/errors.js";
+import { TX_CONFIRMED, TX_REVERTED } from "./lib/confirm.js";
 import { KIND, STORY_STATUS, TIER, VISIBILITY, label } from "./lib/labels.js";
 import { VAULT_MANA_CEILING, formatMana, formatUnits, formatUtc, kondorManaNote, shortAddress } from "./lib/money.js";
 import { KIND_BOOK, assessOpen, assessPromo, assessWrite, assessWriterBuy, isActiveWriter } from "./lib/rules.js";
@@ -3114,18 +3115,31 @@ async function send(operations, status) {
     replace(status, notice("bad", h("p", {}, [explainFailure(new Error(logs || "The network refused it."))])));
     return false;
   }
-  // Wait for the next block, so whatever the page shows next is up to date.
+  // Wait for the block and read this transaction's own receipt. Only a
+  // receipt that did not revert counts as done (AB-004): callers show links,
+  // "Ink has arrived" and so on only when this returns true.
   if (id) replace(status, notice("info", h("p", {}, ["Sent. Waiting for the next block (usually under a minute)…"])));
-  const found = id ? await waitForInclusion(id) : null;
-  const receipt = found && (found.receipt || (found.transaction && found.transaction.receipt));
-  if (receipt && receipt.reverted) {
-    const logs = Array.isArray(receipt.logs) ? receipt.logs.join(" ") : "";
-    replace(status, notice("bad", h("p", {}, [explainFailure(new Error(logs || "The network refused it."))])));
+  const outcome = await waitForConfirmation(id);
+  if (outcome.state === TX_REVERTED) {
+    const logs = outcome.logs.join(" ");
+    replace(status, notice("bad", [
+      h("p", {}, [explainFailure(new Error(logs || "The network refused it."))]),
+      h("p", { class: "mono small" }, ["Transaction " + id]),
+    ]));
+    return false;
+  }
+  if (outcome.state !== TX_CONFIRMED) {
+    replace(status, notice("warn", [
+      h("p", {}, [
+        "We couldn't confirm this yet. It may still go through. Reload the page in a minute to check, and don't send it again until you have, so you aren't charged twice.",
+      ]),
+      id ? h("p", { class: "mono small" }, ["Transaction " + id]) : null,
+    ]));
     return false;
   }
   replace(status, notice("ok", [
-    h("p", {}, [found ? "Done. It's on the record." : "Sent. It should appear within a minute."]),
-    id ? h("p", { class: "mono small" }, ["Transaction " + id]) : null,
+    h("p", {}, ["Done. It's on the record."]),
+    h("p", { class: "mono small" }, ["Transaction " + id]),
   ]));
   return true;
 }
