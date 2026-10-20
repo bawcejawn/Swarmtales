@@ -9,7 +9,7 @@
  */
 import { Transaction } from "koilib";
 import { getSigner, getAccounts } from "kondor-js";
-import { getProvider, read as chainRead, verifiedChain } from "./chain.js";
+import { freeMana, getProvider, read as chainRead, verifiedChain } from "./chain.js";
 import { VAULT_MANA_CEILING } from "./lib/money.js";
 import {
   VAULT_MANA_EXPLANATION,
@@ -119,7 +119,12 @@ export function createKondorWallet() {
       if (!address) throw new Error("Connect Kondor first.");
       const chainId = verifiedChain();
       if (!chainId) throw new Error("The chain id has not been checked yet. Nothing was signed.");
-      const mana = await getProvider().getAccountRc(address);
+      // Kondor measures the exact mana itself where it can. The ceiling here
+      // is what's free right now, at most 30 mana, never the whole balance,
+      // so one action can't block the next while it waits for a block.
+      const mana = await freeMana(address);
+      const ceiling = 3000000000n;
+      const rcLimit = mana.free < ceiling ? mana.free : ceiling;
       const signer = getSigner(address, { provider: getProvider() });
       const tx = new Transaction({
         signer,
@@ -127,7 +132,7 @@ export function createKondorWallet() {
         options: {
           chainId,
           payer: address,
-          rcLimit: String(mana || "0"),
+          rcLimit: rcLimit.toString(),
           sendAbis: false,
           broadcast: true,
         },

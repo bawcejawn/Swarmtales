@@ -423,3 +423,8 @@ dialog.sheet::backdrop { background: rgba(27, 31, 42, 0.45); }
 .more-options summary { cursor: pointer; padding: 12px 0; font-weight: 600; min-height: 44px; }
 .more-options > p { margin: 0; }
 
+
+/* Ink packs */
+.pack-list { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+.pack { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.pack b { display: block; }

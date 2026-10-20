@@ -12,7 +12,7 @@
  *   - It is play money: only send it test KOIN.
  */
 import { Signer, Transaction, utils } from "koilib";
-import { getProvider, verifiedChain } from "./chain.js";
+import { freeMana, getProvider, manaLimit, verifiedChain } from "./chain.js";
 
 const KEY_STORE = "swarmtales.testwallet.v1";
 
@@ -85,17 +85,27 @@ export function createTestWallet(network) {
       if (!chainId) throw new Error("The chain id has not been checked yet. Nothing was signed.");
       const provider = getProvider();
       const signer = signerFor(hex);
-      const mana = await provider.getAccountRc(address);
-      if (!mana || mana === "0") throw new Error("The test wallet has no mana. Send it some tKOIN first.");
-      // The network only charges the mana an action uses; the limit is a ceiling.
-      const tx = new Transaction({
-        signer,
-        provider,
-        options: { chainId, payer: address, rcLimit: String(mana) },
-      });
-      for (const op of operations) await tx.pushOperation(op);
-      await tx.prepare();
-      await tx.sign();
+      const mana = await freeMana(address);
+      if (mana.free === 0n) {
+        throw new Error(mana.reserved > 0n
+          ? "The test wallet's mana is held for its last transaction for a few minutes. Try again shortly, or send it more tKOIN."
+          : "The test wallet has no mana. Send it some tKOIN first.");
+      }
+      const build = async (rcLimit) => {
+        const tx = new Transaction({ signer, provider, options: { chainId, payer: address, rcLimit: rcLimit.toString() } });
+        for (const op of operations) await tx.pushOperation(op);
+        await tx.prepare();
+        await tx.sign();
+        return tx;
+      };
+      // 1) Dry run: the node runs it without adding it to a block, and says
+      //    how much mana it used. A refusal here shows the contract's reason.
+      const dry = await build(mana.free);
+      const { receipt: trial } = await provider.sendTransaction(dry.transaction, false);
+      if (trial && trial.reverted) return { transactionId: "", receipt: trial };
+      // 2) The real one asks for only that much (plus a margin), so the next
+      //    action isn't blocked while this one waits for a block.
+      const tx = await build(manaLimit(trial.rc_used || "0", mana.free));
       const receipt = await tx.send();
       return { transactionId: tx.transaction.id, receipt: receipt || null };
     },

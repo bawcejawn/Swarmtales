@@ -1305,6 +1305,52 @@ function renderMembership(page) {
     });
   }
 
+  // Ink packs (active Writers only)
+  const packs = (state.overview.packs || []).filter((p) => p.price !== "0" && p.ink !== "0");
+  if (packs.length) {
+    const writerNow = !!(state.account && isActiveWriter(state.account.membership, state.account.now));
+    const packStatus = statusBox();
+    const packCard = h("section", { class: "card", "aria-labelledby": "packs-title" }, [
+      h("p", { class: "eyebrow" }, ["More Ink"]),
+      h("h2", { class: "h3", id: "packs-title" }, ["Ink packs"]),
+      h("p", { class: "body-2" }, ["Top up your writing allowance any time during a Writer month. Ink has no cash value and can't be sent or sold."]),
+    ]);
+    const list = h("div", { class: "pack-list" });
+    for (const pack of packs) {
+      const button = h("button", { type: "button", class: "btn btn-secondary btn-small" }, ["Buy"]);
+      append(list, h("div", { class: "pack" }, [
+        h("div", {}, [h("b", {}, [num(pack.ink) + " Ink"]), h("span", { class: "meta" }, [pack.name + " · " + tokenAmount(pack.price)])]),
+        button,
+      ]));
+      button.disabled = !address || !state.account || !writerNow || !!cfg.paused;
+      button.addEventListener("click", async () => {
+        replace(packStatus);
+        button.disabled = true;
+        try {
+          if (BigInt(state.account.token || "0") < BigInt(pack.price)) {
+            throw new Error("Your " + contracts.paymentSymbol + " balance is below this pack's price.");
+          }
+          const approve = await encode("token", "approve", { owner: address, spender: contracts.shop, value: pack.price });
+          const buy = await encode("shop", "buy_pack", { payer: address, pack: pack.item, token: contracts.paymentToken });
+          const sent = await send([approve, buy], packStatus);
+          if (sent) {
+            await refreshAccount();
+            renderPage();
+          }
+        } catch (error) {
+          failure(packStatus, error);
+        } finally {
+          button.disabled = false;
+        }
+      });
+    }
+    append(packCard, list);
+    if (!address) append(packCard, h("p", { class: "meta" }, ["Connect a wallet to buy a pack."]));
+    else if (state.account && !writerNow) append(packCard, h("p", { class: "meta" }, ["Packs are for active Writers. Start a Writer month first."]));
+    append(packCard, packStatus);
+    append(grid, packCard);
+  }
+
   // Your membership
   if (address && state.account) {
     const account = state.account;
