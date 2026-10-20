@@ -43,6 +43,7 @@ import { append, h, icons, replace } from "./ui/dom.js";
 import { renderHowSections } from "./ui/how.js";
 import { renderMarkdown } from "./ui/markdown.js";
 import { readingOrder } from "./lib/order.js";
+import * as reading from "./lib/bookmarks.js";
 import { createReader } from "./ui/readAloud.js";
 
 const problems = configProblems();
@@ -896,6 +897,38 @@ function renderReader(page, id) {
     const article = h("article", { "aria-labelledby": "story-text-title" }, [
       h("h2", { class: "visually-hidden", id: "story-text-title" }, ["The story"]),
     ]);
+    // Bookmarks and "continue reading" (kept in this browser only).
+    const readOrder = [];
+    const chapterOf = new Map();
+    for (const chapter of chapters) {
+      for (const b of chapter.blocks) {
+        chapterOf.set(b.seq, chapter.number);
+        if (!b.segment.hidden && Number(b.segment.status) !== 2) readOrder.push(b.seq);
+      }
+    }
+    const placeOf = (seq) => ({
+      seq,
+      chapter: chapterOf.get(seq) || 1,
+      percent: readOrder.length ? ((readOrder.indexOf(seq) + 1) / readOrder.length) * 100 : 0,
+      title: story.title || "",
+    });
+    const progress = reading.load(contracts.stories, id);
+    ctx.markSeq = progress.mark ? progress.mark.seq : 0;
+    ctx.toggleMark = (seq) => {
+      const off = ctx.markSeq === seq;
+      reading.setMark(contracts.stories, id, off ? null : placeOf(seq));
+      ctx.markSeq = off ? 0 : seq;
+      article.querySelectorAll(".seg").forEach((el) => {
+        const on = Number(el.dataset.seq) === ctx.markSeq;
+        el.classList.toggle("bookmarked", on);
+        const btn = el.querySelector(".bookmark-tool");
+        if (btn) {
+          btn.textContent = on ? "\u2605 Bookmarked" : "Bookmark";
+          btn.setAttribute("aria-pressed", on ? "true" : "false");
+        }
+      });
+    };
+
     if (!chapters.length) append(article, h("div", { class: "empty" }, [h("p", {}, ["No text has been written yet."])]));
     chapters.forEach((chapter, i) => {
       append(article, h("h3", { class: "chapter-title" + (i === 0 ? " first" : ""), id: "chapter-" + chapter.number }, ["Chapter " + chapter.number]));
@@ -918,12 +951,33 @@ function renderReader(page, id) {
       }
     }
     const listen = createReader(article, listenItems);
+
+    const goTo = (seq) => {
+      const el = article.querySelector('.seg[data-seq="' + seq + '"]');
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      el.classList.remove("flash-seg");
+      void el.offsetWidth;
+      el.classList.add("flash-seg");
+    };
+    const lastOk = progress.last && readOrder.includes(progress.last.seq) && progress.last.seq !== readOrder[0];
+    const markOk = progress.mark && readOrder.includes(progress.mark.seq);
+    const resumeBar = lastOk || markOk
+      ? h("div", { class: "resume-bar", role: "region", "aria-label": "Your place in this story" }, [
+        h("span", { class: "meta" }, [lastOk
+          ? "You were reading Chapter " + progress.last.chapter + " \u00b7 " + progress.last.percent + "% through."
+          : "You bookmarked Chapter " + progress.mark.chapter + "."]),
+        lastOk ? h("button", { type: "button", class: "btn btn-primary btn-small", onClick: () => goTo(progress.last.seq) }, ["Continue reading"]) : null,
+        markOk ? h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: () => goTo(ctx.markSeq || progress.mark.seq) }, ["Go to bookmark"]) : null,
+      ])
+      : null;
     ctx.listen = listen;
     append(column, 
       h("div", { class: "chapter-bar" }, [
         h("p", { class: "eyebrow muted" }, [cats.join(" · ") || label(KIND, story.kind)]),
         h("label", { class: "check" }, [toggle, "Show who wrote what"]),
       ]),
+      resumeBar,
       listen,
       article,
       composeAnchor
@@ -970,6 +1024,11 @@ function renderReader(page, id) {
     );
     const writersNote = aside.querySelector(".writers + p");
     if (writersNote) writersNote.style.marginTop = "12px";
+
+    // Coming from "Continue reading" or "Go to bookmark" on My stories.
+    if (/[?&]resume=1/.test(location.hash) && lastOk) setTimeout(() => goTo(progress.last.seq), 300);
+    else if (/[?&]mark=1/.test(location.hash) && markOk) setTimeout(() => goTo(progress.mark.seq), 300);
+    watchReading(article, id, placeOf);
   }).catch((error) => {
     replace(container, notice("bad", h("p", {}, [explainFailure(error)])));
   });
@@ -1049,9 +1108,17 @@ function segmentView(block, story, storyId, ctx) {
     if (!segment.hidden && typeof window !== "undefined" && window.speechSynthesis) {
       append(tools, h("button", { type: "button", class: "text-button tool", onClick: () => ctx.listen && ctx.listen.startFrom(block.seq) }, ["Listen from here"]));
     }
+    if (!segment.hidden && ctx.toggleMark) {
+      const marked = ctx.markSeq === block.seq;
+      append(tools, h("button", {
+        type: "button", class: "text-button tool bookmark-tool", "aria-pressed": marked ? "true" : "false",
+        title: "Keep your place at this part (saved in this browser)", onClick: () => ctx.toggleMark(block.seq),
+      }, [marked ? "\u2605 Bookmarked" : "Bookmark"]));
+    }
     if (!segment.hidden && author !== currentAddress()) append(tools, reportControl(storyId, block.index));
   }
-  return h("div", { class: "seg" + (removed || segment.hidden ? " seg-muted" : ""), dataset: { seq: String(block.seq || block.index) } }, [
+  const isMarked = !!ctx && ctx.markSeq === block.seq && !segment.hidden;
+  return h("div", { class: "seg" + (removed || segment.hidden ? " seg-muted" : "") + (isMarked ? " bookmarked" : ""), dataset: { seq: String(block.seq || block.index) } }, [
     h("p", { class: "seg-author" }, [h("b", {}, [shortAddress(author)]), h("span", {}, [(author === story.opener ? "opener · " : "") + num(segment.current_cost || segment.charged) + " Ink"])]),
     h("div", {}, [
       body,
@@ -2171,6 +2238,28 @@ function renderMine(page) {
     h("h1", { class: "title" }, ["My stories"]),
     h("p", { class: "lede" }, ["Every story you opened or wrote in, including private ones that don't appear in Discover."])
   );
+  // Reading progress lives in this browser, so it shows even without a wallet.
+  const places = reading.list(contracts.stories).slice(0, 12);
+  if (places.length) {
+    append(container, h("section", { class: "mine-section" }, [
+      h("h2", { class: "h2" }, ["Continue reading"]),
+      h("p", { class: "meta" }, ["Saved in this browser as you read. Bookmarks too."]),
+      h("ul", { class: "reading-list" }, places.map((p) => h("li", { class: "reading-item" }, [
+        h("div", {}, [
+          h("b", {}, [p.title || "Story " + p.id]),
+          h("span", { class: "meta small" }, [
+            p.last ? " Chapter " + p.last.chapter + " \u00b7 " + p.last.percent + "% read" : "",
+            p.mark ? (p.last ? " \u00b7 " : " ") + "\u2605 bookmark in Chapter " + p.mark.chapter : "",
+          ]),
+        ]),
+        h("div", { class: "row" }, [
+          p.last ? h("a", { class: "btn btn-primary btn-small", href: "#/stories/" + p.id + "?resume=1" }, ["Continue"]) : null,
+          p.mark ? h("a", { class: "btn btn-secondary btn-small", href: "#/stories/" + p.id + "?mark=1" }, ["Bookmark"]) : null,
+          h("button", { type: "button", class: "text-button", onClick: (e) => { reading.forget(contracts.stories, p.id); e.target.closest("li").remove(); } }, ["Forget"]),
+        ]),
+      ]))),
+    ]));
+  }
   const address = currentAddress();
   if (!address) {
     append(container, h("div", { class: "card", style: null }, [
@@ -2416,6 +2505,36 @@ function citationField() {
     field("Source", input),
   ]);
   return { node, value: () => input.value.trim() };
+}
+
+/**
+ * Remember where the reader is: the part nearest the top third of the screen,
+ * saved a moment after they stop scrolling. Starts only once they scroll, so
+ * opening a story doesn't overwrite their place.
+ */
+function watchReading(article, storyId, placeOf) {
+  if (typeof IntersectionObserver === "undefined") return;
+  let current = 0;
+  let timer = null;
+  let started = false;
+  const visible = new Set();
+  const observer = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const seq = Number(e.target.dataset.seq);
+      if (e.isIntersecting) visible.add(seq);
+      else visible.delete(seq);
+    }
+    const order = [...article.querySelectorAll(".seg:not(.seg-muted)")].map((el) => Number(el.dataset.seq));
+    const top = order.find((s) => visible.has(s));
+    if (top) current = top;
+    if (!started || !current) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => reading.saveLast(contracts.stories, storyId, placeOf(current)), 800);
+  }, { rootMargin: "-25% 0px -60% 0px" });
+  article.querySelectorAll(".seg:not(.seg-muted)").forEach((el) => observer.observe(el));
+  const start = () => { started = true; };
+  window.addEventListener("scroll", start, { once: true, passive: true });
+  window.addEventListener("hashchange", () => { observer.disconnect(); clearTimeout(timer); window.removeEventListener("scroll", start); }, { once: true });
 }
 
 /** The opener's writers' pool: balance and top-up. */

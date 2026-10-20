@@ -492,3 +492,15 @@ dialog.sheet::backdrop { background: rgba(27, 31, 42, 0.45); }
 .hidden-help > * + * { margin-top: 8px; }
 .citation-box { margin-top: 12px; }
 .listen-tip { flex-basis: 100%; margin: 4px 0 0; }
+
+/* Bookmarks and "continue reading". */
+.resume-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin: 0 0 18px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.resume-bar .meta { flex: 1 1 220px; }
+.seg.bookmarked { box-shadow: inset 3px 0 0 #b07a17; }
+.bookmark-tool[aria-pressed="true"] { color: #8a5a00; font-weight: 600; }
+@keyframes seg-flash { 0% { background: rgba(176, 122, 23, 0.18); } 100% { background: transparent; } }
+.seg.flash-seg { animation: seg-flash 1.6s ease-out; }
+@media (prefers-reduced-motion: reduce) { .seg.flash-seg { animation: none; } }
+.reading-list { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 10px; }
+.reading-item { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.reading-item .meta { display: block; }
