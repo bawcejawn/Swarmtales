@@ -42,8 +42,8 @@ test("Kondor is warned under 1 mana and still not blocked by this helper", () =>
   assert.match(kondorManaNote("nope", true), /could not read mana/);
 });
 
-test("testnet mana notes never suggest Kondor's free mana", () => {
-  assert.doesNotMatch(kondorManaNote("0", false), /Use free mana in its window/);
+test("testnet mana notes mention free mana and tKOIN", () => {
+  assert.match(kondorManaNote("0", false), /Use free mana/);
   assert.match(kondorManaNote("0", false), /tKOIN/);
   assert.match(kondorManaNote("0", true), /Use free mana/);
 });

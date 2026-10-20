@@ -28,7 +28,7 @@ export const HOW_SECTIONS = [
     body: [
       "Koinos has no per-transaction fees. Instead, a wallet that holds a little KOIN gets mana, a kind of energy that refills on its own over about five days.",
       "Each action uses a small amount of mana. On the main network, a wallet with little or none can tick “Use free mana” in Kondor to borrow the energy for that action.",
-      "During this test, use test KOIN (tKOIN) for mana instead: “Use free mana” doesn't work on the testnet. Kondor also needs a one-time setting so it uses the right test network. The steps are in the wallet window, under “Kondor on the testnet”.",
+      "On the testnet, Kondor's automatic mana check doesn't work yet, so Kondor may keep asking you to “Refresh check”. Press “Use free mana”, or open Technical details and switch off “Optimize mana”. The wallet window explains this too.",
     ],
   },
   {

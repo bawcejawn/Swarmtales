@@ -61,7 +61,7 @@ export function kondorManaNote(rc, mainnet) {
   if (have < LOW_MANA_WARN) {
     return mainnet
       ? "This account has under 1 mana. The page will still open Kondor. Tick Use free mana in its window, or the signature can be refused."
-      : "This account has under 1 mana, so Kondor will probably refuse. Mana comes from holding test KOIN: send this wallet some tKOIN first. Kondor's “Use free mana” doesn't work on this testnet.";
+      : "This account has under 1 mana. Press Use free mana in Kondor's window, or send this wallet some tKOIN first.";
   }
   return "";
 }

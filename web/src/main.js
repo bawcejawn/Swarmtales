@@ -1713,35 +1713,22 @@ function vaultSection() {
   return box;
 }
 
-function copyValue(text) {
-  const button = h("button", { type: "button", class: "text-button" }, ["Copy"]);
-  button.addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      button.textContent = "Copied";
-    } catch {
-      button.textContent = "Select and copy it";
-    }
-  });
-  return h("div", { class: "copy-row" }, [h("code", { class: "mono" }, [text]), button]);
-}
-
-/** Kondor ships with an old testnet node and chain id. SwarmTales runs on the Foundation testnet. */
-function kondorTestnetSetup(open) {
+/**
+ * Kondor's "Optimize mana" asks Kondor's mana-meter account to pay for a trial
+ * run. On the Foundation testnet that account has no mana, so the check fails
+ * and Kondor loops on "Refresh check". The way out is in Kondor's own window.
+ */
+function kondorTestnetHelp(open) {
   return h("details", { class: "more-options", open: open || null }, [
-    h("summary", {}, ["Kondor on the testnet: one-time setup"]),
+    h("summary", {}, ["Kondor keeps asking to “Refresh check”?"]),
     h("p", { class: "body-2" }, [
-      "Kondor's built-in testnet (“harbinger”) points at an older test network. Until you change it, Kondor can't check SwarmTales transactions and keeps asking you to “Refresh check”.",
+      "On the testnet, Kondor's automatic mana check doesn't work yet. Nothing is wrong with your wallet or the transaction. In the Kondor window, do one of these:",
     ]),
     h("ol", { class: "how-list" }, [
-      h("li", {}, ["Open Kondor. Click the menu, then ", h("b", {}, ["Settings"]), " (it opens Kondor Settings in a tab). Pick the ", h("b", {}, ["Networks"]), " tab."]),
-      h("li", {}, ["Under ", h("b", {}, ["Koinos Harbinger (testnet)"]), ", replace ", h("b", {}, ["RPC Nodes"]), " with:", copyValue(network.mainnet ? "" : network.rpc)]),
-      h("li", {}, ["Replace ", h("b", {}, ["Set Chain Id"]), " with:", copyValue(network.chainId)]),
-      h("li", {}, ["Click ", h("b", {}, ["Update Networks"]), ". In Kondor, make sure the testnet is selected, then try again here."]),
+      h("li", {}, ["Press ", h("b", {}, ["Use free mana"]), ". Kondor's free-mana service pays for the action. Or:"]),
+      h("li", {}, ["Open ", h("b", {}, ["Transaction details"]), ", then ", h("b", {}, ["Technical details"]), ", and switch off ", h("b", {}, ["Optimize mana"]), ". Your own mana then pays, and only what the action uses is spent."]),
     ]),
-    h("p", { class: "meta" }, [
-      "Don't press “Use free mana” on the testnet: Kondor's free-mana helper only exists on the old network. Your wallet's own mana, from holding tKOIN, pays instead.",
-    ]),
+    h("p", { class: "meta" }, ["Then confirm. If Kondor still won't continue, send a screenshot of Technical details to the SwarmTales team."]),
   ]);
 }
 
@@ -1750,7 +1737,7 @@ function kondorSection() {
     h("h3", {}, ["Kondor"]),
     h("p", {}, ["A free browser extension for Chrome, Brave and Edge on a computer. It asks you to confirm in a small window."]),
   ]);
-  if (!network.mainnet) append(box, kondorTestnetSetup(false));
+  if (!network.mainnet) append(box, kondorTestnetHelp(false));
   const list = state.kondorAccounts;
   if (!list) {
     append(box, h("div", { class: "row" }, [
