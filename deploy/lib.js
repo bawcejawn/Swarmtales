@@ -337,6 +337,15 @@ function requireAddress(value, label) {
  * Parse argv (without node and script path).
  * Returns { command, target, flags } where flags maps name -> string|true.
  */
+/** Moderation reasons, as the Stories contract numbers them. */
+const MODERATION_REASONS = { copyright: 1, duplicate: 2, spam: 3, illegal: 4, other: 5 };
+
+function requireReason(value) {
+  const key = String(value || "").toLowerCase();
+  if (!MODERATION_REASONS[key]) fail("--reason must be one of: " + Object.keys(MODERATION_REASONS).join(", ") + ".");
+  return MODERATION_REASONS[key];
+}
+
 function parseArgs(argv) {
   const positional = [];
   const flags = {};
@@ -506,6 +515,8 @@ module.exports = {
   isAddress,
   requireAddress,
   parseArgs,
+  MODERATION_REASONS,
+  requireReason,
   resolveNetwork,
   checkChainId,
   classifySecret,
