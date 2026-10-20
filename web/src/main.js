@@ -38,8 +38,9 @@ import {
   saveSession,
 } from "./wallet.js";
 import { fetchVaultConfig, vaultManaDecision, vaultPairingDecision } from "./lib/vaultApi.js";
-import { buildInviteLink, findInviteId, generateLinkKey, linkSecretFromHash, signInviteJoin, signPromoClaim } from "./lib/links.js";
-import { createTestWallet, storedTestAddress } from "./testWallet.js";
+import { buildInviteLink, findInviteId, generateLinkKey, hashWithoutSecret, linkSecretFromHash, signInviteJoin, signPromoClaim } from "./lib/links.js";
+import { createTestWallet, forgetTestWalletOnMainnet, storedTestAddress } from "./testWallet.js";
+import { isFramed } from "./lib/frame.js";
 import { append, h, icons, replace } from "./ui/dom.js";
 import { renderHowSections } from "./ui/how.js";
 import { renderMarkdown } from "./ui/markdown.js";
@@ -385,6 +386,20 @@ function renderNav() {
 
 function boot() {
   const app = document.getElementById("app");
+  // Inside another site's frame, a wallet confirmation could be clickjacked:
+  // show only a link to the real page (AB-014).
+  if (isFramed(window)) {
+    replace(app, h("main", { class: "container" }, [
+      h("p", {}, ["SwarmTales was opened inside another website, so it won't run here. ",
+        h("a", { href: location.href, target: "_top", rel: "noopener" }, ["Open SwarmTales directly"]), "."]),
+    ]));
+    return;
+  }
+  try {
+    forgetTestWalletOnMainnet(network, localStorage);
+  } catch {
+    /* no storage at all */
+  }
   replace(app, 
     h("a", { class: "skip", href: "#page", onClick: (event) => { event.preventDefault(); focusMain(); } }, ["Skip to content"]),
     network.mainnet
@@ -1805,6 +1820,7 @@ function renderOpen(page) {
         terms_version: termsVersion(),
         fund: plan.fund,
         citation: openCitation.value(),
+        max_price: plan.price,   // the price shown and approved: Shop charges no more (AB-017)
       });
       const sent = await send([approve, open], status);
       if (sent) {
@@ -1883,7 +1899,7 @@ function renderMembership(page) {
           return;
         }
         const approve = await encode("token", "approve", { owner: address, spender: contracts.shop, value: plan.price });
-        const buy = await encode("shop", "buy_membership", { payer: address, tier: 2, months: 1, token: contracts.paymentToken });
+        const buy = await encode("shop", "buy_membership", { payer: address, tier: 2, months: 1, token: contracts.paymentToken, max_price: plan.price });
         const sent = await send([approve, buy], buyStatus);
         if (sent) {
           await refreshAccount();
@@ -1923,7 +1939,7 @@ function renderMembership(page) {
             throw new Error("Your " + contracts.paymentSymbol + " balance is below this pack's price.");
           }
           const approve = await encode("token", "approve", { owner: address, spender: contracts.shop, value: pack.price });
-          const buy = await encode("shop", "buy_pack", { payer: address, pack: pack.item, token: contracts.paymentToken });
+          const buy = await encode("shop", "buy_pack", { payer: address, pack: pack.item, token: contracts.paymentToken, max_price: pack.price });
           const sent = await send([approve, buy], packStatus);
           if (sent) {
             await refreshAccount();
@@ -2028,9 +2044,28 @@ function trustNote(text) {
   return h("div", { class: "trust-note" }, [icons.shield(), h("p", {}, [text])]);
 }
 
+// Link secrets read from the address bar, by route. The page keeps them here
+// and takes them out of the URL at once, so they stay out of browser history
+// and anything that copies the address (AB-013). Re-renders read them here.
+const linkSecrets = new Map();
+
+function takeLinkSecret() {
+  const route = location.hash.split("?")[0];
+  const fromUrl = linkSecretFromHash(location.hash);
+  if (fromUrl) {
+    linkSecrets.set(route, fromUrl);
+    try {
+      history.replaceState(history.state, "", location.pathname + location.search + hashWithoutSecret(location.hash));
+    } catch {
+      /* the secret stays in the URL; the page still works */
+    }
+  }
+  return linkSecrets.get(route) || "";
+}
+
 function renderPromo(page, campaignId) {
   setMeta("Free Ink", "Claim free Ink to start writing on SwarmTales.");
-  const linkSecret = linkSecretFromHash(location.hash);
+  const linkSecret = takeLinkSecret();
   const main = h("div", { class: "landing" });
   append(page, main);
   const card = h("div", { class: "card card-lg" }, [
@@ -2120,7 +2155,7 @@ function renderPromo(page, campaignId) {
 
 function renderJoin(page, storyId, inviteId) {
   setMeta("You're invited to write", "An invitation to write in a private SwarmTales story.");
-  const linkSecret = linkSecretFromHash(location.hash);
+  const linkSecret = takeLinkSecret();
   const main = h("div", { class: "landing" });
   append(page, main);
   const card = h("div", { class: "card card-lg" }, [loadingLine("Opening your invitation…")]);
@@ -2935,7 +2970,7 @@ function giftSection(me) {
         ? "They already have a Writer month until " + (formatUtc(theirs.paid_until) || "later") + ". This adds one more month."
         : "";
       const approve = await encode("token", "approve", { owner: me, spender: contracts.shop, value: plan.price });
-      const buy = await encode("shop", "buy_membership", { payer: me, tier: 2, months: 1, token: contracts.paymentToken, beneficiary: account });
+      const buy = await encode("shop", "buy_membership", { payer: me, tier: 2, months: 1, token: contracts.paymentToken, beneficiary: account, max_price: plan.price });
       if (await send([approve, buy], status)) {
         who.value = "";
         append(status, notice("ok", h("p", {}, ["Done. " + shortAddress(account) + " has a Writer month, and its Ink went to them."])));

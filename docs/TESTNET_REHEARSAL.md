@@ -99,9 +99,11 @@ Each command asks for one wallet's key at a hidden prompt, runs a dry run, then 
 
 ```powershell
 node deploy/deploy.js upload ink --expect $INK                       # key: ST-Ink-v2
-node deploy/deploy.js set-admin ink --contract $INK --admin $ADMIN    # key: ST-Ink-v2
+node deploy/deploy.js set-admin ink --contract $INK --admin $ADMIN    # key: ST-Ink-v2 (proposes)
+node deploy/deploy.js accept-admin ink --contract $INK --admin $ADMIN # key: the admin wallet (takes over)
 node deploy/deploy.js upload shop --expect $SHOP                      # key: ST-Shop-v2
-node deploy/deploy.js set-admin shop --contract $SHOP --admin $ADMIN  # key: ST-Shop-v2
+node deploy/deploy.js set-admin shop --contract $SHOP --admin $ADMIN  # key: ST-Shop-v2 (proposes)
+node deploy/deploy.js accept-admin shop --contract $SHOP --admin $ADMIN # key: the admin wallet (takes over)
 ```
 
 ## Step 4. Wire them and turn on the test payment token (admin key)
@@ -118,7 +120,8 @@ Treasury and founder are the same wallet here on purpose: it exercises the new
 
 ```powershell
 node deploy/deploy.js upload stories --expect $STORIES                         # key: ST-Stories-v2
-node deploy/deploy.js set-admin stories --contract $STORIES --admin $ADMIN     # key: ST-Stories-v2
+node deploy/deploy.js set-admin stories --contract $STORIES --admin $ADMIN     # key: ST-Stories-v2 (proposes)
+node deploy/deploy.js accept-admin stories --contract $STORIES --admin $ADMIN  # key: the admin wallet (takes over)
 node deploy/deploy.js wire-stories --admin $ADMIN --ink $INK --shop $SHOP --stories $STORIES   # key: admin
 ```
 

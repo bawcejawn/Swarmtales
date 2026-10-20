@@ -28,6 +28,8 @@
  * Environment:
  *   STORIES_ADDRESS   Stories contract (required)
  *   RPC               node URL (default: the Foundation testnet)
+ *   EXPECTED_CHAIN_ID the chain id the node must serve; needed for any node other than
+ *                     the Foundation testnet or api.koinos.io (checked before signing)
  *   MODERATOR_WIF     the moderator's private key (secret). Without it the
  *                     checker only reports what it would hide.
  *   GOOGLE_BOOKS_KEY  optional, book phrase check (stays under BOOKS_MONTHLY, default 25000;
@@ -44,7 +46,7 @@
 import fs from "fs";
 import { createRequire } from "module";
 import {
-  HIDE_FOUND, Index, REASON, WEB_MIN_CHARS, budget, checkOrder, citationCovers, decide, fingerprint, isDuplicate, isPartialDuplicate,
+  HIDE_FOUND, Index, REASON, WEB_MIN_CHARS, budget, checkChainId, checkOrder, citationCovers, decide, expectedChainId, fingerprint, isDuplicate, isPartialDuplicate,
   normalizeResults, pickPhrases, resultMatches, worthAsking,
 } from "./lib.mjs";
 
@@ -263,6 +265,9 @@ async function main() {
   }
   if (!STORIES) throw new Error("Set STORIES_ADDRESS.");
   const provider = new Provider([RPC]);
+  // Sign only for the chain we expect, checked against the node (AB-015).
+  const chainId = expectedChainId(RPC, env.EXPECTED_CHAIN_ID);
+  checkChainId(chainId, await provider.getChainId());
   const stories = new Contract({ id: STORIES, abi: abis.stories, provider });
   const read = async (name, args) => (await stories.functions[name](args || {})).result || {};
 
@@ -312,7 +317,7 @@ async function main() {
       return false;
     }
     const limit = mana < 50000000n ? mana : 50000000n;
-    const tx = new Transaction({ signer, provider, options: { payer: signer.getAddress(), rcLimit: limit.toString() } });
+    const tx = new Transaction({ signer, provider, options: { payer: signer.getAddress(), rcLimit: limit.toString(), chainId } });
     await tx.pushOperation(await stories.encodeOperation({ name, args: { actor: signer.getAddress(), ...args } }));
     await tx.prepare();
     await tx.sign();

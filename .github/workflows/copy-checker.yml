@@ -5,7 +5,8 @@ name: Copy checker
 # unhide). Free for public repositories.
 #
 # Settings (repository Settings > Secrets and variables > Actions):
-#   Variables:  STORIES_ADDRESS (required), RPC (optional)
+#   Variables:  STORIES_ADDRESS (required), RPC (optional), EXPECTED_CHAIN_ID
+#               (needed only for a node other than the Foundation testnet or api.koinos.io)
 #   Secrets:    MODERATOR_WIF (the moderator's private key; without it the
 #               checker only reports)
 #               Optional free phrase search (any or all):
@@ -65,6 +66,7 @@ jobs:
         env:
           STORIES_ADDRESS: ${{ vars.STORIES_ADDRESS }}
           RPC: ${{ vars.RPC }}
+          EXPECTED_CHAIN_ID: ${{ vars.EXPECTED_CHAIN_ID }}
           MODERATOR_WIF: ${{ secrets.MODERATOR_WIF }}
           BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
           GOOGLE_BOOKS_KEY: ${{ secrets.GOOGLE_BOOKS_KEY }}

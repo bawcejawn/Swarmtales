@@ -5,7 +5,8 @@
 //     Terms of Use version; a wallet's accepted version is recorded.
 //   - The same exact text cannot go into one story twice.
 //   - Admin or moderator may hide/unhide at any stage; hidden parts block
-//     finalizing and are never refunded when removed.
+//     finalizing and are not refunded when removed (a part hidden by
+//     writer reports alone is: see Stories.funds.spec.ts, AB-012).
 //   - Admin alone may take a part down for good, at any stage, without a
 //     refund. Locked stories reopen; finalized stories need a new PDF.
 //   - Reports: once per wallet per part; only writers count; enough of

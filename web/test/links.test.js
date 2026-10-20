@@ -1,13 +1,16 @@
 // The browser signs promo and invite links the same way the Shop and
 // Stories contracts recover them. This test recovers each signature with
-// the mock VM's own secp256k1 code (the exact logic the contract runs) and
+// its own copy of the recovery the chain runs (@noble/secp256k1, as in the
+// Koinos mock VM; not koilib's Signer, which made the signature) and
 // checks it lands on the link key's address, and NOT on a copy aimed at a
 // different wallet. That is the on-chain check for fixes H2 and H3.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { utils } from "koilib";
-import mv from "@koinos/mock-vm/src/util.js";
+import * as secp from "@noble/secp256k1";
+import { ripemd160 } from "@noble/hashes/ripemd160";
+import { sha256 } from "@noble/hashes/sha256";
 import { signPromoClaim, signInviteJoin, generateLinkKey, linkKeyAddress, linkSecretFromHash, buildPromoLink, buildInviteLink } from "../src/lib/links.js";
 
 const SHOP = "1MRxjnjFDhZfjtjgpxBNczsMGVEtYqfFyS";
@@ -30,10 +33,22 @@ function cat(parts) {
   for (const p of parts) { o.set(p, at); at += p.length; }
   return o;
 }
-// What the contract does: hash the message to a multihash, recover the signer.
+// What the contract does: sha256 the message, recover the compressed public
+// key from the 65-byte compact signature (first byte = recovery id + 31), and
+// turn it into a Koinos address (version 0, ripemd160(sha256(key)), checksum).
+// The same steps as @koinos/mock-vm's util.js, without its dependencies (AB-018).
 function recoverAddress(message, signature) {
-  const multihash = mv.hashSHA256(message);
-  return mv.bitcoinAddress(mv.recoverPublicKey(multihash, signature));
+  const digest = sha256(message);
+  const recovery = signature[0] - 31;
+  const sig = new secp.Signature(BigInt("0x" + utils.toHexString(signature.slice(1, 33))), BigInt("0x" + utils.toHexString(signature.slice(33, 65))));
+  const publicKey = secp.Point.fromHex(secp.recoverPublicKey(digest, sig.toHex(), recovery)).toRawBytes(true);
+  const payload = new Uint8Array(21);
+  payload.set(ripemd160(sha256(publicKey)), 1);
+  const checksum = sha256(sha256(payload)).slice(0, 4);
+  const address = new Uint8Array(25);
+  address.set(payload);
+  address.set(checksum, 21);
+  return utils.encodeBase58(address);
 }
 const promoMsg = (shop, id, acct) => cat([enc.encode("swarmtales/promo/v1"), utils.decodeBase58(shop), u64(id), utils.decodeBase58(acct)]);
 const inviteMsg = (st, sid, iid, acct) => cat([enc.encode("swarmtales/invite/v1"), utils.decodeBase58(st), u64(sid), u64(iid), utils.decodeBase58(acct)]);

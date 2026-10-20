@@ -199,3 +199,28 @@ test("when each part was written survives a save and load; older saved entries c
   const legacy = Index.fromJSON({ "10:3": { author: "wren", hashes: fingerprint(ORIGINAL) } });
   assert.equal(legacy.bestMatch(fingerprint(COPY), "mallory", "5:2", 2000).key, "10:3");
 });
+
+// ---------- AB-015: the checker signs only for the chain it expects ----------
+
+import { createRequire } from "node:module";
+import { checkChainId, expectedChainId } from "../lib.mjs";
+
+const deployNetworks = createRequire(import.meta.url)("../../deploy/lib.js").NETWORKS;
+
+test("the known nodes pin their chain ids, the same ones the deploy script uses", () => {
+  for (const net of Object.values(deployNetworks)) {
+    assert.equal(expectedChainId(net.rpc, ""), net.chainId, net.rpc);
+  }
+  assert.equal(expectedChainId("https://testnet.koinosfoundation.org/", undefined), deployNetworks.testnet.chainId);
+});
+
+test("another node needs EXPECTED_CHAIN_ID, which also overrides the known ones", () => {
+  assert.throws(() => expectedChainId("https://my-node.example.com", ""), /EXPECTED_CHAIN_ID/);
+  assert.equal(expectedChainId("https://my-node.example.com", "abc="), "abc=");
+  assert.equal(expectedChainId("https://api.koinos.io", " abc= "), "abc=");
+});
+
+test("a node on a different chain stops the run before anything is signed", () => {
+  assert.throws(() => checkChainId(deployNetworks.mainnet.chainId, deployNetworks.testnet.chainId), /chain id/);
+  checkChainId("abc=", "abc=");
+});

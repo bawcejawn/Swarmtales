@@ -65,6 +65,7 @@ enum burn_reason {
 message config {
   bytes admin = 1 [(koinos.btype) = ADDRESS];
   bool paused = 2;
+  bytes pending_admin = 3 [(koinos.btype) = ADDRESS];   // proposed by set_admin, waiting for accept_admin
 }
 
 // ---------- Read-only functions (KCS-4 compatible names) ----------
@@ -174,12 +175,17 @@ message set_paused_arguments {
   bool paused = 1;
 }
 
-// @description Hand admin rights to a new address (e.g. a hardware wallet)
+// @description Propose a new admin. Nothing changes until that address calls accept_admin (two steps, so a typo cannot strand admin). Proposing the current admin cancels.
 // @read-only false
 // @result empty_object
 message set_admin_arguments {
   bytes new_admin = 1 [(koinos.btype) = ADDRESS];
 }
+
+// @description The proposed admin takes over. Must be signed by the proposed address and called directly.
+// @read-only false
+// @result empty_object
+message accept_admin_arguments {}
 
 // ---------- Events (public, visible on block explorers) ----------
 
@@ -216,4 +222,9 @@ message paused_event {
 message admin_changed_event {
   bytes old_admin = 1 [(koinos.btype) = ADDRESS];
   bytes new_admin = 2 [(koinos.btype) = ADDRESS];
+}
+
+message admin_proposed_event {
+  bytes admin = 1 [(koinos.btype) = ADDRESS];
+  bytes proposed = 2 [(koinos.btype) = ADDRESS];   // empty when a pending handover is cancelled
 }

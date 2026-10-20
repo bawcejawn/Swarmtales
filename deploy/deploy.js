@@ -27,13 +27,19 @@
  *       (--expect-sha256: required on mainnet; the upload stops unless the wasm matches it)
  *       (--upgrade, testnet only: replace the code of a contract that is already there; its stored data is kept)
  *   node deploy/deploy.js set-admin ink|shop|stories --contract <addr> --admin <addr>
+ *       [--from <current admin>]
+ *       (step 1: PROPOSES the new admin, signed by the current admin: the contract wallet the
+ *        first time, or --from after that. Nothing moves yet)
+ *   node deploy/deploy.js accept-admin ink|shop|stories --contract <addr> --admin <addr>
+ *       (step 2: the proposed admin signs to take over, so a mistyped address can never become admin)
  *   node deploy/deploy.js wire     --admin <addr> --ink <addr> --shop <addr> --treasury <addr> --founder <addr> [--replace-shop <old addr>]
  *       (--replace-shop retires an older Shop: it loses its Ink mint rights in the same transaction.
  *        Memberships live in the Shop, so on a new Shop everyone starts without one)
  *   node deploy/deploy.js test-asset --admin <addr> --shop <addr> [--token <addr>] [--symbol tKOIN] [--decimals 8]
  *   node deploy/deploy.js test-buy --user <addr> --shop <addr> [--tier writer|reader] [--token <addr>]
  *   node deploy/deploy.js test-promo --admin <addr> --shop <addr>
- *   node deploy/deploy.js claim-promo --account <addr> --shop <addr> --campaign <id> --link-key <wif-from-the-promo-link> [--sign-for <addr>]
+ *   node deploy/deploy.js claim-promo --account <addr> --shop <addr> --campaign <id> [--sign-for <addr>]
+ *       (testnet only. Asks for the promo link key, the part after k=, at a hidden prompt)
  *   node deploy/deploy.js user-checks --user <addr> --ink <addr> --shop <addr> --admin <addr>
  *       (dry runs only: each call must be REJECTED; nothing is sent for real, though each dry run is signed)
  *
@@ -50,7 +56,7 @@
  *   node deploy/deploy.js test-invite --opener <addr> --stories <addr> --story <id> [--uses 5] [--days 7]
  *       (testnet: the opener creates a signed invite link. Only the link key's PUBLIC address
  *        goes on chain; the private key is printed once, for the share link)
- *   node deploy/deploy.js join-invite --account <addr> --stories <addr> --story <id> --invite <id> --link-key <wif> [--sign-for <addr>]
+ *   node deploy/deploy.js join-invite --account <addr> --stories <addr> --story <id> --invite <id> [--sign-for <addr>]
  *       (testnet: join a private story with a signed invite link. --sign-for signs for a
  *        DIFFERENT wallet on purpose, to show the contract refuses a copied signature)
  *   node deploy/deploy.js measure --user <addr> --ink <addr> --stories <addr> --story <id> [--emoji] [--sizes 100,500,1000,2000,4000]
@@ -224,6 +230,17 @@ async function getSigner(provider, expected, label) {
   return signer;
 }
 
+/** Read an invite or promo link key at the hidden prompt, never from argv (AB-013). */
+async function readLinkKey(from) {
+  const { Signer } = koilib();
+  const raw = String(await readHidden("Paste the link key from " + from + " (the part after k=). Nothing will show while you paste: ")).trim();
+  try {
+    return Signer.fromWif(decodeURIComponent(raw));
+  } catch (e) {
+    lib.fail("That link key could not be read. Nothing was signed.");
+  }
+}
+
 // ---------- the dry run then send flow ----------
 
 async function buildTx(signer, provider, net, operations, rcLimit) {
@@ -361,12 +378,31 @@ async function cmdSetAdmin(args) {
   const contractAddr = lib.requireAddress(args.flags.contract, "contract");
   const admin = lib.requireAddress(args.flags.admin, "admin");
   if (admin === contractAddr) lib.fail("The admin should be your normal wallet, not the contract address.");
+  // The current admin proposes: the contract wallet the first time, the admin wallet after that.
+  const from = args.flags.from === undefined ? contractAddr : lib.requireAddress(args.flags.from, "from");
   const { net, provider } = await connect(args.flags);
-  const signer = await getSigner(provider, contractAddr, "the " + target + " contract wallet");
+  const signer = await getSigner(provider, from, from === contractAddr ? "the " + target + " contract wallet" : "the current " + target + " admin");
   const { Contract } = koilib();
   const contract = new Contract({ id: contractAddr, abi: loadAbiJson(target), provider });
   const op = await contract.encodeOperation({ name: "set_admin", args: { new_admin: admin } });
-  const txId = await dryRunThenSend(signer, provider, net, [op], target + ".set_admin -> " + admin);
+  const txId = await dryRunThenSend(signer, provider, net, [op], target + ".set_admin: PROPOSE " + admin + " (admin does not move yet)");
+  console.log("Proposed. Admin moves only when " + admin + " accepts (AB-016):");
+  console.log("  node deploy/deploy.js accept-admin " + target + " --contract " + contractAddr + " --admin " + admin);
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
+/** Step 2 of the admin handover: the proposed admin signs to take over. */
+async function cmdAcceptAdmin(args) {
+  const target = args.target;
+  contractFiles(target);
+  const contractAddr = lib.requireAddress(args.flags.contract, "contract");
+  const admin = lib.requireAddress(args.flags.admin, "admin");
+  const { net, provider } = await connect(args.flags);
+  const signer = await getSigner(provider, admin, "the proposed admin wallet");
+  const { Contract } = koilib();
+  const contract = new Contract({ id: contractAddr, abi: loadAbiJson(target), provider });
+  const op = await contract.encodeOperation({ name: "accept_admin", args: {} });
+  const txId = await dryRunThenSend(signer, provider, net, [op], target + ".accept_admin: " + admin + " becomes admin");
   console.log("Send back: the transaction id (" + txId + ").");
 }
 
@@ -450,7 +486,7 @@ async function cmdTestBuy(args) {
     // Allow the Shop to move exactly the price. Shop splits it into the
     // treasury and founder legs, which together use the whole allowance.
     await tokenC.encodeOperation({ name: "approve", args: { owner: buyer, spender: shop, value: price } }),
-    await shopC.encodeOperation({ name: "buy_membership", args: { payer: buyer, tier, months: 1, token } }),
+    await shopC.encodeOperation({ name: "buy_membership", args: { payer: buyer, tier, months: 1, token, max_price: price } }),
   ];
   const txId = await dryRunThenSend(signer, provider, net, ops, "approve the Shop for " + price + " and buy 1 " + tierName + " month" + (tierName === "writer" ? " (mints Writer Ink)" : ""));
   console.log("Send back: the transaction id (" + txId + "). Then run status with --user to see the Ink balance.");
@@ -470,7 +506,7 @@ async function cmdTestPromo(args) {
   // A fresh link key. Its PUBLIC address goes on chain; the private key is
   // printed once, below, as part of the share link. Nothing secret is stored.
   const { Signer } = koilib();
-  const linkKey = Signer.fromSeed("swarmtales-testnet-promo-" + Date.now() + "-" + Math.random());
+  const linkKey = new Signer({ privateKey: lib.newLinkKeyHex() });
   const ops = [
     await shopC.encodeOperation({ name: "set_promo_enabled", args: { enabled: true } }),
     await shopC.encodeOperation({
@@ -501,7 +537,8 @@ async function cmdTestPromo(args) {
   console.log("Campaign id: " + nextId);
   console.log("Promo link key (secret, for the share link only): " + linkKey.getPrivateKey("wif"));
   console.log("Share link (replace the host with your site): https://YOUR-SITE/#/promo/" + nextId + "?k=" + linkKey.getPrivateKey("wif"));
-  console.log("To claim from the CLI: node deploy/deploy.js claim-promo --account <addr> --shop " + shop + " --campaign " + nextId + " --link-key " + linkKey.getPrivateKey("wif"));
+  console.log("To claim from the CLI: node deploy/deploy.js claim-promo --account <addr> --shop " + shop + " --campaign " + nextId);
+  console.log("  (it asks for the link key at a hidden prompt: paste the part after k=)");
   console.log("Send back: the transaction id (" + txId + ").");
 }
 
@@ -510,13 +547,14 @@ async function cmdClaimPromo(args) {
   const account = lib.requireAddress(f.account, "account");
   const shop = lib.requireAddress(f.shop, "shop");
   if (!f.campaign || !/^[1-9][0-9]*$/.test(String(f.campaign))) lib.fail("Add --campaign <id> (a number, usually 1).");
-  if (typeof f["link-key"] !== "string" || !f["link-key"]) lib.fail("Add --link-key <wif> from the promo link (the part after k=).");
+  lib.refuseSecretFlag(f, "link-key");
   const { net, provider } = await connect(f);
+  lib.requireTestnet(net, "claim-promo");
   const signer = await getSigner(provider, account, "the test user wallet");
-  const { Contract, Signer, utils } = koilib();
+  const { Contract, utils } = koilib();
   const shopC = new Contract({ id: shop, abi: loadAbiJson("shop"), provider });
   // Sign "promo / this shop / campaign / this account" with the link key.
-  const linkKey = Signer.fromWif(f["link-key"]);
+  const linkKey = await readLinkKey("the promo link");
   // --sign-for signs for a DIFFERENT wallet on purpose: the dry run must be refused.
   const signedFor = f["sign-for"] === undefined ? account : lib.requireAddress(f["sign-for"], "sign-for");
   if (signedFor !== account) console.log("Signing for " + signedFor + " but claiming as " + account + ". The contract should refuse this.");
@@ -562,7 +600,7 @@ async function cmdUserChecks(args) {
     ["User takes over Shop admin (admin only)",
       () => shopC.encodeOperation({ name: "set_admin", args: { new_admin: user } })],
     ["User buys a membership charged to the admin's wallet (payer must sign)",
-      () => shopC.encodeOperation({ name: "buy_membership", args: { payer: admin, tier: lib.TIER_READER, months: 1, token } })],
+      () => shopC.encodeOperation({ name: "buy_membership", args: { payer: admin, tier: lib.TIER_READER, months: 1, token, max_price: "18446744073709551615" } })],   // any price: only the missing signature may refuse it
     ["User claims next month's Writer Ink early (nothing is due yet)",
       () => shopC.encodeOperation({ name: "claim_writer_ink", args: { account: user } })],
   ];
@@ -738,6 +776,7 @@ async function cmdTestOpen(args) {
         rights_confirmed: true,
         terms_version: termsVersion,
         fund,
+        max_price: price,   // the price read above: Shop charges no more (AB-017)
       },
     }),
   ];
@@ -767,7 +806,7 @@ async function cmdTestInvite(args) {
 
   // A fresh link key. Only its PUBLIC address goes on chain.
   const { Contract, Signer } = koilib();
-  const linkKey = Signer.fromSeed("swarmtales-testnet-invite-" + Date.now() + "-" + Math.random());
+  const linkKey = new Signer({ privateKey: lib.newLinkKeyHex() });
   const signer = await getSigner(provider, opener, "the story opener");
   const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
   const expiresAt = String(Math.floor(Date.now() / 1000) + days * 86400);
@@ -783,7 +822,8 @@ async function cmdTestInvite(args) {
   console.log("Invite id: " + inviteId);
   console.log("Invite link key (goes in the share link only): " + wif);
   console.log("Share link (replace the host with your site): https://YOUR-SITE/#/join/" + storyId + "/" + inviteId + "?k=" + wif);
-  console.log("To join from the CLI: node deploy/deploy.js join-invite --account <addr> --stories " + stories + " --story " + storyId + " --invite " + inviteId + " --link-key " + wif);
+  console.log("To join from the CLI: node deploy/deploy.js join-invite --account <addr> --stories " + stories + " --story " + storyId + " --invite " + inviteId);
+  console.log("  (it asks for the link key at a hidden prompt: paste the part after k=)");
   console.log("Send back: the transaction id (" + txId + ").");
 }
 
@@ -793,14 +833,14 @@ async function cmdJoinInvite(args) {
   const stories = lib.requireAddress(f.stories, "stories");
   const storyId = lib.requireStoryId(f.story);
   if (!f.invite || !/^[1-9][0-9]*$/.test(String(f.invite))) lib.fail("Add --invite <id> (a number, usually 1).");
-  if (typeof f["link-key"] !== "string" || !f["link-key"]) lib.fail("Add --link-key <wif> from the invite link (the part after k=).");
+  lib.refuseSecretFlag(f, "link-key");
   if (lib.resolveNetwork(f).mainnet) lib.fail("join-invite is for testnet only.");
   const { net, provider } = await connect(f);
-  const { Contract, Signer, utils } = koilib();
+  const { Contract, utils } = koilib();
   // --sign-for signs for a DIFFERENT wallet on purpose: the dry run must be refused.
   const signedFor = f["sign-for"] === undefined ? account : lib.requireAddress(f["sign-for"], "sign-for");
   if (signedFor !== account) console.log("Signing for " + signedFor + " but joining as " + account + ". The contract should refuse this.");
-  const linkKey = Signer.fromWif(f["link-key"]);
+  const linkKey = await readLinkKey("the invite link");
   const message = lib.inviteMessage(utils.decodeBase58(stories), storyId, String(f.invite), utils.decodeBase58(signedFor));
   const signature = await linkKey.signHash(lib.sha256(message));
   const signer = await getSigner(provider, account, "the joining wallet");
@@ -1158,6 +1198,8 @@ async function main() {
       return cmdUpload(args);
     case "set-admin":
       return cmdSetAdmin(args);
+    case "accept-admin":
+      return cmdAcceptAdmin(args);
     case "wire":
       return cmdWire(args);
     case "test-asset":

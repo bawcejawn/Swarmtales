@@ -272,3 +272,29 @@ export function normalizeResults(service, body) {
   }
   return ((b.web && b.web.results) || []).map((r) => ({ url: r.url || "", title: r.title || "", description: r.description || "" }));
 }
+
+// Chain ids of the nodes the checker knows (the same as deploy/lib.js).
+const KNOWN_CHAINS = {
+  "https://testnet.koinosfoundation.org": "EiAIKVvm6-V2qmsmUvPJy09vCCLbtn9lHFpwrJbcTIEWRQ==",
+  "https://api.koinos.io": "EiBZK_GGVP0H_fXVAM3j6EAuz3-B-l3ejxRSewi7qIBfSA==",
+};
+
+/**
+ * The chain id the moderator key may sign for (AB-015): EXPECTED_CHAIN_ID if
+ * set, else the known id for the node. Any other node must say which chain
+ * it serves, so a swapped RPC variable can't make the key sign elsewhere.
+ */
+export function expectedChainId(rpc, fromEnv) {
+  const set = String(fromEnv || "").trim();
+  if (set) return set;
+  const known = KNOWN_CHAINS[String(rpc || "").replace(/\/+$/, "")];
+  if (!known) throw new Error("Set EXPECTED_CHAIN_ID for the node at " + rpc + " (the chain id it serves).");
+  return known;
+}
+
+/** Stop before anything is signed if the node serves another chain. */
+export function checkChainId(expected, actual) {
+  if (actual !== expected) {
+    throw new Error("The node's chain id is " + actual + " but the checker expects " + expected + ". Nothing was signed.");
+  }
+}

@@ -511,6 +511,27 @@ function checkWasmHash(wasm, expected, mainnet) {
   return actual;
 }
 
+/**
+ * Link keys (invite and promo secrets) are never taken from the command
+ * line, where they would stay in shell history: they are pasted at the
+ * hidden prompt instead (AB-013).
+ */
+function refuseSecretFlag(flags, name) {
+  if (flags[name] !== undefined) {
+    fail("Don't put the link key on the command line (it stays in your shell history). Leave out --" + name + " and paste it at the hidden prompt.");
+  }
+}
+
+/** Stop a testnet-only command on mainnet. */
+function requireTestnet(net, command) {
+  if (net.mainnet) fail(command + " is for testnet only.");
+}
+
+/** A new link key: 32 bytes from the operating system's secure random source (AB-013). */
+function newLinkKeyHex() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
 /** Read the user's single-line answer and decide if it confirms. */
 function isConfirmation(answer) {
   return String(answer || "").trim() === "SEND";
@@ -555,6 +576,9 @@ module.exports = {
   rcLimitFor,
   isConfirmation,
   checkWasmHash,
+  refuseSecretFlag,
+  requireTestnet,
+  newLinkKeyHex,
   toKoilibAbi,
   PROMO_DOMAIN,
   INVITE_DOMAIN,

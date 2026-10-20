@@ -70,7 +70,10 @@ function inviteMessage(storiesAddress, storyId, inviteId, account) {
  * or an invite's link_signer).
  */
 export function generateLinkKey() {
-  const signer = Signer.fromSeed(crypto.randomUUID() + ":" + Date.now() + ":" + Math.random());
+  // 32 bytes straight from the browser's secure random source (AB-013).
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  const signer = new Signer({ privateKey: utils.toHexString(bytes) });
   return { secret: signer.getPrivateKey("wif"), address: signer.getAddress() };
 }
 
@@ -130,4 +133,18 @@ export async function findInviteId({ before, linkSigner, readInvite, readNextId,
     if (invite && invite.link_signer === linkSigner) return id;
   }
   return null;
+}
+
+/**
+ * The page's hash without the link secret (?k=...), so it can be put back
+ * in the address bar after the page has read it: the secret then stays out
+ * of browser history and of anything that copies the URL (AB-013).
+ */
+export function hashWithoutSecret(hash) {
+  const q = (hash || "").indexOf("?");
+  if (q < 0) return hash || "";
+  const params = new URLSearchParams(hash.slice(q + 1));
+  params.delete("k");
+  const rest = params.toString();
+  return hash.slice(0, q) + (rest ? "?" + rest : "");
 }

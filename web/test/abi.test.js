@@ -69,3 +69,31 @@ test("an address and emoji text survive koilib encode and decode", async () => {
   assert.equal(decoded.args.expected_ink, "5");
   assert.equal(text.length, 5);
 });
+
+// AB-017: every purchase says the most the buyer agreed to pay, and it must
+// survive encoding (an unknown field would be dropped without a word).
+test("purchases carry max_price through koilib encode and decode", async () => {
+  const payer = "12SVw65QpMjFo9fnc651V7LhXKqVLg15Ww";
+  const token = "1FaSvLjQJsCJKq5ybmGsMMQs8RQYyVv8ju";
+  const shop = new Contract({ id: "1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth", abi: abis.shop });
+  const stories = new Contract({ id: "1JHakWJRXpAExjEuBik1posc8PXYYpugeN", abi: abis.stories });
+  const calls = [
+    [shop, "buy_membership", { payer, tier: 2, months: 1, token, max_price: "5000000" }],
+    [shop, "buy_pack", { payer, pack: 3, token, max_price: "2000000" }],
+    [stories, "open_story", { opener: payer, kind: 2, title: "T", opening_text: "Once upon a time.", expected_ink: "17", token, max_price: "10000000" }],
+  ];
+  for (const [contract, name, args] of calls) {
+    const op = await contract.encodeOperation({ name, args });
+    const back = await contract.decodeOperation(op);
+    assert.equal(back.args.max_price, args.max_price, name);
+  }
+});
+
+// AB-016: admin moves in two steps, so every contract has accept_admin.
+test("each contract hands admin over in two steps", () => {
+  for (const name of ["ink", "shop", "stories"]) {
+    assert.ok(abis[name].methods.set_admin, name + ".set_admin");
+    assert.ok(abis[name].methods.accept_admin, name + ".accept_admin");
+    assert.equal(abis[name].methods.accept_admin.read_only, false);
+  }
+});

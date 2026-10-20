@@ -298,6 +298,8 @@ describe("Ink: admin controls", () => {
     authorize(CONTRACT_ID);
     callDirectly(); // admin actions are direct calls
     new Ink().set_admin(new ink.set_admin_arguments(ALICE));
+    authorize(ALICE);
+    new Ink().accept_admin(new ink.accept_admin_arguments());
     expect(Base58.encode(new Ink().get_config(new ink.get_config_arguments()).admin!)).toBe(Base58.encode(ALICE));
 
     // New admin works.
@@ -587,6 +589,8 @@ describe("Ink: extra admin checks", () => {
 
     callDirectly(); // admin actions are direct calls
     new Ink().set_admin(new ink.set_admin_arguments(ALICE));
+    authorize(ALICE);
+    new Ink().accept_admin(new ink.accept_admin_arguments());
     expect(Base58.encode(new Ink().get_config(new ink.get_config_arguments()).admin!)).toBe(Base58.encode(ALICE));
   });
 
@@ -696,6 +700,7 @@ describe("Ink: null reads, masks, and overflow", () => {
     callDirectly(); // admin actions are direct calls
     new Ink().set_admin(new ink.set_admin_arguments(ALICE));
     authorize(ALICE);
+    new Ink().accept_admin(new ink.accept_admin_arguments());
     new Ink().set_minter(new ink.set_minter_arguments(SHOP, SHOP_REASONS));
     expect(new Ink().get_minter_reasons(new ink.get_minter_reasons_arguments(SHOP)).value).toBe(SHOP_REASONS);
     checkpoint();
@@ -820,5 +825,46 @@ describe("Ink: admin only by direct call", () => {
     // The same change, sent directly, works.
     new Ink().set_burner(new ink.set_burner_arguments(STORIES, true));
     expect(new Ink().is_burner(new ink.is_burner_arguments(STORIES)).value).toBe(true);
+  });
+});
+
+describe("Ink: two-step admin handover (AB-016)", () => {
+  beforeEach(() => {
+    MockVM.reset();
+    MockVM.setContractId(CONTRACT_ID);
+    callDirectly();
+  });
+
+  it("set_admin alone does not move admin: a typo cannot strand it", () => {
+    authorize(CONTRACT_ID);
+    new Ink().set_admin(new ink.set_admin_arguments(ALICE));
+    checkpoint();
+    expect(Base58.encode(new Ink().get_config(new ink.get_config_arguments()).admin!)).toBe(Base58.encode(CONTRACT_ID));
+    // The current admin still has control until the new one accepts.
+    authorize(CONTRACT_ID);
+    new Ink().set_burner(new ink.set_burner_arguments(STORIES, true));
+    expect(new Ink().is_burner(new ink.is_burner_arguments(STORIES)).value).toBe(true);
+  });
+
+  it("only the proposed address can accept, directly; proposing the admin again cancels", () => {
+    authorize(CONTRACT_ID);
+    new Ink().set_admin(new ink.set_admin_arguments(ALICE));
+    checkpoint();
+    expect(Base58.encode(new Ink().get_config(new ink.get_config_arguments()).pending_admin!)).toBe(Base58.encode(ALICE));
+    expect(() => { authorize(MALLORY); new Ink().accept_admin(new ink.accept_admin_arguments()); }).toThrow();
+    expect(() => { authorize(ALICE); callAs(MALLORY); new Ink().accept_admin(new ink.accept_admin_arguments()); }).toThrow();
+    callDirectly();
+    authorize(CONTRACT_ID);
+    new Ink().set_admin(new ink.set_admin_arguments(CONTRACT_ID));   // cancel
+    checkpoint();
+    expect(new Ink().get_config(new ink.get_config_arguments()).pending_admin).toBeNull();
+    expect(() => { authorize(ALICE); new Ink().accept_admin(new ink.accept_admin_arguments()); }).toThrow();
+    callDirectly();
+    authorize(CONTRACT_ID);
+    new Ink().set_admin(new ink.set_admin_arguments(ALICE));
+    authorize(ALICE);
+    new Ink().accept_admin(new ink.accept_admin_arguments());
+    expect(Base58.encode(new Ink().get_config(new ink.get_config_arguments()).admin!)).toBe(Base58.encode(ALICE));
+    expect(new Ink().get_config(new ink.get_config_arguments()).pending_admin).toBeNull();
   });
 });

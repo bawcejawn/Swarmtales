@@ -21,7 +21,7 @@
 //   - Mint Ink directly, move anyone's Ink, or burn anyone's Ink.
 // =====================================================================
 
-import { System, Storage, authority, Protobuf, SafeMath } from "@koinos/sdk-as";
+import { System, Storage, authority, Protobuf, SafeMath, Arrays } from "@koinos/sdk-as";
 import { ink } from "./proto/ink";
 
 // Each kind of stored data lives in its own numbered "space".
@@ -137,7 +137,8 @@ export class Ink {
   }
 
   get_config(args: ink.get_config_arguments): ink.config {
-    return new ink.config(this.getAdmin(), this.config.get()!.paused);
+    const cfg = this.config.get()!;
+    return new ink.config(this.getAdmin(), cfg.paused, cfg.pending_admin);
   }
 
   // ===================================================================
@@ -274,17 +275,43 @@ export class Ink {
     return new ink.empty_object();
   }
 
+  // Step 1 of 2 (AB-016): propose. Admin moves only when the proposed
+  // address accepts, so a typo cannot strand it.
   set_admin(args: ink.set_admin_arguments): ink.empty_object {
     this.requireAdmin();
-    const newAdmin = this.requireAddress(args.new_admin, "INK: invalid admin address");
-
-    const oldAdmin = this.getAdmin();
+    const proposed = this.requireAddress(args.new_admin, "INK: invalid admin address");
+    const admin = this.getAdmin();
     const cfg = this.config.get()!;
-    cfg.admin = newAdmin;
+    // Proposing the current admin cancels a pending handover.
+    cfg.pending_admin = Arrays.equal(proposed, admin) ? null : proposed;
     this.config.put(cfg);
 
-    const event = new ink.admin_changed_event(oldAdmin, newAdmin);
-    System.event("ink.admin_changed_event", Protobuf.encode(event, ink.admin_changed_event.encode), [newAdmin]);
+    const event = new ink.admin_proposed_event(admin, cfg.pending_admin);
+    System.event("ink.admin_proposed_event", Protobuf.encode(event, ink.admin_proposed_event.encode), [proposed]);
+    return new ink.empty_object();
+  }
+
+  // Step 2 of 2: the proposed admin signs to take over.
+  accept_admin(args: ink.accept_admin_arguments): ink.empty_object {
+    const caller = System.getCaller().caller;
+    System.require(
+      caller == null || caller.length == 0,
+      "INK: call SwarmTales directly from your wallet, not through another contract"
+    );
+    const cfg = this.config.get()!;
+    const pending = cfg.pending_admin;
+    System.require(pending != null && pending.length == ADDRESS_LENGTH, "INK: no admin handover is pending");
+    System.require(
+      System.checkAuthority(authority.authorization_type.contract_call, pending!),
+      "INK: only the proposed admin can accept"
+    );
+    const oldAdmin = this.getAdmin();
+    cfg.admin = pending;
+    cfg.pending_admin = null;
+    this.config.put(cfg);
+
+    const event = new ink.admin_changed_event(oldAdmin, pending);
+    System.event("ink.admin_changed_event", Protobuf.encode(event, ink.admin_changed_event.encode), [pending!]);
     return new ink.empty_object();
   }
 

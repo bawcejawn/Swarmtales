@@ -451,3 +451,28 @@ test("on mainnet, wire-stories needs --treasury and --founder instead of trustin
   // Testnet keeps reading them from the chain.
   assert.strictEqual(lib.shopAddressesForStories(onChain, { ink: onChain.ink, stories }).founder, onChain.founder);
 });
+
+// ---------- AB-013: link keys stay out of shell history; strong randomness ----------
+
+test("a link key on the command line is refused: it would land in shell history", () => {
+  assert.throws(() => lib.refuseSecretFlag({ "link-key": "5KwdXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" }, "link-key"), /hidden prompt/);
+  assert.throws(() => lib.refuseSecretFlag({ "link-key": true }, "link-key"), /hidden prompt/);
+  lib.refuseSecretFlag({}, "link-key"); // no flag: fine, the prompt asks for it
+});
+
+test("claim-promo and the other test commands refuse mainnet", () => {
+  assert.throws(() => lib.requireTestnet({ mainnet: true }, "claim-promo"), /claim-promo is for testnet only/);
+  lib.requireTestnet({ mainnet: false }, "claim-promo");
+});
+
+test("link keys are 32 bytes from crypto.randomBytes", () => {
+  const real = crypto.randomBytes;
+  crypto.randomBytes = (n) => Buffer.alloc(n, 7);
+  try {
+    assert.strictEqual(lib.newLinkKeyHex(), "07".repeat(32));
+  } finally {
+    crypto.randomBytes = real;
+  }
+  assert.match(lib.newLinkKeyHex(), /^[0-9a-f]{64}$/);
+  assert.notStrictEqual(lib.newLinkKeyHex(), lib.newLinkKeyHex());
+});
