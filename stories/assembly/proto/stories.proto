@@ -91,6 +91,7 @@ enum moderation_action {
   ACTION_UNHIDE = 2;
   ACTION_TAKEDOWN = 3;      // admin removes the text for good (no refund)
   ACTION_REPORT_HIDE = 4;   // enough writer reports hid the part automatically
+  ACTION_RESTORE = 5;       // the story's opener or an editor brought a hidden part back
 }
 
 enum final_mode {
@@ -191,6 +192,9 @@ message segment {
   // part insert_after; the newest part added after the same part comes first.
   uint64 insert_after = 21 [jstype = JS_STRING];
   bool fund_paid = 22;           // paid from the story's fund; its refunds go back to the fund
+  string citation = 23;          // the writer's own source note, e.g. a quoted book and author (up to 200 characters)
+  string source_note = 24;       // added by the copy checker: where parts of this text also appear (does not hide it)
+  bool restored = 25;            // brought back by the story's opener or an editor after being hidden
 }
 
 // A wallet's standing under the repeat-infringer policy.
@@ -453,6 +457,7 @@ message open_story_arguments {
   bool rights_confirmed = 14;    // must be true: "I wrote this, or I have the right to use it"
   uint32 terms_version = 15;     // must equal the current Terms of Use version
   uint64 fund = 16 [jstype = JS_STRING]; // unlisted/private only: extra Ink set aside for everyone's writing
+  string citation = 17;          // optional: what the opening part quotes (up to 200 characters)
 }
 
 // @description Opener changes title, categories, visibility and free chapters (send all of them)
@@ -538,6 +543,7 @@ message contribute_arguments {
   // Read right after this writer's previous part in this story (keeps a
   // multi-part addition in one place). Ignores insert_after.
   bool after_my_last = 10;
+  string citation = 11;          // optional: what this part quotes, e.g. "Pride and Prejudice, Jane Austen" (up to 200 characters)
 }
 
 // @description Opener or editor lightly edits a segment of an OPEN story. Shortening refunds the author.
@@ -582,6 +588,36 @@ message set_segment_hidden_arguments {
   bool hidden = 4;
   moderation_reason reason = 5;
   string note = 6;               // up to 200 characters, e.g. what it matched
+}
+
+// @description The part's writer, the opener or an editor sets or changes the part's source note (citation).
+// @read-only false
+// @result empty_object
+message set_citation_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  uint64 seq = 3 [jstype = JS_STRING];
+  string citation = 4;           // up to 200 characters; empty clears it
+}
+
+// @description Admin or moderator (the copy checker) notes where parts of a text also appear, without hiding it.
+// @read-only false
+// @result empty_object
+message set_source_note_arguments {
+  bytes actor = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  uint64 seq = 3 [jstype = JS_STRING];
+  string note = 4;               // up to 200 characters; empty clears it
+}
+
+// @description The story's opener or an editor brings back a part that was hidden (not one taken down).
+// @read-only false
+// @result empty_object
+message restore_segment_arguments {
+  bytes actor = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  uint64 seq = 3 [jstype = JS_STRING];
+  string note = 4;               // optional, up to 200 characters
 }
 
 // @description Admin removes a part's text for good, at any stage. No Ink refund.
@@ -914,6 +950,14 @@ message moderation_event {
   bytes author = 6 [(koinos.btype) = ADDRESS];
   string note = 7;
   bytes text_hash = 8;           // fingerprint of the text at the time
+}
+
+message citation_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 seq = 2 [jstype = JS_STRING];
+  bytes by = 3 [(koinos.btype) = ADDRESS];
+  string citation = 4;
+  bool source_note = 5;          // true: the copy checker's note; false: the writer's citation
 }
 
 message report_event {
