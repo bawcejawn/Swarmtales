@@ -7,12 +7,24 @@ name: Copy checker
 # Settings (repository Settings > Secrets and variables > Actions):
 #   Variables:  STORIES_ADDRESS (required), RPC (optional)
 #   Secrets:    MODERATOR_WIF (the moderator's private key; without it the
-#               checker only reports), BRAVE_API_KEY (optional web check)
+#               checker only reports)
+#               Optional free phrase search (any or all):
+#                 GOOGLE_BOOKS_KEY  searches inside books (Google Books API, free)
+#                 TAVILY_API_KEY    web search (Tavily free plan, 1,000 a month)
+#                 BRAVE_API_KEY     web search (Brave; now needs a card on file)
+#
+# To check the search keys: Actions > Copy checker > Run workflow, and type a
+# sentence from a published book in "test_phrase". Nothing is hidden in a test.
 
 on:
   schedule:
     - cron: "17 * * * *"
   workflow_dispatch:
+    inputs:
+      test_phrase:
+        description: "Only test the search keys with this phrase (leave empty for a normal run)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -51,6 +63,9 @@ jobs:
           RPC: ${{ vars.RPC }}
           MODERATOR_WIF: ${{ secrets.MODERATOR_WIF }}
           BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+          GOOGLE_BOOKS_KEY: ${{ secrets.GOOGLE_BOOKS_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          TEST_PHRASE: ${{ inputs.test_phrase }}
           STATE_FILE: checker-state.json
         run: node checker/check.mjs
       - name: Save progress

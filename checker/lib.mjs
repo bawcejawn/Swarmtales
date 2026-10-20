@@ -148,12 +148,42 @@ export function resultMatches(phrase, result, ignoreHosts) {
   return want.length > 0 && found / want.length >= 0.7;
 }
 
-/** Monthly search budget, kept in the checker's state. */
-export function budget(state, now, monthlyLimit) {
+/**
+ * Monthly search budget per search service, kept in the checker's state.
+ * name "search" is the original (Brave) budget, kept for older state files.
+ */
+export function budget(state, now, monthlyLimit, name = "search") {
   const month = now.toISOString().slice(0, 7);
-  if (!state.search || state.search.month !== month) state.search = { month, used: 0 };
+  if (!state[name] || state[name].month !== month) state[name] = { month, used: 0 };
   return {
-    left: () => Math.max(0, monthlyLimit - state.search.used),
-    spend: () => { state.search.used += 1; },
+    left: () => Math.max(0, monthlyLimit - state[name].used),
+    spend: () => { state[name].used += 1; },
   };
+}
+
+/**
+ * Turn one search service's answer into [{ url, title, description }],
+ * the shape resultMatches() reads.
+ *   books:  Google Books API volumes search (searches inside the books)
+ *   tavily: Tavily web search
+ *   brave:  Brave web search
+ */
+export function normalizeResults(service, body) {
+  const b = body || {};
+  if (service === "books") {
+    return (b.items || []).map((item) => {
+      const info = item.volumeInfo || {};
+      const by = (info.authors || []).join(", ");
+      return {
+        url: info.infoLink || info.canonicalVolumeLink || ("https://books.google.com/books?id=" + encodeURIComponent(item.id || "")),
+        title: info.title || "",
+        description: String((item.searchInfo && item.searchInfo.textSnippet) || ""),
+        label: "the book \u201c" + (info.title || "untitled") + "\u201d" + (by ? " by " + by : ""),
+      };
+    });
+  }
+  if (service === "tavily") {
+    return (b.results || []).map((r) => ({ url: r.url || "", title: r.title || "", description: r.content || "" }));
+  }
+  return ((b.web && b.web.results) || []).map((r) => ({ url: r.url || "", title: r.title || "", description: r.description || "" }));
 }
