@@ -109,7 +109,11 @@ export async function loadAccount(address) {
     read("stories", "get_trial_used", { account: address }),
     getHeadSeconds(),
   ]);
+  // Older Stories contracts have no account status: treat as not blocked.
+  const status = await read("stories", "get_account_status", { account: address }).catch(() => null);
   return {
+    blocked: !!(status && status.blocked),
+    strikes: status && status.strikes ? Number(status.strikes) : 0,
     mana: mana || "0",
     token: token && token.value ? token.value : "0",
     ink: ink && ink.value ? ink.value : "0",
@@ -203,6 +207,12 @@ export async function loadStory(id) {
     }
   }
   return { story: story || {}, segments };
+}
+
+/** Whether this wallet already reported a part (false on older contracts). */
+export async function hasReported(storyId, seq, address) {
+  const r = await read("stories", "has_reported", { story_id: String(storyId), seq: String(seq), account: address }).catch(() => null);
+  return !!(r && r.value);
 }
 
 export async function quoteCost(text) {

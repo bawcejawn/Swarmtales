@@ -96,3 +96,116 @@ export function costNote(text) {
   if (pairs === 0) return cost + " Ink. Letters and most older symbols cost 1.";
   return cost + " Ink. " + pairs + " of those are emoji halves (most emoji cost 2, a skin tone or flag costs 4, a family costs 8).";
 }
+
+/**
+ * Tidy pasted text so it passes the Stories rules: Windows line endings
+ * and tabs become plain line breaks and spaces, and runs of more than
+ * three line breaks shrink to two.
+ */
+export function normalizePasted(value) {
+  return String(value ?? "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\t/g, " ")
+    .replace(/\n{4,}/g, "\n\n");
+}
+
+export const MAX_PARTS_PER_SIGNATURE = 10;
+// One confirmation carries at most this much text (about 4 mana measured on the testnet).
+export const MAX_CHARS_PER_SIGNATURE = 30000;
+
+function isHighSurrogate(code) {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+/** Cut `text` at most `max` units long without splitting an emoji, preferring a space. */
+function cutAt(text, max) {
+  if (text.length <= max) return [text, ""];
+  let at = text.lastIndexOf(" ", max);
+  if (at < max * 0.5) at = max;
+  if (isHighSurrogate(text.charCodeAt(at - 1))) at -= 1;
+  return [text.slice(0, at).trimEnd(), text.slice(at).trimStart()];
+}
+
+/** Pieces no longer than `cap`: whole paragraphs, else sentences, else words. */
+function pieces(text, cap) {
+  const out = [];
+  for (const para of text.split(/\n{2,}/)) {
+    const p = para.trim();
+    if (!p) continue;
+    if (p.length <= cap) {
+      out.push({ text: p, joiner: "\n\n" });
+      continue;
+    }
+    const sentences = p.match(/[^.!?…]+(?:[.!?…]+["”’)\]]*)?\s*/g) || [p];
+    let first = true;
+    for (const raw of sentences) {
+      let s = raw.trim();
+      while (s.length > cap) {
+        const [head, rest] = cutAt(s, cap);
+        out.push({ text: head, joiner: first ? "\n\n" : " " });
+        first = false;
+        s = rest;
+      }
+      if (s) {
+        out.push({ text: s, joiner: first ? "\n\n" : " " });
+        first = false;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Split text that is longer than the per-part cap into parts the contract
+ * accepts: each at most `cap` units and at least `min` (the last part may
+ * be shorter only if `lastMayBeShort`). Breaks fall between paragraphs when
+ * possible, then between sentences, then between words.
+ * Returns an array of strings. Text within the cap comes back as one part.
+ */
+export function splitIntoParts(value, cap, min, lastMayBeShort) {
+  const text = normalizePasted(value).trim();
+  const limit = Math.max(1, Number(cap) || 1);
+  const minimum = Math.max(0, Number(min) || 0);
+  if (!text) return [];
+  if (text.length <= limit) return [text];
+  const parts = [];
+  let current = "";
+  for (const piece of pieces(text, limit)) {
+    const joined = current ? current + piece.joiner + piece.text : piece.text;
+    if (joined.length <= limit) {
+      current = joined;
+    } else {
+      parts.push(current);
+      current = piece.text;
+    }
+  }
+  if (current) parts.push(current);
+  // A short last part joins the one before it if they fit together;
+  // otherwise it borrows words from the end of the one before.
+  const last = parts.length - 1;
+  if (last > 0 && parts[last].length < minimum && !lastMayBeShort) {
+    const merged = parts[last - 1] + "\n\n" + parts[last];
+    if (merged.length <= limit) {
+      parts.splice(last - 1, 2, merged);
+    } else {
+      let prev = parts[last - 1];
+      let tail = parts[last];
+      while (tail.length < minimum) {
+        const at = prev.lastIndexOf(" ");
+        if (at <= 0) break;
+        tail = prev.slice(at + 1) + " " + tail;
+        prev = prev.slice(0, at);
+      }
+      if (tail.length < minimum) {
+        // No spaces left to break at: borrow characters, never half an emoji.
+        let at = prev.length - (minimum - tail.length);
+        if (at > 0 && isHighSurrogate(prev.charCodeAt(at - 1))) at -= 1;
+        tail = prev.slice(at) + tail;
+        prev = prev.slice(0, at);
+      }
+      parts[last - 1] = prev;
+      parts[last] = tail;
+    }
+  }
+  return parts;
+}

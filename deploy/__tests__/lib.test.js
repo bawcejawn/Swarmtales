@@ -395,3 +395,11 @@ test("promo and invite link messages match the contract byte layout", () => {
   // sha256 returns 32 bytes.
   assert.strictEqual(lib.sha256(promo).length, 32);
 });
+
+test("moderation reasons map to the contract's numbers", () => {
+  assert.strictEqual(lib.requireReason("copyright"), 1);
+  assert.strictEqual(lib.requireReason("Duplicate"), 2);
+  assert.strictEqual(lib.requireReason("other"), 5);
+  assert.throws(() => lib.requireReason("rude"), /--reason must be one of/);
+  assert.throws(() => lib.requireReason(undefined), /--reason must be one of/);
+});

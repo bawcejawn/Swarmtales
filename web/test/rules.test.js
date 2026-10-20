@@ -13,6 +13,7 @@ const openStory = {
   privileged: false,
   writerActive: true,
   promoClaimed: false,
+  rightsConfirmed: true,
 };
 
 test("an active writer can add a short line", () => {
@@ -57,6 +58,7 @@ test("a promo wallet uses the trial until it is spent", () => {
 test("opening a short story checks length, price, and starter ink", () => {
   const input = {
     title: "A night market",
+    rightsConfirmed: true,
     openingText: "Once",
     maxChars: "10000",
     cap: "4000",
@@ -123,9 +125,14 @@ test("books use the book length range", () => {
   const base = {
     title: "A long tale", openingText: "The opening line of a very long book.", maxChars: "100000",
     category1: "1", category2: "0", visibility: "1", freeChapters: 0, editionMin: "0", cap: "2000",
-    inkBalance: "0", starter: "20000", openCount: 0, openLimit: 3, price: "100000000", tokenBalance: "500000000", kind: 1,
+    inkBalance: "0", starter: "20000", openCount: 0, openLimit: 3, price: "100000000", tokenBalance: "500000000", kind: 1, rightsConfirmed: true,
   };
   assert.equal(assessOpen(base).ok, true);
   assert.match(assessOpen({ ...base, maxChars: "99999" }).problems.join(" "), /A book must be 100,000 to 1,000,000/);
   assert.match(assessOpen({ ...base, kind: 2 }).problems.join(" "), /short story must be 10,000 to 99,999/);
+});
+
+test("writing and opening need the rights confirmation, and a blocked wallet is told why", () => {
+  assert.match(assessWrite({ ...openStory, rightsConfirmed: false }).problems.join(" "), /I wrote this myself/);
+  assert.match(assessWrite({ ...openStory, blocked: true }).problems.join(" "), /can no longer write/);
 });

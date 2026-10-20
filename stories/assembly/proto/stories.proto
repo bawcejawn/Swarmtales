@@ -75,6 +75,24 @@ enum segment_status {
   SEGMENT_REMOVED = 2;
 }
 
+// Why a part was hidden, taken down or reported.
+enum moderation_reason {
+  REASON_UNSPECIFIED = 0;
+  REASON_COPYRIGHT = 1;   // copied from someone else's work
+  REASON_DUPLICATE = 2;   // the same text already appears on SwarmTales
+  REASON_SPAM = 3;
+  REASON_ILLEGAL = 4;     // unlawful or abusive content
+  REASON_OTHER = 5;
+}
+
+enum moderation_action {
+  ACTION_NONE = 0;
+  ACTION_HIDE = 1;          // admin or moderator hides a part (reversible)
+  ACTION_UNHIDE = 2;
+  ACTION_TAKEDOWN = 3;      // admin removes the text for good (no refund)
+  ACTION_REPORT_HIDE = 4;   // enough writer reports hid the part automatically
+}
+
 enum final_mode {
   FINAL_PENDING = 0;
   FINAL_UNCHANGED = 1;
@@ -89,7 +107,7 @@ message config {
   bool paused = 2;
   bytes ink = 3 [(koinos.btype) = ADDRESS];
   bytes shop = 4 [(koinos.btype) = ADDRESS];
-  uint32 contribution_cap = 5;   // max Ink per submission
+  uint32 contribution_cap = 5;   // max Ink per submission (default 10,000)
   uint32 trial_limit = 6;        // lifetime trial characters for promo wallets
   uint32 open_limit = 7;         // active projects per opener
   uint32 archive_days = 8;       // inactivity before anyone may archive
@@ -97,6 +115,13 @@ message config {
   uint64 next_story_id = 10 [jstype = JS_STRING];
   uint32 next_category_id = 11;
   uint32 min_contribution = 12;  // shortest new text (default 20); the piece that fills the story is exempt
+  // Moderation (October 2026)
+  bytes moderator = 13 [(koinos.btype) = ADDRESS]; // automated checker: may hide and unhide parts only
+  uint32 terms_version = 14;     // current Terms of Use version; every new part must send it
+  bytes terms_hash = 15;         // sha256 of the published Terms of Use text
+  string terms_uri = 16;         // where the Terms of Use are published
+  uint32 report_threshold = 17;  // writer reports that hide a part automatically (default 3)
+  uint32 strike_limit = 18;      // takedowns after which a wallet is blocked automatically (default 3)
 }
 
 message story {
@@ -130,6 +155,8 @@ message story {
   bytes pdf_hash = 28;
   uint32 editor_count = 29;
   uint64 next_invite_id = 30 [jstype = JS_STRING];
+  uint32 hidden_count = 31;      // parts hidden right now; a story cannot be finalized while this is above 0
+  bool needs_new_pdf = 32;       // a part was taken down after finalizing; the admin must publish a new PDF
 }
 
 message segment {
@@ -147,6 +174,21 @@ message segment {
   uint64 last_edited_at = 12 [jstype = JS_STRING];
   final_mode final_mode = 13;
   uint64 surviving = 14 [jstype = JS_STRING];
+  bool hidden = 15;              // hidden from readers, the PDF and NFTs while it is checked
+  bool taken_down = 16;          // removed for good by the admin (status is also REMOVED)
+  moderation_reason moderation_reason = 17;
+  uint32 report_count = 18;      // reports from wallets that have written on SwarmTales
+  bool rights_confirmed = 19;    // the writer confirmed they wrote it or may use it
+  uint32 terms_version = 20;     // Terms of Use version the writer accepted for this part
+  // 0: read in order of writing. Otherwise this part is read right after
+  // part insert_after; the newest part added after the same part comes first.
+  uint64 insert_after = 21 [jstype = JS_STRING];
+}
+
+// A wallet's standing under the repeat-infringer policy.
+message account_status {
+  bool blocked = 1;
+  uint32 strikes = 2;            // takedowns of this wallet's parts
 }
 
 message segment_list {
@@ -343,6 +385,29 @@ message get_author_segments_arguments {
   uint32 limit = 3;
 }
 
+// @description Whether a wallet has already reported a part
+// @read-only true
+// @result boole
+message has_reported_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 seq = 2 [jstype = JS_STRING];
+  bytes account = 3 [(koinos.btype) = ADDRESS];
+}
+
+// @description Whether a wallet is blocked and how many takedowns it has
+// @read-only true
+// @result account_status
+message get_account_status_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+}
+
+// @description Latest Terms of Use version a wallet accepted (0 if never)
+// @read-only true
+// @result uint32
+message get_terms_accepted_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+}
+
 // @description Exact Ink the contract would charge for this text. Fails with the reason if the text is not allowed.
 // @read-only true
 // @result uint64
@@ -369,6 +434,8 @@ message open_story_arguments {
   bool ai_assisted = 11;
   uint64 expected_ink = 12 [jstype = JS_STRING];
   bytes token = 13 [(koinos.btype) = ADDRESS];
+  bool rights_confirmed = 14;    // must be true: "I wrote this, or I have the right to use it"
+  uint32 terms_version = 15;     // must equal the current Terms of Use version
 }
 
 // @description Opener changes title, categories, visibility and free chapters (send all of them)
@@ -448,6 +515,12 @@ message contribute_arguments {
   bool starts_chapter = 4;
   bool ai_assisted = 5;
   uint64 expected_ink = 6 [jstype = JS_STRING];
+  bool rights_confirmed = 7;     // must be true: "I wrote this, or I have the right to use it"
+  uint32 terms_version = 8;      // must equal the current Terms of Use version
+  uint64 insert_after = 9 [jstype = JS_STRING]; // 0 = at the end; otherwise the part this text is read after
+  // Read right after this writer's previous part in this story (keeps a
+  // multi-part addition in one place). Ignores insert_after.
+  bool after_my_last = 10;
 }
 
 // @description Opener or editor lightly edits a segment of an OPEN story. Shortening refunds the author.
@@ -468,6 +541,52 @@ message remove_segment_arguments {
   bytes editor = 1 [(koinos.btype) = ADDRESS];
   uint64 story_id = 2 [jstype = JS_STRING];
   uint64 seq = 3 [jstype = JS_STRING];
+}
+
+// ---------- Moderation ----------
+
+// @description Admin or the moderator hides or unhides a part. Works at any stage. Hidden parts
+// stay on the record but are left out of the site, the PDF and NFTs, and block finalizing.
+// @read-only false
+// @result empty_object
+message set_segment_hidden_arguments {
+  bytes actor = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  uint64 seq = 3 [jstype = JS_STRING];
+  bool hidden = 4;
+  moderation_reason reason = 5;
+  string note = 6;               // up to 200 characters, e.g. what it matched
+}
+
+// @description Admin removes a part's text for good, at any stage. No Ink refund.
+// @read-only false
+// @result empty_object
+message takedown_segment_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 seq = 2 [jstype = JS_STRING];
+  moderation_reason reason = 3;
+  string note = 4;               // up to 200 characters, e.g. a notice reference
+}
+
+// @description Any wallet reports a part, once per part. Reports from wallets that have written on
+// SwarmTales count toward hiding it automatically.
+// @read-only false
+// @result empty_object
+message report_segment_arguments {
+  bytes reporter = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  uint64 seq = 3 [jstype = JS_STRING];
+  moderation_reason reason = 4;
+  string note = 5;               // up to 200 characters
+}
+
+// @description Admin publishes a new PDF after a takedown in a finalized story
+// @read-only false
+// @result empty_object
+message replace_pdf_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  string pdf_uri = 2;
+  bytes pdf_hash = 3;
 }
 
 // ---------- Closing and the final edit ----------
@@ -505,7 +624,7 @@ message admin_take_over_arguments {
   uint64 story_id = 1 [jstype = JS_STRING];
 }
 
-// @description Finalizer submits the next final-edit results, in order (max 20 items, 8,000 Ink units of text)
+// @description Finalizer submits the next final-edit results, in order (max 20 items, 20,000 Ink units of text)
 // @read-only false
 // @result empty_object
 message submit_final_batch_arguments {
@@ -584,6 +703,33 @@ message set_paused_arguments {
   bool paused = 1;
 }
 
+// @description Set the moderator (empty turns it off) and how many writer reports hide a part (1 to 20)
+// @read-only false
+// @result empty_object
+message set_moderation_arguments {
+  bytes moderator = 1 [(koinos.btype) = ADDRESS];
+  uint32 report_threshold = 2;
+  uint32 strike_limit = 3;       // 1 to 20 takedowns before a wallet is blocked
+}
+
+// @description Admin blocks or unblocks a wallet from opening, writing and reporting
+// @read-only false
+// @result empty_object
+message set_blocked_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  bool blocked = 2;
+  string note = 3;               // up to 200 characters
+}
+
+// @description Publish a new Terms of Use version (must be higher than the current one)
+// @read-only false
+// @result empty_object
+message set_terms_arguments {
+  uint32 version = 1;
+  bytes terms_hash = 2;          // sha256 of the Terms of Use text (32 bytes)
+  string terms_uri = 3;          // where to read them, up to 200 plain characters
+}
+
 // @description Hand admin to a new address
 // @read-only false
 // @result empty_object
@@ -626,6 +772,9 @@ message contribution_event {
   bool ai_assisted = 6;
   bytes text_hash = 7;
   bool trial = 8;
+  bool rights_confirmed = 9;
+  uint32 terms_version = 10;
+  uint64 insert_after = 11 [jstype = JS_STRING];
 }
 
 message segment_changed_event {
@@ -722,4 +871,51 @@ message paused_event {
 message admin_changed_event {
   bytes old_admin = 1 [(koinos.btype) = ADDRESS];
   bytes new_admin = 2 [(koinos.btype) = ADDRESS];
+}
+
+// Every hide, unhide, takedown and automatic hide, on the public record.
+message moderation_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 seq = 2 [jstype = JS_STRING];
+  moderation_action action = 3;
+  moderation_reason reason = 4;
+  bytes by = 5 [(koinos.btype) = ADDRESS];
+  bytes author = 6 [(koinos.btype) = ADDRESS];
+  string note = 7;
+  bytes text_hash = 8;           // fingerprint of the text at the time
+}
+
+message report_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 seq = 2 [jstype = JS_STRING];
+  bytes reporter = 3 [(koinos.btype) = ADDRESS];
+  moderation_reason reason = 4;
+  string note = 5;
+  bool counted = 6;              // true when the reporter has written on SwarmTales
+  uint32 report_count = 7;
+}
+
+message terms_event {
+  uint32 version = 1;
+  bytes terms_hash = 2;
+  string terms_uri = 3;
+}
+
+message terms_accepted_event {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  uint32 version = 2;
+}
+
+message moderation_settings_event {
+  bytes moderator = 1 [(koinos.btype) = ADDRESS];
+  uint32 report_threshold = 2;
+  uint32 strike_limit = 3;
+}
+
+message account_blocked_event {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  bool blocked = 2;
+  uint32 strikes = 3;
+  bytes by = 4 [(koinos.btype) = ADDRESS];
+  string note = 5;               // "automatic: 3 takedowns" or the admin's note
 }

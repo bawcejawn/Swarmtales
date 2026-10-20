@@ -29,9 +29,11 @@
  *       (dry runs only: each call must be REJECTED; nothing is ever sent)
  *
  * Stories (after building stories/ and uploading it):
- *   node deploy/deploy.js wire-stories --admin <addr> --ink <addr> --shop <addr> --stories <addr> [--treasury <addr>] [--founder <addr>]
+ *   node deploy/deploy.js wire-stories --admin <addr> --ink <addr> --shop <addr> --stories <addr> [--treasury <addr>] [--founder <addr>] [--replace-stories <old addr>]
  *       (one admin transaction: stories.set_addresses, ink.set_burner, ink.set_minter mask 32,
- *        shop.set_addresses with the treasury and founder READ FROM THE CHAIN, and the 11 categories)
+ *        shop.set_addresses with the treasury and founder READ FROM THE CHAIN, and the 11 categories.
+ *        --replace-stories retires an older Stories contract: Shop moves to the new one and the old one
+ *        loses its Ink burn and mint rights, all in the same transaction)
  *   node deploy/deploy.js test-open --user <addr> --shop <addr> --stories <addr> [--token <addr>] [--private]
  *       (testnet: approve the Shop for the Short Story open price, then open a Short Story.
  *        --private makes it invite-only, for the invite rehearsal)
@@ -49,6 +51,17 @@
  *        Writer membership, the promo trial, and a private story's allow-list). Default is 100 units of plain text. Size is lowered to the
  *        per-submission cap and the space left. Stops if the Ink balance is too low.)
  *   node deploy/deploy.js stories-limits --admin <addr> --stories <addr> --cap <100-4000>
+ *
+ * Moderation (Stories, October 2026):
+ *   node deploy/deploy.js set-terms --admin <addr> --stories <addr> --version <n> --file <terms.md> --uri <https link>
+ *       (publishes a Terms of Use version: its sha256 and link go on chain. Every new part must then carry this version)
+ *   node deploy/deploy.js new-moderator-key
+ *       (makes a fresh key for the automated copy checker and prints it ONCE. Put it in a GitHub secret. Nothing is saved)
+ *   node deploy/deploy.js set-moderation --admin <addr> --stories <addr> --moderator <addr|off> [--threshold 3] [--strikes 3]
+ *   node deploy/deploy.js hide --actor <admin or moderator addr> --stories <addr> --story <id> --seq <n> --reason copyright|duplicate|spam|illegal|other [--note "..."] [--unhide]
+ *   node deploy/deploy.js takedown --admin <addr> --stories <addr> --story <id> --seq <n> --reason copyright|duplicate|spam|illegal|other --note "notice reference"
+ *       (permanent: clears the part's text from contract storage. No Ink refund. One strike for the writer)
+ *   node deploy/deploy.js block --admin <addr> --stories <addr> --account <addr> [--note "..."] [--unblock]
  * Common flags: --network testnet|mainnet  --rpc <https url>
  */
 "use strict";
@@ -214,13 +227,36 @@ async function buildTx(signer, provider, net, operations, rcLimit) {
   return tx;
 }
 
+/**
+ * Mana this wallet can use right now. The node keeps a recent transaction's
+ * whole mana limit set aside for a few minutes, even after it is in a block,
+ * so that amount is subtracted.
+ */
+async function freeMana(provider, payer) {
+  const total = BigInt(await provider.getAccountRc(payer));
+  let reserved = 0n;
+  try {
+    const r = await provider.call("mempool.get_reserved_account_rc", { account: payer });
+    if (r && r.rc) reserved = BigInt(r.rc);
+  } catch {
+    reserved = 0n;
+  }
+  return { total, reserved, free: total > reserved ? total - reserved : 0n };
+}
+
 async function dryRunThenSend(signer, provider, net, operations, summary) {
   const payer = signer.getAddress();
-  const available = await provider.getAccountRc(payer);
+  const mana = await freeMana(provider, payer);
+  const available = mana.free.toString();
   console.log("");
   console.log("What will happen: " + summary);
-  console.log("Mana available on " + payer + ": " + lib.formatMana(available));
-  if (BigInt(available) === 0n) lib.fail("This wallet has no mana. Send it some tKOIN first, then wait a minute.");
+  console.log("Mana available on " + payer + ": " + lib.formatMana(available) +
+    (mana.reserved > 0n ? " (another " + lib.formatMana(mana.reserved.toString()) + " is held for a recent transaction for a few minutes)" : ""));
+  if (mana.free === 0n) {
+    lib.fail(mana.reserved > 0n
+      ? "All of this wallet's mana is held for a recent transaction. Wait about 5 minutes and run this again."
+      : "This wallet has no mana. Send it some tKOIN first, then wait a minute.");
+  }
 
   // Dry run: signed, submitted with broadcast=false. The node runs it and
   // returns the receipt, but it is not passed to other nodes or put in a block.
@@ -569,7 +605,11 @@ async function cmdWireStories(args) {
     stories,
     treasury: f.treasury === undefined ? undefined : lib.requireAddress(f.treasury, "treasury"),
     founder: f.founder === undefined ? undefined : lib.requireAddress(f.founder, "founder"),
+    replace: f["replace-stories"] === undefined ? undefined : lib.requireAddress(f["replace-stories"], "replace-stories"),
   });
+  // Retiring an older Stories contract: it loses its Ink burn and mint rights
+  // in the same transaction, so only the new one can ever touch Ink.
+  const retiring = shopCfg.stories && shopCfg.stories !== stories ? shopCfg.stories : "";
   const storiesCfg = await readOnly(provider, "stories", stories, "get_config");
   if (storiesCfg.admin !== admin) {
     lib.fail("Stories admin is " + (storiesCfg.admin || "(not readable)") + ", not " + admin + ". Run set-admin stories first.");
@@ -594,6 +634,11 @@ async function cmdWireStories(args) {
     await inkC.encodeOperation({ name: "set_minter", args: { account: stories, reasons_mask: lib.STORIES_MINT_MASK } }),
     await shopC.encodeOperation({ name: "set_addresses", args: shopArgs }),
   ];
+  if (retiring) {
+    console.log("Retiring the old Stories contract " + retiring + ": its Ink burn and mint rights are removed.");
+    ops.push(await inkC.encodeOperation({ name: "set_burner", args: { account: retiring, allowed: false } }));
+    ops.push(await inkC.encodeOperation({ name: "set_minter", args: { account: retiring, reasons_mask: 0 } }));
+  }
   if (!haveCategories) {
     for (const name of lib.STORY_CATEGORIES) {
       ops.push(await storiesC.encodeOperation({ name: "add_category", args: { name } }));
@@ -620,6 +665,7 @@ async function cmdTestOpen(args) {
   const { Contract, utils } = koilib();
   const shopC = new Contract({ id: shop, abi: loadAbiJson("shop"), provider });
   const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  const termsVersion = Number((await readOnly(provider, "stories", stories, "get_config")).terms_version || 0);
   const { result: priceRes } = await shopC.functions.get_price({ item: lib.SHOP_ITEMS.ITEM_OPEN_SHORT, token });
   const price = priceRes && priceRes.value ? priceRes.value : "0";
   if (price === "0") lib.fail("Opening a Short Story has no price for that token yet. Run test-asset first.");
@@ -644,6 +690,8 @@ async function cmdTestOpen(args) {
         ai_assisted: false,
         expected_ink: String(lib.inkCost(text)),
         token,
+        rights_confirmed: true,
+        terms_version: termsVersion,
       },
     }),
   ];
@@ -728,6 +776,7 @@ async function cmdMeasure(args) {
   const emoji = f.emoji === true;
   const { net, provider } = await connect(f);
   const cfg = await readOnly(provider, "stories", stories, "get_config");
+  const termsVersion = Number(cfg.terms_version || 0);
   const st = await readOnly(provider, "stories", stories, "get_story", { story_id: storyId });
   lib.assertStoryOpener(storyId, st.opener, user);
   const bal = await readOnly(provider, "ink", ink, "balance_of", { owner: user });
@@ -753,7 +802,10 @@ async function cmdMeasure(args) {
     try {
       const op = await storiesC.encodeOperation({
         name: "contribute",
-        args: { author: user, story_id: storyId, text, starts_chapter: false, ai_assisted: false, expected_ink: String(lib.inkCost(text)) },
+        args: {
+          author: user, story_id: storyId, text, starts_chapter: false, ai_assisted: false,
+          expected_ink: String(lib.inkCost(text)), rights_confirmed: true, terms_version: termsVersion,
+        },
       });
       const tx = await buildTx(signer, provider, net, [op], available);
       const { receipt } = await provider.sendTransaction(tx.transaction, false);
@@ -821,6 +873,8 @@ async function cmdTestWrite(args) {
       starts_chapter: false,
       ai_assisted: false,
       expected_ink: plan.cost,
+      rights_confirmed: true,
+      terms_version: Number(cfg.terms_version || 0),
     },
   });
   const txId = await dryRunThenSend(
@@ -850,6 +904,131 @@ async function cmdStoriesLimits(args) {
   const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
   const op = await storiesC.encodeOperation({ name: "set_limits", args: limits });
   const txId = await dryRunThenSend(signer, provider, net, [op], "stories.set_limits: per-submission cap " + cap + " (other limits unchanged: " + JSON.stringify(limits) + ")");
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
+async function cmdBlock(args) {
+  const f = args.flags;
+  const admin = lib.requireAddress(f.admin, "admin");
+  const stories = lib.requireAddress(f.stories, "stories");
+  const account = lib.requireAddress(f.account, "account");
+  const blocked = f.unblock !== true;
+  const note = f.note === undefined || f.note === true ? "" : String(f.note);
+  if (note.length > 200) lib.fail("--note must be at most 200 characters.");
+  const { net, provider } = await connect(f);
+  const signer = await getSigner(provider, admin, "the admin wallet");
+  const { Contract } = koilib();
+  const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  const op = await storiesC.encodeOperation({ name: "set_blocked", args: { account, blocked, note } });
+  const txId = await dryRunThenSend(signer, provider, net, [op], (blocked ? "BLOCK " : "UNBLOCK ") + account + (note ? " (" + note + ")" : ""));
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
+async function cmdSetTerms(args) {
+  const f = args.flags;
+  const admin = lib.requireAddress(f.admin, "admin");
+  const stories = lib.requireAddress(f.stories, "stories");
+  const version = Number(f.version);
+  if (!Number.isInteger(version) || version < 1) lib.fail("--version must be a whole number, 1 or more.");
+  if (!f.file || !fs.existsSync(String(f.file))) lib.fail("--file must point to the Terms of Use text you are publishing.");
+  const uri = String(f.uri || "");
+  if (!/^[\x21-\x7e]{1,200}$/.test(uri)) lib.fail("--uri must be the link where the terms are published (1 to 200 plain characters).");
+  // Fingerprint the text with Unix line endings, whatever computer this runs
+  // on, so it matches the file the website serves.
+  const text = fs.readFileSync(String(f.file), "utf8").replace(/\r\n/g, "\n");
+  const hash = lib.sha256(Buffer.from(text, "utf8"));
+  const { net, provider } = await connect(f);
+  const cfg = await readOnly(provider, "stories", stories, "get_config");
+  if (version <= Number(cfg.terms_version || 0)) lib.fail("The chain is already at version " + cfg.terms_version + ". Use a higher number.");
+  const signer = await getSigner(provider, admin, "the admin wallet");
+  const { Contract, utils } = koilib();
+  const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  const op = await storiesC.encodeOperation({
+    name: "set_terms",
+    args: { version, terms_hash: utils.encodeBase64url(hash), terms_uri: uri },
+  });
+  const txId = await dryRunThenSend(signer, provider, net, [op],
+    "stories.set_terms: version " + version + ", sha256 " + Buffer.from(hash).toString("hex") + ", link " + uri);
+  console.log("Send back: the transaction id (" + txId + "). Then update TERMS_VERSION in web/src/config.js to " + version + ".");
+}
+
+async function cmdNewModeratorKey() {
+  const { Signer, utils } = koilib();
+  const crypto = require("crypto");
+  const key = new Signer({ privateKey: utils.toHexString(crypto.randomBytes(32)) });
+  console.log("");
+  console.log("A new key for the automated copy checker (the moderator). It is shown ONCE and saved nowhere.");
+  console.log("It can only hide and unhide story parts. It can't remove text, move Ink, or change settings.");
+  console.log("");
+  console.log("  Moderator address (safe to share): " + key.getAddress());
+  console.log("  Private key (put it in the GitHub secret MODERATOR_WIF, then clear this window):");
+  console.log("  " + key.getPrivateKey("wif", true));
+  console.log("");
+  console.log("Never paste the private key into a chat, an email or a file in the repository.");
+}
+
+async function cmdSetModeration(args) {
+  const f = args.flags;
+  const admin = lib.requireAddress(f.admin, "admin");
+  const stories = lib.requireAddress(f.stories, "stories");
+  const off = f.moderator === "off";
+  const moderator = off ? "" : lib.requireAddress(f.moderator, "moderator (or the word off)");
+  const threshold = f.threshold === undefined ? 3 : Number(f.threshold);
+  if (!Number.isInteger(threshold) || threshold < 1 || threshold > 20) lib.fail("--threshold must be 1 to 20.");
+  const strikes = f.strikes === undefined ? 3 : Number(f.strikes);
+  if (!Number.isInteger(strikes) || strikes < 1 || strikes > 20) lib.fail("--strikes must be 1 to 20.");
+  const { net, provider } = await connect(f);
+  const signer = await getSigner(provider, admin, "the admin wallet");
+  const { Contract } = koilib();
+  const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  const op = await storiesC.encodeOperation({ name: "set_moderation", args: { moderator, report_threshold: threshold, strike_limit: strikes } });
+  const txId = await dryRunThenSend(signer, provider, net, [op],
+    "stories.set_moderation: moderator " + (off ? "OFF" : moderator) + ", " + threshold + " writer reports hide a part, " + strikes + " takedowns block a wallet");
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
+async function cmdHide(args) {
+  const f = args.flags;
+  const actor = lib.requireAddress(f.actor, "actor (the admin or moderator address)");
+  const stories = lib.requireAddress(f.stories, "stories");
+  const storyId = lib.requireStoryId(f.story);
+  const seq = lib.requireStoryId(f.seq);
+  const hidden = f.unhide !== true;
+  const reason = hidden ? lib.requireReason(f.reason) : 0;
+  const note = f.note === undefined || f.note === true ? "" : String(f.note);
+  if (note.length > 200) lib.fail("--note must be at most 200 characters.");
+  const { net, provider } = await connect(f);
+  const signer = await getSigner(provider, actor, "the admin or moderator wallet");
+  const { Contract } = koilib();
+  const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  const op = await storiesC.encodeOperation({
+    name: "set_segment_hidden",
+    args: { actor, story_id: storyId, seq, hidden, reason, note },
+  });
+  const txId = await dryRunThenSend(signer, provider, net, [op],
+    (hidden ? "HIDE" : "UNHIDE") + " story " + storyId + " part " + seq + (note ? " (" + note + ")" : ""));
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
+async function cmdTakedown(args) {
+  const f = args.flags;
+  const admin = lib.requireAddress(f.admin, "admin");
+  const stories = lib.requireAddress(f.stories, "stories");
+  const storyId = lib.requireStoryId(f.story);
+  const seq = lib.requireStoryId(f.seq);
+  const reason = lib.requireReason(f.reason);
+  const note = f.note === undefined || f.note === true ? "" : String(f.note);
+  if (note.length > 200) lib.fail("--note must be at most 200 characters.");
+  const { net, provider } = await connect(f);
+  const signer = await getSigner(provider, admin, "the admin wallet");
+  const { Contract } = koilib();
+  const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  const op = await storiesC.encodeOperation({
+    name: "takedown_segment",
+    args: { story_id: storyId, seq, reason, note },
+  });
+  const txId = await dryRunThenSend(signer, provider, net, [op],
+    "PERMANENT TAKEDOWN of story " + storyId + " part " + seq + ": its text is cleared and no Ink is refunded" + (note ? " (" + note + ")" : ""));
   console.log("Send back: the transaction id (" + txId + ").");
 }
 
@@ -950,6 +1129,18 @@ async function main() {
       return cmdTestWrite(args);
     case "stories-limits":
       return cmdStoriesLimits(args);
+    case "set-terms":
+      return cmdSetTerms(args);
+    case "new-moderator-key":
+      return cmdNewModeratorKey(args);
+    case "set-moderation":
+      return cmdSetModeration(args);
+    case "hide":
+      return cmdHide(args);
+    case "takedown":
+      return cmdTakedown(args);
+    case "block":
+      return cmdBlock(args);
     default: {
       const head = fs.readFileSync(__filename, "utf8").split("*/")[0];
       console.log(head.replace(/^#!.*\n/, "").replace(/^\/\*\*?|^ \* ?/gm, ""));

@@ -250,7 +250,9 @@ function shopAddressesForStories(onChain, wanted) {
   if (ink !== wanted.ink) fail("Shop points at Ink " + (ink || "(none)") + " but you gave --ink " + wanted.ink + ". Nothing was changed.");
   if (wanted.treasury && wanted.treasury !== treasury) fail("Shop treasury on chain is " + treasury + " but you gave --treasury " + wanted.treasury + ". Nothing was changed.");
   if (wanted.founder && wanted.founder !== founder) fail("Shop founder on chain is " + founder + " but you gave --founder " + wanted.founder + ". Nothing was changed.");
-  if (current && current !== wanted.stories) fail("Shop already points at a different Stories contract (" + current + "). Nothing was changed.");
+  if (current && current !== wanted.stories && current !== wanted.replace) {
+    fail("Shop already points at a different Stories contract (" + current + "). To retire it, add --replace-stories " + current + ". Nothing was changed.");
+  }
   return { treasury, founder, ink, stories: wanted.stories };
 }
 
@@ -337,6 +339,15 @@ function requireAddress(value, label) {
  * Parse argv (without node and script path).
  * Returns { command, target, flags } where flags maps name -> string|true.
  */
+/** Moderation reasons, as the Stories contract numbers them. */
+const MODERATION_REASONS = { copyright: 1, duplicate: 2, spam: 3, illegal: 4, other: 5 };
+
+function requireReason(value) {
+  const key = String(value || "").toLowerCase();
+  if (!MODERATION_REASONS[key]) fail("--reason must be one of: " + Object.keys(MODERATION_REASONS).join(", ") + ".");
+  return MODERATION_REASONS[key];
+}
+
 function parseArgs(argv) {
   const positional = [];
   const flags = {};
@@ -506,6 +517,8 @@ module.exports = {
   isAddress,
   requireAddress,
   parseArgs,
+  MODERATION_REASONS,
+  requireReason,
   resolveNetwork,
   checkChainId,
   classifySecret,

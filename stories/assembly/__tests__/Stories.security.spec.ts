@@ -85,8 +85,19 @@ function burns(): i32 {
   return n;
 }
 
+// Filler text of exactly n characters. Each call is different, because a
+// story refuses the same exact text twice.
+let FILL_COUNTER: i32 = 0;
 function chars(n: i32): string {
-  return "a".repeat(n);
+  FILL_COUNTER++;
+  let tag = "";
+  let c = FILL_COUNTER;
+  while (c > 0) {
+    tag += String.fromCharCode(98 + c % 25);
+    c = c / 25;
+  }
+  if (tag.length >= n) return tag.substring(0, n);
+  return tag + "a".repeat(n - tag.length);
 }
 
 function story(id: u64): stories.story {
@@ -111,6 +122,8 @@ function reset(): void {
   const c = new Stories();
   c.set_addresses(new stories.set_addresses_arguments(INK, SHOP));
   c.add_category(new stories.add_category_arguments("Fantasy"));
+  // Written for the original 2,000 per-part cap.
+  c.set_limits(new stories.set_limits_arguments(2000, 1000, 3, 60, 30));
   checkpoint();
 }
 
@@ -119,7 +132,7 @@ function openAs(opener: Uint8Array, max: u64, vis: stories.visibility, text: str
   authorize(opener);
   allowCalls(2);
   const id = new Stories().open_story(new stories.open_story_arguments(
-    opener, SHORT, "My Tale", max, 1, 0, vis, 0, 0, text, false, <u64>text.length, USDT
+    opener, SHORT, "My Tale", max, 1, 0, vis, 0, 0, text, false, <u64>text.length, USDT, true, 0
   )).value;
   checkpoint();
   return id;
@@ -129,7 +142,7 @@ function writeAsOpener(id: u64, text: string): u64 {
   directly();
   authorize(ALICE);
   allowCalls(1);
-  const seq = new Stories().contribute(new stories.contribute_arguments(ALICE, id, text, false, false, <u64>text.length)).value;
+  const seq = new Stories().contribute(new stories.contribute_arguments(ALICE, id, text, false, false, <u64>text.length, true, 0)).value;
   checkpoint();
   return seq;
 }
@@ -181,7 +194,7 @@ describe("Stories security H1: only direct calls", () => {
       viaOtherContract();
       authorize(BOB); // Bob DID sign the transaction, but for a different app.
       MockVM.setCallContractResults([writerAnswer(), okCall()]);
-      new Stories().contribute(new stories.contribute_arguments(BOB, 1, "Spam posted in Bob's name.", false, false, 26));
+      new Stories().contribute(new stories.contribute_arguments(BOB, 1, "Spam posted in Bob's name.", false, false, 26, true, 0));
     }, DIRECT_ONLY);
     expect(burns()).toBe(before);
     expect(story(1).segment_count).toBe(1);
@@ -190,7 +203,7 @@ describe("Stories security H1: only direct calls", () => {
     directly();
     authorize(BOB);
     MockVM.setCallContractResults([writerAnswer(), okCall()]);
-    new Stories().contribute(new stories.contribute_arguments(BOB, 1, "Bob writes this himself.", false, false, 24));
+    new Stories().contribute(new stories.contribute_arguments(BOB, 1, "Bob writes this himself.", false, false, 24, true, 0));
     expect(story(1).segment_count).toBe(2);
   });
 
@@ -199,7 +212,7 @@ describe("Stories security H1: only direct calls", () => {
     writeAsOpener(1, "A second sentence by Alice.");
     fails(() => {
       viaOtherContract(); authorize(ALICE); allowCalls(2);
-      new Stories().open_story(new stories.open_story_arguments(ALICE, SHORT, "Fake", 10000, 1, 0, PUBLIC, 0, 0, OPENING, false, 28, USDT));
+      new Stories().open_story(new stories.open_story_arguments(ALICE, SHORT, "Fake", 10000, 1, 0, PUBLIC, 0, 0, OPENING, false, 28, USDT, true, 0));
     }, DIRECT_ONLY);
     fails(() => {
       viaOtherContract(); authorize(ALICE); allowCalls(1);
@@ -283,7 +296,7 @@ describe("Stories security: 20-character minimum for new text", () => {
   it("refuses an opening shorter than 20", () => {
     fails(() => {
       authorize(ALICE); allowCalls(2);
-      new Stories().open_story(new stories.open_story_arguments(ALICE, SHORT, "Tiny", 10000, 1, 0, PUBLIC, 0, 0, chars(19), false, 19, USDT));
+      new Stories().open_story(new stories.open_story_arguments(ALICE, SHORT, "Tiny", 10000, 1, 0, PUBLIC, 0, 0, chars(19), false, 19, USDT, true, 0));
     }, "STORIES: opening text is shorter than the minimum");
   });
 
@@ -291,7 +304,7 @@ describe("Stories security: 20-character minimum for new text", () => {
     openAs(ALICE, 10000, PUBLIC, OPENING);
     fails(() => {
       authorize(ALICE); allowCalls(1);
-      new Stories().contribute(new stories.contribute_arguments(ALICE, 1, chars(19), false, false, 19));
+      new Stories().contribute(new stories.contribute_arguments(ALICE, 1, chars(19), false, false, 19, true, 0));
     }, "STORIES: text is shorter than the minimum (only the piece that fills the story may be shorter)");
     writeAsOpener(1, chars(20));
     expect(story(1).used_chars).toBe(48);
@@ -303,7 +316,7 @@ describe("Stories security: 20-character minimum for new text", () => {
     writeAsOpener(1, chars(1967));               // 9,995: 5 left
     fails(() => {
       authorize(ALICE); allowCalls(1);
-      new Stories().contribute(new stories.contribute_arguments(ALICE, 1, chars(4), false, false, 4));
+      new Stories().contribute(new stories.contribute_arguments(ALICE, 1, chars(4), false, false, 4, true, 0));
     }, "STORIES: text is shorter than the minimum (only the piece that fills the story may be shorter)");
     writeAsOpener(1, chars(5));
     expect(story(1).used_chars).toBe(10000);
