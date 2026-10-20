@@ -1634,3 +1634,60 @@ describe("Shop: the money must actually arrive (fix M1)", () => {
     expect(membershipOf(ALICE).tier).toBe(shop.tier.TIER_READER);
   });
 });
+
+describe("Shop: gifted memberships and the open-price multiplier", () => {
+  beforeEach(() => {
+    MockVM.reset();
+    MockVM.setContractId(SHOP);
+    setTime(START);
+    callAs(new Uint8Array(0));
+    resetLedger();
+    checkpoint();
+    configure();
+  });
+
+  it("lets Alice pay a Writer month for Bob: Bob gets the membership and the Ink", () => {
+    allowPay(USDT, ONE_6 * 5, 1);
+    authorize(ALICE);
+    new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_WRITER, 1, USDT, BOB));
+    expect(membershipOf(BOB).tier).toBe(shop.tier.TIER_WRITER);
+    expect(membershipOf(ALICE).tier).toBe(0);
+    expect(same(decodeMint(mints()[0]).to, BOB)).toBe(true);
+    expect(decodeMint(mints()[0]).value).toBe(15000);
+    expect(same(lastPayment().payer, ALICE)).toBe(true);
+    expect(getBal(USDT, ALICE)).toBe(0);
+  });
+
+  it("still needs the payer's signature, not the beneficiary's", () => {
+    allowPay(USDT, ONE_6 * 5, 1);
+    authorize(BOB);
+    expect(() => {
+      new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_WRITER, 1, USDT, BOB));
+    }).toThrow();
+    expect(membershipOf(BOB).tier).toBe(0);
+  });
+
+  it("multiplies the open price by what Stories sends, and mints the normal starter Ink", () => {
+    authorize(ALICE);
+    callAs(STORIES);
+    allowPay(USDT, ONE_6 * 10 * 4, 1);
+    new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_SHORT, USDT, 4));
+    expect(lastPayment().price).toBe(ONE_6 * 40);
+    expect(decodeMint(mints()[0]).value).toBe(10000);
+  });
+
+  it("treats 0 and 1 as the normal price and refuses more than 1024", () => {
+    authorize(ALICE);
+    callAs(STORIES);
+    allowPay(USDT, ONE_6 * 10, 1);
+    new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_SHORT, USDT, 0));
+    expect(lastPayment().price).toBe(ONE_6 * 10);
+    checkpoint();
+    expect(() => {
+      authorize(ALICE);
+      callAs(STORIES);
+      allowPay(USDT, ONE_6 * 10 * 2048, 1);
+      new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_SHORT, USDT, 2048));
+    }).toThrow();
+  });
+});

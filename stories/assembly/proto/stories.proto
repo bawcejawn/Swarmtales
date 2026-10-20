@@ -122,6 +122,8 @@ message config {
   string terms_uri = 16;         // where the Terms of Use are published
   uint32 report_threshold = 17;  // writer reports that hide a part automatically (default 3)
   uint32 strike_limit = 18;      // takedowns after which a wallet is blocked automatically (default 3)
+  uint32 full_price_projects = 19; // open projects at the normal price; each one beyond doubles it (default 3)
+  uint32 max_price_multiplier = 20; // the doubling stops here (default 4)
 }
 
 message story {
@@ -157,6 +159,11 @@ message story {
   uint64 next_invite_id = 30 [jstype = JS_STRING];
   uint32 hidden_count = 31;      // parts hidden right now; a story cannot be finalized while this is above 0
   bool needs_new_pdf = 32;       // a part was taken down after finalizing; the admin must publish a new PDF
+  // Unlisted and private stories only: Ink the opener set aside to pay for
+  // everyone's writing. Returned to the opener when the story is finished
+  // or archived.
+  uint64 fund = 33 [jstype = JS_STRING];
+  uint64 fund_added = 34 [jstype = JS_STRING];
 }
 
 message segment {
@@ -183,6 +190,7 @@ message segment {
   // 0: read in order of writing. Otherwise this part is read right after
   // part insert_after; the newest part added after the same part comes first.
   uint64 insert_after = 21 [jstype = JS_STRING];
+  bool fund_paid = 22;           // paid from the story's fund; its refunds go back to the fund
 }
 
 // A wallet's standing under the repeat-infringer policy.
@@ -250,6 +258,7 @@ message shop_fee_call {
   bytes payer = 1 [(koinos.btype) = ADDRESS];
   uint32 kind = 2;
   bytes token = 3 [(koinos.btype) = ADDRESS];
+  uint32 price_multiplier = 4;   // open fee only: 1, 2, 4, 8...
 }
 
 // Wire-compatible with shop.get_membership_arguments / get_promo_claimed_arguments.
@@ -401,6 +410,13 @@ message get_account_status_arguments {
   bytes account = 1 [(koinos.btype) = ADDRESS];
 }
 
+// @description Price multiplier for this wallet's next story (1 = normal; doubles per open project beyond the normal-price number)
+// @read-only true
+// @result uint32
+message get_open_multiplier_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+}
+
 // @description Latest Terms of Use version a wallet accepted (0 if never)
 // @read-only true
 // @result uint32
@@ -436,6 +452,7 @@ message open_story_arguments {
   bytes token = 13 [(koinos.btype) = ADDRESS];
   bool rights_confirmed = 14;    // must be true: "I wrote this, or I have the right to use it"
   uint32 terms_version = 15;     // must equal the current Terms of Use version
+  uint64 fund = 16 [jstype = JS_STRING]; // unlisted/private only: extra Ink set aside for everyone's writing
 }
 
 // @description Opener changes title, categories, visibility and free chapters (send all of them)
@@ -541,6 +558,15 @@ message remove_segment_arguments {
   bytes editor = 1 [(koinos.btype) = ADDRESS];
   uint64 story_id = 2 [jstype = JS_STRING];
   uint64 seq = 3 [jstype = JS_STRING];
+}
+
+// @description Opener adds Ink to an unlisted or private story's fund (burned from the opener now; unused Ink comes back at the end)
+// @read-only false
+// @result empty_object
+message top_up_fund_arguments {
+  bytes opener = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  uint64 amount = 3 [jstype = JS_STRING];
 }
 
 // ---------- Moderation ----------
@@ -679,6 +705,8 @@ message set_limits_arguments {
   uint32 open_limit = 3;
   uint32 archive_days = 4;
   uint32 inactivity_days = 5;
+  uint32 full_price_projects = 6; // 0 = keep 3
+  uint32 max_price_multiplier = 7; // 0 = keep 4; 1 to 1024
 }
 
 // @description Add a category (1-32 characters). Returns its id.
@@ -775,6 +803,7 @@ message contribution_event {
   bool rights_confirmed = 9;
   uint32 terms_version = 10;
   uint64 insert_after = 11 [jstype = JS_STRING];
+  bool fund_paid = 12;
 }
 
 message segment_changed_event {
@@ -857,6 +886,8 @@ message limits_event {
   uint32 open_limit = 3;
   uint32 archive_days = 4;
   uint32 inactivity_days = 5;
+  uint32 full_price_projects = 6;
+  uint32 max_price_multiplier = 7;
 }
 
 message addresses_event {
@@ -918,4 +949,13 @@ message account_blocked_event {
   uint32 strikes = 3;
   bytes by = 4 [(koinos.btype) = ADDRESS];
   string note = 5;               // "automatic: 3 takedowns" or the admin's note
+}
+
+// Ink moved into or out of a story's fund.
+message fund_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  bytes by = 2 [(koinos.btype) = ADDRESS];
+  string action = 3;             // "deposit" or "returned"
+  uint64 amount = 4 [jstype = JS_STRING];
+  uint64 fund_after = 5 [jstype = JS_STRING];
 }

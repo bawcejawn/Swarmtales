@@ -130,9 +130,10 @@ function reset(): void {
 function openAs(opener: Uint8Array, max: u64, vis: stories.visibility, text: string): u64 {
   directly();
   authorize(opener);
-  allowCalls(2);
+  allowCalls(3);
+  const pool: u64 = vis == PUBLIC ? 0 : 10000;
   const id = new Stories().open_story(new stories.open_story_arguments(
-    opener, SHORT, "My Tale", max, 1, 0, vis, 0, 0, text, false, <u64>text.length, USDT, true, 0
+    opener, SHORT, "My Tale", max, 1, 0, vis, 0, 0, text, false, <u64>text.length, USDT, true, 0, pool
   )).value;
   checkpoint();
   return id;

@@ -202,6 +202,8 @@ message buy_membership_arguments {
   tier tier = 2;
   uint32 months = 3;
   bytes token = 4 [(koinos.btype) = ADDRESS];
+  // Optional gift: who gets the membership (and its Ink). Empty = the payer.
+  bytes beneficiary = 5 [(koinos.btype) = ADDRESS];
 }
 
 // @description Writers claim one prepaid month of Ink
@@ -227,6 +229,9 @@ message pay_open_fee_arguments {
   bytes payer = 1 [(koinos.btype) = ADDRESS];
   story_kind kind = 2;
   bytes token = 3 [(koinos.btype) = ADDRESS];
+  // Set by Stories: 0 or 1 = normal price; 2, 4, 8... when the opener
+  // already has many projects open. At most 1024.
+  uint32 price_multiplier = 4;
 }
 
 // @description Stories contract collects a close fee. No Ink is minted.
@@ -426,4 +431,12 @@ message campaign_event {
   uint64 starts_at = 6 [jstype = JS_STRING];
   uint64 ends_at = 7 [jstype = JS_STRING];
   bool single_use = 8;
+}
+
+// A membership bought for someone else.
+message membership_gift_event {
+  bytes payer = 1 [(koinos.btype) = ADDRESS];
+  bytes beneficiary = 2 [(koinos.btype) = ADDRESS];
+  tier tier = 3;
+  uint32 months = 4;
 }

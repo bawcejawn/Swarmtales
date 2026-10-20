@@ -250,7 +250,12 @@ a:hover { color: var(--accent-hover); }
 .seg-author b { display: block; color: var(--text-2); font-weight: 600; }
 .seg-text { margin: 0; font-family: var(--serif); font-size: 20px; line-height: 1.75; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 .seg-notes { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-.edit-note { font-size: 14px; color: var(--text-2); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
+/* "edited": a quiet note; tap to see who and when. */
+.edit-note { display: inline; font-size: 13px; color: var(--text-2); }
+.edit-note summary { display: inline; cursor: pointer; list-style: none; font-style: italic; text-decoration: underline dotted; text-underline-offset: 3px; }
+.edit-note summary::-webkit-details-marker { display: none; }
+.edit-note summary:focus-visible { outline: 2px solid var(--focus, currentColor); outline-offset: 2px; border-radius: 4px; }
+.edit-note[open] summary { text-decoration: none; }
 .tag-ai { font-size: 12px; font-weight: 600; color: var(--text-2); background: var(--track); border-radius: 999px; padding: 3px 10px; }
 .removed { margin-top: 24px; color: var(--muted); font-size: 14px; }
 .removed summary { cursor: pointer; padding: 8px 0; }

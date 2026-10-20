@@ -60,6 +60,8 @@ const MAX_FEE_BPS: u32 = 500;
 const DEFAULT_FEE_BPS: u32 = 100;
 const FEE_DENOMINATOR: u64 = 10000;
 const MAX_MONTHS: u32 = 24;
+// Open-price multiplier sent by Stories (2^7 = 128 for a 10th open project).
+const MAX_PRICE_MULTIPLIER: u64 = 1024;
 const MAX_DECIMALS: u32 = 18;
 const MAX_SYMBOL_LENGTH: i32 = 16;
 const MAX_SIGNERS_PER_CALL: i32 = 20;
@@ -244,6 +246,9 @@ export class Shop {
     const payer = this.requireAddress(args.payer, "SHOP: invalid payer address");
     this.requireSigner(payer, "SHOP: payer has not authorized this purchase");
     System.require(args.months >= 1 && args.months <= MAX_MONTHS, "SHOP: months must be from 1 to 24");
+    // A gift: the payer pays, the beneficiary gets the membership and its Ink.
+    const gift = args.beneficiary != null && args.beneficiary!.length > 0;
+    const member = gift ? this.requireAddress(args.beneficiary, "SHOP: invalid beneficiary address") : payer;
 
     const tier = args.tier;
     System.require(
@@ -260,7 +265,7 @@ export class Shop {
     const unit = this.requirePrice(<u32>item, assetId);
     const price = SafeMath.mul(unit, <u64>args.months);
     const now = this.now();
-    const current = this.memberships.get(payer)!;
+    const current = this.memberships.get(member)!;
     const writerActive = this.isActiveWriter(current, now);
 
     let inkAmount: u64 = 0;
@@ -294,8 +299,12 @@ export class Shop {
       }
     }
 
-    this.takePayment(payer, assetId, <u32>item, price, inkAmount, inkReason, memo);
-    this.memberships.put(payer, current);
+    this.takePayment(payer, assetId, <u32>item, price, inkAmount, inkReason, memo, member);
+    this.memberships.put(member, current);
+    if (gift && !Arrays.equal(member, payer)) {
+      const ev = new shop.membership_gift_event(payer, member, tier, args.months);
+      System.event("shop.membership_gift_event", Protobuf.encode(ev, shop.membership_gift_event.encode), [payer, member]);
+    }
     this.leave();
     return new shop.empty_object();
   }
@@ -382,7 +391,11 @@ export class Shop {
     const item = isBook ? shop.item.ITEM_OPEN_BOOK : shop.item.ITEM_OPEN_SHORT;
     const starter = isBook ? cfg.starter_book : cfg.starter_short;
     System.require(starter > 0, "SHOP: starter Ink amount is not set");
-    const price = this.requirePrice(<u32>item, assetId);
+    const base = this.requirePrice(<u32>item, assetId);
+    // Stories raises the price when the opener already has many projects open.
+    const multiplier: u64 = args.price_multiplier <= 1 ? 1 : <u64>args.price_multiplier;
+    System.require(multiplier <= MAX_PRICE_MULTIPLIER, "SHOP: price multiplier is too high");
+    const price = SafeMath.mul(base, multiplier);
     const memo = isBook ? "open:book" : "open:short";
 
     this.takePayment(payer, assetId, <u32>item, price, starter, MINT_STARTER, memo);
@@ -718,7 +731,8 @@ export class Shop {
     price: u64,
     inkAmount: u64,
     inkReason: u32,
-    memo: string
+    memo: string,
+    inkTo: Uint8Array | null = null
   ): void {
     const cfg = this.loadConfig();
     const treasury = this.requireAddress(cfg.treasury, "SHOP: treasury is not set");
@@ -760,7 +774,7 @@ export class Shop {
       );
     }
     if (inkAmount > 0) {
-      this.mintInk(payer, inkAmount, inkReason, memo);
+      this.mintInk(inkTo != null ? inkTo! : payer, inkAmount, inkReason, memo);
     }
 
     const event = new shop.payment_event(
