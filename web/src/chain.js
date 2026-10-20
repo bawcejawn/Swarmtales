@@ -116,12 +116,13 @@ async function mapPool(items, limit, fn) {
 }
 
 export async function loadOverview() {
-  const [storiesCfg, shopCfg, asset, writerPrice, shortPrice] = await Promise.all([
+  const [storiesCfg, shopCfg, asset, writerPrice, shortPrice, bookPrice] = await Promise.all([
     read("stories", "get_config", {}),
     read("shop", "get_config", {}),
     read("shop", "get_asset", { token: contracts.paymentToken }),
     read("shop", "get_price", { item: 2, token: contracts.paymentToken }),
     read("shop", "get_price", { item: 7, token: contracts.paymentToken }),
+    read("shop", "get_price", { item: 6, token: contracts.paymentToken }),
   ]);
   const nextCat = Number((storiesCfg && storiesCfg.next_category_id) || 0);
   const ids = [];
@@ -136,6 +137,7 @@ export async function loadOverview() {
     asset: asset || {},
     writerPrice: writerPrice && writerPrice.value ? writerPrice.value : "0",
     shortPrice: shortPrice && shortPrice.value ? shortPrice.value : "0",
+    bookPrice: bookPrice && bookPrice.value ? bookPrice.value : "0",
     categories,
   };
 }
