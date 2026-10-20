@@ -15,6 +15,7 @@ import {
   loadOverview,
   loadStory,
   lookupTransaction,
+  waitForInclusion,
   hasReported,
   quoteCost,
   read,
@@ -797,7 +798,7 @@ function renderReader(page, id) {
       story,
       canEdit: storyOpen && !!me && (story.opener === me || flags.editor),
       // Private stories: only the opener, editors and invited writers.
-      canAdd: storyOpen && (!inviteOnly(story) || (!!me && (story.opener === me || flags.editor || flags.allowed))),
+      canAdd: storyOpen && (!inviteOnly(story) || canWriteInvited(story, me, flags)),
       flags,
       lastSeq: active.length ? active[active.length - 1].seq : 0,
       active,
@@ -825,11 +826,37 @@ function renderReader(page, id) {
     const composeAnchor = h("div", { id: "compose" });
     const goWrite = () => {
       composeAnchor.scrollIntoView({ behavior: "smooth", block: "start" });
-      const area = composeAnchor.querySelector("textarea, button");
+      const area = composeAnchor.querySelector("textarea, button, a.btn");
       if (area) setTimeout(() => area.focus({ preventScroll: true }), 350);
+      // Briefly highlight the writing box so it's clear where to look.
+      const box = composeAnchor.querySelector(".composer");
+      if (box) {
+        box.classList.remove("flash");
+        void box.offsetWidth;
+        box.classList.add("flash");
+      }
     };
 
     const isOpen = Number(story.status) === 1;
+    // Private stories: say right away what this wallet can do here.
+    let accessLine = null;
+    if (isOpen && inviteOnly(story)) {
+      const invited = !!me && (story.opener === me || flags.editor || flags.allowed);
+      if (!me) accessLine = "Only invited writers can write here. Connect your wallet if you were invited.";
+      else if (!invited) accessLine = "Only people the opener invites can write here. Anyone can read it.";
+      else if (!canWriteInvited(story, me, flags)) accessLine = "You're invited. You need an active Writer month to write here; the opener can give you one.";
+      else if (story.opener !== me) accessLine = "You're invited. Your parts are paid from the writers' pool (" + num(story.fund || 0) + " Ink left).";
+    }
+    const joinedNote = /[?&]joined=1/.test(location.hash) && me
+      ? notice("ok", h("p", {}, [
+        "You've joined this story. It's listed under ", h("a", { href: "#/mine" }, ["My stories"]), ". ",
+        canWriteInvited(story, me, flags)
+          ? "Scroll down to write the next part, or use “+ Add text here” under any part."
+          : "To write, you need an active Writer month: ask the opener to give you one, or get one on the ",
+        canWriteInvited(story, me, flags) ? null : h("a", { href: "#/membership" }, ["Membership page"]),
+        canWriteInvited(story, me, flags) ? null : ".",
+      ]))
+      : null;
     const head = h("header", { class: "reader-head" }, [
       h("div", { class: "head-main" }, [
         h("div", { class: "pills" }, [
@@ -844,7 +871,13 @@ function renderReader(page, id) {
       ]),
       h("div", { class: "head-side" }, [
         progressBar(story, [h("span", {}, [sizeText(story)]), h("span", {}, [percent(story) + "%"])]),
-        isOpen ? h("button", { type: "button", class: "btn btn-primary btn-block", onClick: goWrite }, ["Write the next part"]) : null,
+        isOpen && (!inviteOnly(story) || canWriteInvited(story, me, flags))
+          ? h("button", { type: "button", class: "btn btn-primary btn-block", onClick: goWrite }, ["Write the next part"])
+          : null,
+        accessLine ? h("p", { class: "meta access-line" }, [accessLine]) : null,
+        isOpen && inviteOnly(story) && me && (flags.allowed || flags.editor) && !canWriteInvited(story, me, flags)
+          ? h("a", { class: "btn btn-secondary btn-block", href: "#/membership" }, ["Get a Writer month"])
+          : null,
       ]),
     ]);
     head.querySelector(".head-main .meta").style.marginTop = "12px";
@@ -921,6 +954,7 @@ function renderReader(page, id) {
 
     replace(container, 
       h("p", { class: "breadcrumb" }, [h("a", { href: "#/stories" }, ["Discover"]), cats[0] ? " / " + cats[0] : ""]),
+      joinedNote,
       head,
       h("div", { class: "reader-layout" }, [h("div", { class: "reader-main" }, [column]), aside])
     );
@@ -1522,8 +1556,8 @@ function renderOpen(page) {
     h("option", { value: "4" }, ["The first 4 chapters"]),
     h("option", { value: "5" }, ["The first 5 chapters"]),
   ]);
-  const edition = h("input", { type: "number", min: "0", value: "1000", step: "100", inputmode: "numeric" });
-  const pool = h("input", { type: "number", min: String(kindInfo.min), value: String(kindInfo.min), step: "1000", inputmode: "numeric" });
+  const edition = h("input", { type: "number", min: "0", value: "1000", step: "1", inputmode: "numeric" });
+  const pool = h("input", { type: "number", min: String(kindInfo.min), value: String(kindInfo.min), step: "1", inputmode: "numeric" });
   const poolNote = h("p", { class: "meta" });
   const poolField = field("Writers' pool (Ink)", pool,
     "Private stories are invite-only. You set Ink aside for the writers you invite: their parts are paid from this pool, " +
@@ -2030,7 +2064,8 @@ function renderJoin(page, storyId, inviteId) {
           const sent = await send([op], status);
           if (sent) {
             await refreshAccount();
-            append(status, notice("ok", h("p", {}, ["You've joined. ", h("a", { href: "#/stories/" + storyId }, ["Start writing"]), "."])));
+            append(status, notice("ok", h("p", {}, ["You've joined. Taking you to the story… ", h("a", { href: "#/stories/" + storyId + "?joined=1" }, ["Go now"])])));
+            setTimeout(() => { location.hash = "#/stories/" + storyId + "?joined=1"; }, 1500);
           }
         } catch (error) {
           failure(status, error);
@@ -2064,6 +2099,25 @@ async function openedStoryIds(address) {
     if (values.length < 50) break;
   }
   return ids;
+}
+
+/** Private stories this wallet was invited to (or is an editor of). */
+async function invitedStoryIds(address) {
+  const library = (await loadLibrary()) || (await listStories((await read("stories", "get_config", {})).next_story_id || "1"));
+  const rows = (library && library.stories ? library.stories : [])
+    .filter((row) => Number(row.story.visibility) !== 1 && row.story.opener !== address);
+  const out = [];
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < rows.length) {
+      const row = rows[cursor];
+      cursor += 1;
+      const flags = await writerFlags(row.id, address).catch(() => ({ editor: false, allowed: false }));
+      if (flags.allowed || flags.editor) out.push(String(row.id));
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  return out;
 }
 
 async function writtenStoryIds(address) {
@@ -2107,8 +2161,7 @@ function renderMine(page) {
   append(container,
     h("section", { class: "mine-section" }, [h("h2", { class: "h2" }, ["Opened by you"]), opened]),
     h("section", { class: "mine-section" }, [
-      h("h2", { class: "h2" }, ["Stories you write in"]),
-      h("p", { class: "meta" }, ["Invited to a private story but haven't written yet? Open your invite link again; it brings you straight to the story."]),
+      h("h2", { class: "h2" }, ["Stories you write in or are invited to"]),
       written,
     ])
   );
@@ -2118,11 +2171,12 @@ function renderMine(page) {
     replace(opened, ...(openedRows.length
       ? openedRows.map((row) => storyCard(row))
       : [h("div", { class: "empty" }, [h("p", { class: "serif" }, ["You haven't opened a story yet."]), h("p", {}, [h("a", { class: "link-arrow", href: "#/open" }, ["Open a story", icons.arrow()])])])]));
-    const writtenIds = (await writtenStoryIds(address)).filter((id) => !mineIds.includes(id));
+    const invitedIds = await invitedStoryIds(address).catch(() => []);
+    const writtenIds = Array.from(new Set([...(await writtenStoryIds(address)), ...invitedIds])).filter((id) => !mineIds.includes(id));
     const writtenRows = await storyRows(writtenIds);
     replace(written, ...(writtenRows.length
       ? writtenRows.map((row) => storyCard(row))
-      : [h("div", { class: "empty" }, [h("p", { class: "meta" }, ["You haven't written in anyone else's story yet."])])]));
+      : [h("div", { class: "empty" }, [h("p", { class: "meta" }, ["You haven't written in or been invited to anyone else's story yet."])])]));
   })().catch((error) => replace(opened, notice("bad", h("p", {}, [explainFailure(error)]))));
 }
 
@@ -2247,9 +2301,22 @@ function sharePanel(id, story, me, flags) {
   return panel;
 }
 
+/**
+ * Can this wallet write in a private story right now? The opener always can;
+ * editors and invited wallets need an active Writer month. While the account
+ * is still loading, say yes and let the writing box explain.
+ */
+function canWriteInvited(story, me, flags) {
+  if (!me) return false;
+  if (story.opener === me) return true;
+  if (!(flags && (flags.editor || flags.allowed))) return false;
+  if (!state.account) return true;
+  return isActiveWriter(state.account.membership, state.account.now);
+}
+
 /** The opener's writers' pool: balance and top-up. */
 function poolSection(id, story, me) {
-  const amount = h("input", { type: "number", min: "1", value: "5000", step: "1000", inputmode: "numeric" });
+  const amount = h("input", { type: "number", min: "1", value: "5000", step: "1", inputmode: "numeric" });
   const status = statusBox();
   const add = h("button", { type: "submit", class: "btn btn-secondary btn-small" }, ["Add to the pool"]);
   const open = Number(story.status) === 1;
@@ -2520,7 +2587,9 @@ async function send(operations, status) {
     replace(status, notice("bad", h("p", {}, [explainFailure(new Error(logs || "The network refused it."))])));
     return false;
   }
-  const found = id ? await lookupTransaction(id) : null;
+  // Wait for the next block, so whatever the page shows next is up to date.
+  if (id) replace(status, notice("info", h("p", {}, ["Sent. Waiting for the next block (usually under a minute)…"])));
+  const found = id ? await waitForInclusion(id) : null;
   const receipt = found && (found.receipt || (found.transaction && found.transaction.receipt));
   if (receipt && receipt.reverted) {
     const logs = Array.isArray(receipt.logs) ? receipt.logs.join(" ") : "";
