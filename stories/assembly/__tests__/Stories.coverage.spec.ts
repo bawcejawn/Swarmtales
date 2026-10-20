@@ -800,9 +800,8 @@ describe("Stories: gaps the main suite does not reach", () => {
     fails(() => { authorize(ALICE); new Stories().revoke_invite(new stories.revoke_invite_arguments(ALICE, 1, 9)); }, "STORIES: unknown invite");
   });
 
-  it("refuses a bad close token and a signer who is not the opener", () => {
+  it("refuses a signer who is not the opener (the token is ignored: closing is free)", () => {
     openShort();
-    fails(() => { authorize(ALICE); new Stories().close_story(new stories.close_story_arguments(ALICE, 1, new Uint8Array(2))); }, "STORIES: invalid token address");
     fails(() => { authorize(MALLORY); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(ALICE, 1, USDT)); }, "STORIES: opener has not authorized this");
   });
 });
