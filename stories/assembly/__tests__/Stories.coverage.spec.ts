@@ -531,10 +531,10 @@ describe("Stories: edits, removals and refunds", () => {
     writeAsOpener(1, chars(1873));
     expect(story(1).used_chars).toBe(9990);
     expect(story(1).status).toBe(stories.story_status.STATUS_OPEN);
-    fWho = ALICE; fId = 1; fSeq = 2; fText = chars(111); fExpected = 111; fResults = [okCall()];
+    fWho = BOB; fId = 1; fSeq = 2; fText = chars(111); fExpected = 111; fResults = [okCall()];
     fails(failEdit, "STORIES: not enough space left in this story");
     expect(segment(1, 2).current_cost).toBe(100);
-    edit(ALICE, 1, 2, chars(110));
+    edit(BOB, 1, 2, chars(110));
     const st = story(1);
     expect(st.used_chars).toBe(10000);
     expect(st.status).toBe(stories.story_status.STATUS_LOCKED);
@@ -583,9 +583,9 @@ function lockedStory(): void {
   openShort();
   writeAsWriter(BOB, 1, chars(2000));
   writeAsWriter(BOB, 1, chars(100));
-  authorize(ALICE);
+  authorize(BOB);
   allowCalls(1);
-  new Stories().remove_segment(new stories.remove_segment_arguments(ALICE, 1, 3));
+  new Stories().remove_segment(new stories.remove_segment_arguments(BOB, 1, 3));
   checkpoint();
   fillShort(1);
 }

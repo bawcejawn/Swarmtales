@@ -106,6 +106,8 @@ export function createReader(article, items) {
     if (seq == null) return;
     const el = article.querySelector('.seg[data-seq="' + seq + '"]');
     if (el) {
+      const fold = el.closest("details");
+      if (fold && !fold.open) fold.open = true;
       el.classList.add("reading");
       el.scrollIntoView({ behavior: "smooth", block: "center" });
     }

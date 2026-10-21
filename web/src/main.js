@@ -4,6 +4,9 @@ import "@fontsource/literata/latin-600.css";
 import "@fontsource/ibm-plex-sans/latin-400.css";
 import "@fontsource/ibm-plex-sans/latin-500.css";
 import "@fontsource/ibm-plex-sans/latin-600.css";
+import "@fontsource/cormorant-garamond/latin-500.css";
+import "@fontsource/cormorant-garamond/latin-600.css";
+import "@fontsource/cormorant-garamond/latin-500-italic.css";
 import "./style.css";
 
 import { utils } from "koilib";
@@ -25,7 +28,7 @@ import {
 import { explainFailure } from "./lib/errors.js";
 import { KIND, STORY_STATUS, TIER, VISIBILITY, label } from "./lib/labels.js";
 import { VAULT_MANA_CEILING, formatMana, formatUnits, formatUtc, kondorManaNote, shortAddress } from "./lib/money.js";
-import { KIND_BOOK, assessOpen, assessPromo, assessWrite, assessWriterBuy, isActiveWriter } from "./lib/rules.js";
+import { KIND_BOOK, RIGHTS_PROBLEM, assessOpen, assessPromo, assessWrite, assessWriterBuy, isActiveWriter } from "./lib/rules.js";
 import { MAX_CHARS_PER_SIGNATURE, MAX_PARTS_PER_SIGNATURE, checkStoryText, inkCost, normalizePasted, splitIntoParts } from "./lib/text.js";
 import {
   kondorHint,
@@ -45,6 +48,8 @@ import { renderMarkdown } from "./ui/markdown.js";
 import { readingOrder } from "./lib/order.js";
 import * as reading from "./lib/bookmarks.js";
 import { createReader } from "./ui/readAloud.js";
+import { grammarTool } from "./ui/grammar.js";
+import { findCharacters, openingLines } from "./lib/characters.js";
 
 const problems = configProblems();
 const kondor = createKondorWallet();
@@ -958,10 +963,33 @@ function renderReader(page, id) {
     };
 
     if (!chapters.length) append(article, h("div", { class: "empty" }, [h("p", {}, ["No text has been written yet."])]));
+    // The book's contents: each chapter is a fold you open. A one-chapter
+    // story starts open.
     chapters.forEach((chapter, i) => {
-      append(article, h("h3", { class: "chapter-title" + (i === 0 ? " first" : ""), id: "chapter-" + chapter.number }, ["Chapter " + chapter.number]));
-      for (const block of chapter.blocks) append(article, segmentView(block, story, id, ctx));
+      const visible = chapter.blocks.filter((b) => !b.segment.hidden);
+      const opening = visible.length ? clip(visible[0].segment.text || "", 110) : "";
+      const parts = h("div", { class: "chapter-body" });
+      for (const block of chapter.blocks) append(parts, segmentView(block, story, id, ctx));
+      append(article, h("details", { class: "chapter" + (i === 0 ? " first" : ""), id: "chapter-" + chapter.number, open: chapters.length === 1 ? true : null }, [
+        h("summary", { class: "chapter-summary" }, [
+          h("span", { class: "chapter-number" }, ["Chapter " + chapterWord(chapter.number)]),
+          h("span", { class: "chapter-opening" }, [opening]),
+          h("span", { class: "chapter-meta meta small" }, [plural(chapter.blocks.length, "part")]),
+        ]),
+        h("div", { class: "chapter-ornament", "aria-hidden": "true" }, ["\u2766"]),
+        parts,
+      ]));
     });
+    if (chapters.length > 1) {
+      const allOpen = () => [...article.querySelectorAll("details.chapter")].every((d) => d.open);
+      const toggleAll = h("button", { type: "button", class: "text-button" }, ["Open all chapters"]);
+      toggleAll.addEventListener("click", () => {
+        const open = !allOpen();
+        article.querySelectorAll("details.chapter").forEach((d) => { d.open = open; });
+        toggleAll.textContent = open ? "Close all chapters" : "Open all chapters";
+      });
+      article.querySelector("details.chapter").before(h("div", { class: "contents-bar" }, [h("span", { class: "eyebrow muted" }, ["Contents"]), toggleAll]));
+    }
     if (removed.length) {
       const details = h("details", { class: "removed" }, [h("summary", {}, [plural(removed.length, "removed part") + " (kept on the record)"])]);
       for (const block of removed) append(details, segmentView(block, story, id, null));
@@ -983,6 +1011,8 @@ function renderReader(page, id) {
     const goTo = (seq) => {
       const el = article.querySelector('.seg[data-seq="' + seq + '"]');
       if (!el) return;
+      const fold = el.closest("details.chapter");
+      if (fold) fold.open = true;
       el.scrollIntoView({ behavior: "smooth", block: "start" });
       el.classList.remove("flash-seg");
       void el.offsetWidth;
@@ -1004,6 +1034,7 @@ function renderReader(page, id) {
       h("div", { class: "chapter-bar" }, [
         h("p", { class: "eyebrow muted" }, [cats.join(" · ") || label(KIND, story.kind)]),
         h("label", { class: "check" }, [toggle, "Show who wrote what"]),
+        readingSettings(column),
       ]),
       resumeBar,
       syncNote,
@@ -1015,12 +1046,13 @@ function renderReader(page, id) {
 
     const aside = h("aside", { class: "reader-aside", "aria-label": "About this story" }, [
       finishPanel(id, story, me),
+      storyGuide(id, story, chapters, me, flags, writers),
       sharePanel(id, story, me, flags),
       chapters.length > 1
         ? h("nav", { "aria-label": "Contents" }, [
             h("h2", { class: "aside-title" }, ["Contents"]),
             h("ol", { class: "contents" }, chapters.map((chapter) => h("li", {}, [
-              h("button", { type: "button", onClick: () => document.getElementById("chapter-" + chapter.number).scrollIntoView({ behavior: "smooth" }) }, [
+              h("button", { type: "button", onClick: () => { const d = document.getElementById("chapter-" + chapter.number); d.open = true; d.scrollIntoView({ behavior: "smooth" }); } }, [
                 "Chapter " + chapter.number,
               ]),
             ]))),
@@ -1103,6 +1135,7 @@ function segmentView(block, story, storyId, ctx) {
       ]));
     }
     if (segment.ai_assisted) notes.push(h("span", { class: "tag-ai" }, ["Written with AI help"]));
+    if (Number(segment.version_count || 0) > 1) notes.push(versionsView(storyId, block));
     if (segment.citation) notes.push(h("span", { class: "source-note" }, ["Source: " + segment.citation]));
     if (segment.source_note) {
       notes.push(h("span", { class: "source-note", title: "Added automatically by SwarmTales' copy checker" }, [segment.source_note]));
@@ -1127,13 +1160,23 @@ function segmentView(block, story, storyId, ctx) {
       tools.lastChild.title = "Write new text that appears right below this part";
       tools.lastChild.addEventListener("click", () => toggle("add", () => composer(storyId, story, ctx.active, block.seq, ctx.flags)));
     }
-    if (ctx.canEdit && !segment.hidden) {
-      append(tools, h("button", { type: "button", class: "text-button tool", title: "Fix typos or tidy this part (opener and editors)" }, ["Edit"]));
+    // Private stories: the opener and editors edit or remove any part.
+    // Public stories: only the part's own writer; everyone else can write over it.
+    const me = currentAddress();
+    const ownPart = !!me && segment.author === me;
+    const canManage = Number(story.status) === 1 && !!me && (ownPart || (inviteOnly(story) && ctx.canEdit));
+    if (canManage && !segment.hidden) {
+      append(tools, h("button", { type: "button", class: "text-button tool", title: ownPart ? "Tidy your part" : "Fix typos or tidy this part (opener and editors)" }, ["Edit"]));
       tools.lastChild.addEventListener("click", () => toggle("edit", () => editPanel(storyId, block)));
     }
-    if (ctx.canEdit) {
+    if (canManage) {
       append(tools, h("button", { type: "button", class: "text-button tool" }, ["Remove"]));
       tools.lastChild.addEventListener("click", () => toggle("remove", () => removePanel(storyId, block)));
+    }
+    if (ctx.canAdd && !segment.hidden && !ownPart && me) {
+      const times = writeOverMultiplier(segment);
+      append(tools, h("button", { type: "button", class: "text-button tool", title: "Replace this part with your version for " + times + "\u00d7 the Ink. The earlier version stays readable." }, ["Write over (" + times + "\u00d7)"]));
+      tools.lastChild.addEventListener("click", () => toggle("over", () => writeOverPanel(storyId, story, block)));
     }
     if (!segment.hidden && typeof window !== "undefined" && window.speechSynthesis) {
       append(tools, h("button", { type: "button", class: "text-button tool", onClick: () => ctx.listen && ctx.listen.startFrom(block.seq) }, ["Listen from here"]));
@@ -1208,6 +1251,216 @@ function editPanel(storyId, block) {
     walletNote(),
     status,
   ]);
+}
+
+/** Writing over a part costs 2x its Ink the first time, then 4x, 8x... */
+function writeOverMultiplier(segment) {
+  const versions = Number(segment.version_count || 0);
+  const overwrites = versions === 0 ? 0 : versions - 1;
+  return 2 ** (overwrites + 1);
+}
+
+function writeOverPanel(storyId, story, block) {
+  const seg = block.segment;
+  const times = writeOverMultiplier(seg);
+  const area = h("textarea", { rows: "7", spellcheck: "true" });
+  area.value = seg.text || "";
+  const price = h("p", { class: "meta" });
+  const rights = rightsBox();
+  const update = () => {
+    const n = inkCost(normalizePasted(area.value).trim());
+    price.textContent = "Costs " + num(n * times) + " Ink (" + times + "\u00d7 the " + num(n) + " characters). " +
+      shortAddress(seg.author) + " gets back the " + num(seg.charged || 0) + " Ink their words cost. The next write-over of this part will cost " + times * 2 + "\u00d7.";
+  };
+  area.addEventListener("input", update);
+  update();
+  const status = statusBox();
+  const save = h("button", { type: "submit", class: "btn btn-primary btn-small" }, ["Write over for " + times + "\u00d7 Ink"]);
+  return h("form", { class: "inline-panel card", onSubmit: async (event) => {
+    event.preventDefault();
+    save.disabled = true;
+    try {
+      const text = normalizePasted(area.value).trim();
+      const check = checkStoryText(text, true);
+      if (!check.ok) throw new Error(check.reason);
+      if (text === seg.text) throw new Error("Change the text first.");
+      if (!rights.input.checked) throw new Error(RIGHTS_PROBLEM);
+      const quoted = Number(await quoteCost(text));
+      const cost = quoted * times;
+      const pool = inviteOnly(story) ? Number(story.fund || 0) : 0;
+      if (pool < cost && state.account && Number(state.account.ink || 0) < cost) {
+        throw new Error("This costs " + num(cost) + " Ink and you have " + num(state.account.ink) + ".");
+      }
+      const op = await encode("stories", "revise_part", {
+        writer: currentAddress(), story_id: String(storyId), seq: String(block.seq), text,
+        expected_ink: String(cost), rights_confirmed: true, terms_version: termsVersion(), citation: "", ai_assisted: false,
+      });
+      if (await send([op], status)) {
+        await refreshAccount();
+        renderPage();
+      }
+    } catch (error) {
+      failure(status, error);
+    } finally {
+      save.disabled = false;
+    }
+  } }, [
+    h("h3", { class: "h3" }, ["Write over this part"]),
+    h("p", { class: "meta" }, [
+      "Your version replaces this part and is credited to you. The current version stays in the part's history, where anyone can read it. " +
+        "Each write-over of the same part costs twice the last one, so changes are worth thinking about.",
+    ]),
+    area,
+    grammarTool(area, update),
+    price,
+    rights.node,
+    h("div", { class: "actions" }, [save]),
+    walletNote(),
+    status,
+  ]);
+}
+
+/** "Version 3 · earlier versions": loads a part's history when opened. */
+function versionsView(storyId, block) {
+  const n = Number(block.segment.version_count || 0);
+  const list = h("ol", { class: "version-list" });
+  const box = h("details", { class: "edit-note versions" }, [
+    h("summary", {}, ["version " + n + " \u00b7 earlier versions"]),
+    list,
+  ]);
+  let loaded = false;
+  box.addEventListener("toggle", async () => {
+    if (!box.open || loaded) return;
+    loaded = true;
+    list.replaceChildren(h("li", { class: "meta small" }, ["Loading\u2026"]));
+    try {
+      const res = await read("stories", "get_versions", { story_id: String(storyId), seq: String(block.seq) });
+      const values = (res && res.values) || [];
+      list.replaceChildren(...values.slice().reverse().map((v) => h("li", {}, [
+        h("p", { class: "meta small" }, [
+          "Version " + v.version + " \u00b7 " + (Number(v.kind) === 1 ? "original by " : "written over by ") + shortAddress(v.author) +
+            (formatUtc(v.at) ? " \u00b7 " + formatUtc(v.at).split(",")[0] : ""),
+        ]),
+        h("p", { class: "version-text" }, [v.text || ""]),
+      ])));
+    } catch (error) {
+      list.replaceChildren(h("li", { class: "meta small" }, [explainFailure(error)]));
+    }
+  });
+  return box;
+}
+
+const NUMBER_WORDS = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve",
+  "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen", "Twenty"];
+const TENS = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+/** "One", "Twenty-Three"... (numbers above 99 stay as digits). */
+function chapterWord(n) {
+  if (n <= 20) return NUMBER_WORDS[n] || String(n);
+  if (n < 100) return TENS[Math.floor(n / 10)] + (n % 10 ? "-" + NUMBER_WORDS[n % 10] : "");
+  return String(n);
+}
+
+/** Reading settings: text size and page theme, remembered in this browser. */
+function readingSettings(column) {
+  const sizes = [["s", "Small"], ["m", "Medium"], ["l", "Large"], ["xl", "Extra large"]];
+  const themes = [["paper", "Paper"], ["sepia", "Sepia"], ["night", "Night"]];
+  const apply = () => {
+    column.dataset.size = readPref("st-read-size", "m");
+    column.dataset.theme = readPref("st-read-theme", "paper");
+  };
+  apply();
+  const pick = (key, value) => { writePref(key, value); apply(); };
+  const size = h("select", { "aria-label": "Text size" }, sizes.map(([v, l]) => h("option", { value: v }, [l])));
+  size.value = readPref("st-read-size", "m");
+  size.addEventListener("change", () => pick("st-read-size", size.value));
+  const theme = h("select", { "aria-label": "Page" }, themes.map(([v, l]) => h("option", { value: v }, [l])));
+  theme.value = readPref("st-read-theme", "paper");
+  theme.addEventListener("change", () => pick("st-read-theme", theme.value));
+  return h("div", { class: "reading-settings" }, [
+    h("label", {}, [h("span", { class: "visually-hidden" }, ["Text size"]), "Aa ", size]),
+    h("label", {}, [h("span", { class: "visually-hidden" }, ["Page"]), theme]),
+  ]);
+}
+
+/**
+ * Story guide: "the story so far" (kept by the opener, editors and writers;
+ * Chrome's free built-in AI can draft it) and an automatic character list.
+ */
+function storyGuide(id, story, chapters, me, flags, writers) {
+  const chapterTexts = chapters.map((c) => ({
+    number: c.number,
+    text: c.blocks.filter((b) => !b.segment.hidden).map((b) => b.segment.text || "").join("\n"),
+  }));
+  const characters = findCharacters(chapterTexts);
+  const canEdit = !!me && (story.opener === me || (flags && flags.editor) || writers.some(([a]) => a === me));
+  const summaryText = h("p", { class: "body-2 small guide-summary" }, [story.summary || "No summary yet."]);
+  const box = h("section", { class: "card story-guide", "aria-labelledby": "guide-title" }, [
+    h("h2", { class: "aside-title", id: "guide-title" }, ["Story guide"]),
+    h("h3", { class: "guide-h" }, ["The story so far"]),
+    summaryText,
+    story.summary_by ? h("p", { class: "meta small" }, ["Updated by " + shortAddress(story.summary_by) + (formatUtc(story.summary_at) ? " \u00b7 " + formatUtc(story.summary_at).split(",")[0] : "")]) : null,
+  ]);
+  if (canEdit && Number(story.status) !== 5) {
+    const area = h("textarea", { rows: "6", maxlength: "1500" });
+    area.value = story.summary || "";
+    const status = statusBox();
+    const aiNote = h("p", { class: "meta small", "aria-live": "polite" });
+    const draftAi = h("button", { type: "button", class: "btn btn-secondary btn-small", hidden: true }, ["Draft with built-in AI"]);
+    const draftPlain = h("button", { type: "button", class: "text-button" }, ["Start from each chapter's first line"]);
+    draftPlain.addEventListener("click", () => { area.value = openingLines(chapterTexts); });
+    // Chrome's on-device Summarizer: free, nothing leaves the computer.
+    if (typeof self !== "undefined" && "Summarizer" in self) {
+      self.Summarizer.availability().then((a) => { if (a && a !== "unavailable") draftAi.hidden = false; }).catch(() => {});
+      draftAi.addEventListener("click", async () => {
+        draftAi.disabled = true;
+        aiNote.textContent = "Writing a draft on this computer\u2026 (the first time, Chrome may download its AI model)";
+        try {
+          const summarizer = await self.Summarizer.create({ type: "tldr", format: "plain-text", length: "long", sharedContext: "A chapter-by-chapter collaborative story." });
+          let text = chapterTexts.map((c) => "Chapter " + c.number + ".\n" + c.text).join("\n\n");
+          const quota = summarizer.inputQuota || 0;
+          if (quota && text.length > quota * 3) text = text.slice(-quota * 3);
+          const draft = await summarizer.summarize(text);
+          area.value = String(draft || "").slice(0, 1500);
+          aiNote.textContent = "Draft ready. Check it, change anything, then save.";
+        } catch (error) {
+          aiNote.textContent = "The built-in AI couldn't write a draft here (" + (error && error.message ? error.message : "not available") + ").";
+        } finally {
+          draftAi.disabled = false;
+        }
+      });
+    }
+    const save = h("button", { type: "button", class: "btn btn-primary btn-small" }, ["Save summary"]);
+    save.addEventListener("click", async () => {
+      save.disabled = true;
+      try {
+        const op = await encode("stories", "set_story_summary", { account: me, story_id: String(id), summary: area.value.trim() });
+        if (await send([op], status)) renderPage();
+      } catch (error) {
+        failure(status, error);
+      } finally {
+        save.disabled = false;
+      }
+    });
+    append(box, h("details", { class: "more-options guide-edit" }, [
+      h("summary", {}, [story.summary ? "Update the summary" : "Write the summary"]),
+      h("p", { class: "meta small" }, ["The opener, editors and anyone who has written here can keep this up to date. Up to 1,500 characters."]),
+      area,
+      h("div", { class: "row" }, [draftAi, draftPlain]),
+      aiNote,
+      h("div", { class: "actions" }, [save]),
+      status,
+    ]));
+  }
+  append(box,
+    h("h3", { class: "guide-h" }, ["Characters"]),
+    characters.length
+      ? h("ul", { class: "character-list" }, characters.map((c) => h("li", {}, [
+        h("b", {}, [c.name]),
+        h("span", { class: "meta small" }, [" \u00b7 " + plural(c.count, "mention") + " \u00b7 from Chapter " + c.firstChapter]),
+      ])))
+      : h("p", { class: "meta small" }, ["Names appear here as the story mentions them."]),
+    h("p", { class: "meta small" }, ["Found automatically in the text, so it can miss or mix up a name."]));
+  return box;
 }
 
 function removePanel(storyId, block) {
@@ -1432,6 +1685,7 @@ function composer(id, story, active, insertAfter, flags) {
   const form = h("form", { onSubmit: (event) => { event.preventDefault(); go(); } }, [
     after ? null : writingHelp(),
     field("Your part", area),
+    grammarTool(area, () => update()),
     h("div", { class: "counter", id: uid + "-count" }, [
       costText,
       inviteOnly(story)
@@ -2815,7 +3069,7 @@ function renderBook(page, id) {
     for (const b of ordered) {
       if (!chapter || b.segment.starts_chapter) {
         chapter += 1;
-        body.push(h("h2", { class: "h3 book-chapter" }, ["Chapter " + chapter]));
+        body.push(h("h2", { class: "book-chapter" }, ["Chapter " + chapterWord(chapter)]));
       }
       body.push(h("p", { class: "book-text" }, [b.segment.text || ""]));
     }
@@ -2931,10 +3185,10 @@ function writingHelp() {
     h("ul", { class: "how-list" }, [
       h("li", {}, [h("b", {}, ["Add at the end."]), " Use this box. Your part goes after everything written so far. Tick “Start a new chapter” to begin one."]),
       h("li", {}, [h("b", {}, ["Add in the middle."]), " Click “+ Add text here” under any part. Your text appears directly below that part, before what came next. Anyone who can write here can do this."]),
-      h("li", {}, [h("b", {}, ["Edit."]), " Only the story's opener and editors can edit, and only lightly: fix typos, tidy a sentence. A part can grow by about 10% at most. Shortening returns Ink to the writer. The part stays credited to its writer and shows “Edited by”."]),
-      h("li", {}, [h("b", {}, ["Remove."]), " Opener and editors can remove a part. The writer gets their Ink back, unless the part was hidden as possible copying."]),
+      h("li", {}, [h("b", {}, ["Edit or remove your own part."]), " Lightly (a part can grow by about 10% at most). Shortening or removing returns Ink to you. In private stories the opener and editors can also edit or remove any part."]),
+      h("li", {}, [h("b", {}, ["Write over someone's part."]), " Replace it with your version. The first write-over costs 2\u00d7 the Ink, the next 4\u00d7, then 8\u00d7, and so on. The replaced writer gets their Ink back, and every earlier version stays readable under the part."]),
+      h("li", {}, [h("b", {}, ["Spelling and grammar."]), " Press \u201cCheck spelling & grammar\u201d before you post. Anything missed can be fixed in the final edit."]),
       h("li", {}, [h("b", {}, ["Quoting someone?"]), " Open \u201cQuoting someone? Name the source\u201d and write the book or site. It shows under your part, and the copy checker leaves named quotes alone."]),
-      h("li", {}, [h("b", {}, ["Want to change someone else's part?"]), " Add your own text after it instead, or ask the opener. Bigger rewrites happen in the final edit, once the story is full."]),
       h("li", {}, [h("b", {}, ["Ink."]), " 1 Ink per letter. In public stories every writer pays for their own words. In private stories the opener's writers' pool pays while it has enough. Long text is split into parts automatically."]),
     ]),
   ]);
