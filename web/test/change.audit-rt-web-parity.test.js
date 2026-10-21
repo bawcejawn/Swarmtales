@@ -30,14 +30,15 @@ function contractPrice(oldText, text, versionCount, charged) {
   const added = BigInt(text.length - pre - suf);
   // Updated for the October 2026 rules: the doubling counts paid changes
   // (segment.paid_changes; the writer's own edits are versions too), and a cut
-  // refunds only while nobody else changed the part (Stories.cutRefund).
+  // refunds what was paid beyond the new length, also after someone else's
+  // change (Stories.cutRefund, AB-044).
   const changes = versionCount; // paid changes so far
   if (changes >= 60) return null; // "changing this part again would cost more Ink than exists"
   const units = removed + added < MIN_CHANGE_UNITS ? MIN_CHANGE_UNITS : removed + added;
   const price = units * (1n << BigInt(changes + 1));
   const c = BigInt(charged);
   const newCost = BigInt(text.length);
-  const refund = removing ? c : (changes > 0 ? 0n : (c > newCost ? c - newCost : 0n));
+  const refund = removing ? c : (c > newCost ? c - newCost : 0n);
   return { removed, added, price, refund };
 }
 

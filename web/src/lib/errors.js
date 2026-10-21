@@ -1,4 +1,8 @@
 const FRIENDLY = {
+  "STORIES: this edit now costs more Ink than you agreed to; reload the part and try again":
+    "Someone changed this part while you were editing, so your edit would now cost more Ink than shown. Reload the page and check the new price.",
+  "STORIES: the admin hid this part; only the admin or the moderator can unhide it":
+    "SwarmTales hid this part while it is checked. Only SwarmTales can bring it back.",
   "STORIES: a hidden part can't be edited while it is checked; you can remove it instead":
     "This part is hidden while it's checked, so it can't be edited now. You can still remove it.",
   "STORIES: edit your own part with edit_segment; revise_part is for someone else's part":

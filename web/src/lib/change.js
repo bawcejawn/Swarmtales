@@ -7,7 +7,8 @@
  *
  * Your own part (edit_segment): rewording is free; letters beyond the part's
  * current length cost 1 Ink each (you pay, never the pool); shortening refunds
- * the removed Ink, but only while nobody else has changed the part.
+ * only Ink you (or the pool) paid for the part and haven't had back, also
+ * after someone else changed it.
  *
  * A "letter" is one UTF-16 unit, so most emoji count 2, as everywhere on
  * SwarmTales.
@@ -39,18 +40,36 @@ export function changeMultiplier(paidChanges) {
 }
 
 /**
- * Ink a cut gives back to whoever paid: the letters below what was paid, but
- * nothing once someone else has changed the part (the contract can't tell
- * whose letters were cut). Removing the part gives back everything paid.
+ * The exact price as a BigInt, like the contract's u64: above 2^53 a JS
+ * number would print a rounded value and every change would be refused (AB-055).
+ */
+export function changePriceExact(units, paidChanges) {
+  return BigInt(units) * (1n << BigInt(Number(paidChanges || 0) + 1));
+}
+
+/**
+ * Ink a cut gives back to whoever paid: what was paid for the part (charged)
+ * beyond the new length. Letters someone else added are never in charged, so
+ * nobody gets back more than they paid (AB-035, AB-044). Removing the part
+ * gives back everything paid. paidChanges is kept for older callers.
  */
 export function cutRefund(newText, paidChanges, charged) {
   const paid = Number(charged || 0);
   if (String(newText ?? "").length === 0) return paid;
-  if (Number(paidChanges || 0) > 0) return 0;
   return Math.max(0, paid - String(newText).length);
 }
 
-/** { removed, added, units, multiplier, price, refund } for a change to someone else's part. */
+/** How a refund splits between the writer and a story's pool (pool-paid parts: own_paid first). */
+export function refundSplit(segment, refund) {
+  const seg = segment || {};
+  const toWriter = seg.fund_paid ? Math.min(refund, Number(seg.own_paid || 0)) : refund;
+  return { toWriter, toPool: refund - toWriter };
+}
+
+/**
+ * { removed, added, units, multiplier, price, refund } for a change to someone
+ * else's part. price is a BigInt (send String(price) as expected_ink).
+ */
 export function changePrice(oldText, newText, paidChanges, charged) {
   const { removed, added } = diffSpan(oldText, newText);
   const units = Math.max(MIN_CHANGE_UNITS, removed + added);
@@ -60,7 +79,7 @@ export function changePrice(oldText, newText, paidChanges, charged) {
     added,
     units,
     multiplier,
-    price: units * multiplier,
+    price: changePriceExact(units, paidChanges),
     refund: cutRefund(newText, paidChanges, charged),
   };
 }
@@ -77,9 +96,7 @@ export function editPrice(segment, newText) {
   const current = Number(seg.current_cost || 0);
   const cost = Math.max(0, length - current);
   const refund = cost > 0 ? 0 : cutRefund(newText, seg.paid_changes, seg.charged);
-  const own = Number(seg.own_paid || 0);
-  const toWriter = seg.fund_paid ? Math.min(refund, own) : refund;
-  return { cost, refund, toWriter, toPool: refund - toWriter };
+  return { cost, refund, ...refundSplit(seg, refund) };
 }
 
 /**

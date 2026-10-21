@@ -49,7 +49,7 @@ import * as reading from "./lib/bookmarks.js";
 import { createReader } from "./ui/readAloud.js";
 import { grammarTool } from "./ui/grammar.js";
 import { findCharacters, openingLines } from "./lib/characters.js";
-import { changeMultiplier, changePrice, editPrice, editorChanged } from "./lib/change.js";
+import { changeMultiplier, changePrice, editPrice, editorChanged, refundSplit } from "./lib/change.js";
 
 const problems = configProblems();
 const kondor = createKondorWallet();
@@ -140,6 +140,7 @@ function tokenAmount(base) {
 }
 
 function num(value) {
+  if (typeof value === "bigint") return value.toLocaleString("en-US");
   const n = Number(value || 0);
   return Number.isFinite(n) ? n.toLocaleString("en-US") : String(value);
 }
@@ -1228,8 +1229,8 @@ function segmentView(block, story, storyId, ctx) {
 /**
  * The writer edits their own part: rewording is free, letters beyond its
  * current length cost 1 Ink each (the writer pays, never the pool), and
- * shortening is always allowed. A cut returns Ink only while nobody else has
- * changed the part.
+ * shortening is always allowed. A cut returns only Ink the writer (or the
+ * pool) paid for the part, also after someone else changed it.
  */
 function editPanel(storyId, block) {
   const seg = block.segment;
@@ -1237,7 +1238,6 @@ function editPanel(storyId, block) {
   area.value = seg.text || "";
   const counter = h("p", { class: "meta" });
   const save = h("button", { type: "submit", class: "btn btn-primary btn-small" }, ["Save edit"]);
-  const othersChanged = Number(seg.paid_changes || 0) > 0;
   const update = () => {
     const text = normalizePasted(area.value).trim();
     const p = editPrice(seg, text);
@@ -1245,7 +1245,7 @@ function editPanel(storyId, block) {
     if (!editorChanged(seg.text, area.value, normalizePasted)) line += "Rewording is free; added letters cost 1 Ink each.";
     else if (p.cost) line += "The " + num(p.cost) + " added letters cost " + num(p.cost) + " Ink, paid by you.";
     else if (p.refund) line += num(p.toWriter) + " Ink comes back to you" + (p.toPool ? " and " + num(p.toPool) + " to the story's pool" : "") + ".";
-    else if (inkCost(text) < Number(seg.current_cost || 0) && othersChanged) line += "Someone else changed this part, so a cut returns no Ink. Removing the whole part returns what you paid.";
+    else if (inkCost(text) < Number(seg.current_cost || 0)) line += "Free. The cut letters were added by someone else, so no Ink comes back.";
     else line += "Free.";
     counter.textContent = line;
     save.textContent = p.cost ? "Save edit for " + num(p.cost) + " Ink" : "Save edit";
@@ -1272,6 +1272,9 @@ function editPanel(storyId, block) {
         seq: String(block.seq),
         new_text: text,
         expected_cost: quoted,
+        // The price shown above: if the part changed since and the edit would
+        // cost more, the contract refuses it instead of charging (AB-049).
+        max_ink: String(p.cost),
       });
       if (await send([op], status)) {
         if (p.cost || p.toWriter) await refreshAccount();
@@ -1297,8 +1300,8 @@ function editPanel(storyId, block) {
  * Change (or remove) someone else's part. Price: the letters you add plus
  * the letters you remove (at least 10), times 2, doubling with every paid
  * change to that part. You always pay, never the story's pool. The writer
- * keeps the part; cutting it returns them nothing once someone else has
- * changed it, and removing it returns what they paid. Every version stays
+ * keeps the part; a cut returns them only what they paid beyond the new
+ * length, and removing it returns what they (or the pool) paid. Every version stays
  * readable, with your source and AI-help note on yours.
  */
 function changePanel(storyId, story, block) {
@@ -1324,13 +1327,13 @@ function changePanel(storyId, story, block) {
       save.disabled = true;
     } else {
       price.textContent = "You add " + num(p.added) + " and remove " + num(p.removed) + " letters: " + num(p.units) + " \u00d7 " + p.multiplier +
-        " = " + num(p.price) + " Ink." + (p.refund ? " " + whose + " gets " + num(p.refund) + " Ink back for the removed letters." : "") +
+        " = " + num(p.price) + " Ink." + refundLine(seg, p.refund, whose, " for the removed letters") +
         " The next change to this part will cost \u00d7" + p.multiplier * 2 + ".";
       save.textContent = "Change for " + num(p.price) + " Ink";
       save.disabled = false;
     }
     const r = changePrice(oldText, "", seg.paid_changes, seg.charged);
-    removeAll.textContent = "Remove the whole part instead (" + num(r.price) + " Ink; " + whose + " gets all " + num(r.refund) + " back)";
+    removeAll.textContent = "Remove the whole part instead (" + num(r.price) + " Ink" + (r.refund ? ";" + refundLine(seg, r.refund, whose, "").replace(/\.$/, "") : "") + ")";
   };
   area.addEventListener("input", update);
   update();
@@ -1384,6 +1387,20 @@ function changePanel(storyId, story, block) {
 
 /** "Version 3 · earlier versions": loads a part's history when opened. */
 /** Who made a kept version of a part, in words (kinds as in stories.proto). */
+/**
+ * " <writer> gets N Ink back<why>." In a part the story's pool paid for, the
+ * writer gets back only what they paid themselves (own_paid) and the rest
+ * goes to the pool, as the contract's settleRefund does (AB-055).
+ */
+function refundLine(seg, refund, whose, why) {
+  if (!refund) return "";
+  const { toWriter, toPool } = refundSplit(seg, refund);
+  const parts = [];
+  if (toWriter) parts.push(whose + " gets " + num(toWriter) + " Ink back");
+  if (toPool) parts.push(num(toPool) + " Ink goes back to the story's pool");
+  return " " + parts.join(" and ") + why + ".";
+}
+
 function versionLabel(v) {
   switch (Number(v.kind)) {
     case 1: return "original by " + shortAddress(v.author);
@@ -2423,8 +2440,11 @@ function renderPromo(page, campaignId) {
     append(actions, loadingLine("Reading your wallet…"));
   } else {
     append(actions, loadingLine("Checking this wallet…"));
+    // A claim made before per-campaign records exists only as the wallet's
+    // promo campaign (get_promo_claimed); the Shop counts it too (AB-045).
+    const legacyClaimed = String(state.account.promo || "0") === String(campaignId);
     read("shop", "get_campaign_claimed", { campaign_id: String(campaignId), account: address })
-      .then((res) => showClaim(!!(res && res.value)), () => showClaim(false));
+      .then((res) => showClaim(legacyClaimed || !!(res && res.value)), () => showClaim(legacyClaimed));
   }
   // Each wallet may claim each promo campaign once.
   function showClaim(claimedThis) {
