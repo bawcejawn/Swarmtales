@@ -20,7 +20,8 @@ function contentSecurityPolicy() {
     "style-src 'self'",
     "font-src 'self'",
     "img-src 'self' data:",
-    "connect-src 'self' " + nodes.join(" ") + " https://koinvault.app",
+    // LanguageTool: the free spelling and grammar check (text is sent only when the writer asks).
+    "connect-src 'self' " + nodes.join(" ") + " https://koinvault.app https://api.languagetool.org",
     "object-src 'none'",
     "base-uri 'none'",
     "form-action 'none'",
