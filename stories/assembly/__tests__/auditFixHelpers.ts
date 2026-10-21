@@ -120,9 +120,12 @@ export function ownerEdit(as: Uint8Array, id: u64, seq: u64, text: string): void
   authorize(as);
   // Growing the part reads the Writer membership and burns the added letters
   // (rule 3: letters beyond the current length cost the normal rate).
-  if (<u64>text.length > segment(id, seq).current_cost) results([writerMonth(), okCall()]);
+  const current = segment(id, seq).current_cost;
+  if (<u64>text.length > current) results([writerMonth(), okCall()]);
   else allowCalls(1);
-  new Stories().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length));
+  // max_ink: the growth price the page would show (AB-049).
+  const growth: u64 = <u64>text.length > current ? <u64>text.length - current : 0;
+  new Stories().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length, growth));
   checkpoint();
 }
 export function ownerRemove(as: Uint8Array, id: u64, seq: u64): void {

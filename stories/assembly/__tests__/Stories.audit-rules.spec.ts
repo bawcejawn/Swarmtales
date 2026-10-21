@@ -113,14 +113,18 @@ describe("Rule 3: the writer's own part", () => {
     expect(segment(id, seq).text!).toBe("Rob wrote it.");
   });
 
-  it("once someone else changed the part, a cut refunds nothing; removing it refunds what the writer paid", () => {
+  // Updated for AB-044: after someone else's change a cut still refunds the writer, but only
+  // what they paid beyond the new length (charged never holds Cara's letters).
+  it("after someone else's change, a cut refunds only what the writer paid; removing it refunds the rest", () => {
     const id = openPublic();
     const seq = write(BOB, id, BOBS);
     revise(CARA, id, seq, BOBS + ADDED);
     const minted = mintsTo(BOB);
-    ownerEdit(BOB, id, seq, "Bob cut it all down.");                 // 75 -> 20
-    expect(mintsTo(BOB)).toBe(minted, "the writer was refunded for letters that may be Cara's");
-    expect(segment(id, seq).charged).toBe(<u64>BOBS.length);
+    ownerEdit(BOB, id, seq, BOBS + "!");                            // 75 -> 44: Cara's letters, no refund
+    expect(mintsTo(BOB)).toBe(minted, "the writer was refunded for letters Cara paid for");
+    ownerEdit(BOB, id, seq, "Bob cut it all down.");                 // 44 -> 20
+    expect(mintsTo(BOB) - minted).toBe(<u64>BOBS.length - 20, "the writer should get back his own cut letters");
+    expect(segment(id, seq).charged).toBe(20);
     ownerRemove(BOB, id, seq);
     expect(mintsTo(BOB) - minted).toBe(<u64>BOBS.length);
     expect(story(id).total_refunded <= story(id).total_burned).toBe(true);
@@ -149,7 +153,7 @@ describe("Rule 3: the writer's own part", () => {
     expect(segment(id, seq).text!).toBe(BOBS);
   });
 
-  it("every edit is a version naming who made it; at the version limit the writer still edits", () => {
+  it("every edit is a version naming who made it; past the writer's room the writer still edits and paid changes still fit", () => {
     const id = openPublic();
     const seq = write(BOB, id, BOBS);
     revise(CARA, id, seq, BOBS + "!");
@@ -161,28 +165,36 @@ describe("Rule 3: the writer's own part", () => {
     expect(kept[98].kind).toBe(4);
     expect(kept[98].text!).toBe(segment(id, seq).text!);
     expect(kept[98].by!).toStrictEqual(BOB);
-    // Paid changes stop before the limit, leaving room for the final edit.
-    fId = id; fSeq = seq; fWho = MALLORY; fText = "Mallory's change.";
-    expect(() => { tryRevise(); }).toThrow();
-    rollback();
+    // Updated for AB-047: the writer's edits never use up the room paid changes need.
+    revise(MALLORY, id, seq, "Mallory's change.");
+    const after = versions(id, seq);
+    expect(after.length).toBe(100);
+    expect(after[99].kind).toBe(2);
+    expect(after[99].by!).toStrictEqual(MALLORY);
   });
 });
 
-describe("Rule 4: the Ink address is set once", () => {
+describe("Rule 4: the Ink address is set once (and Shop too, AB-050)", () => {
   beforeEach(() => { reset(); configure(); });
 
-  it("refuses a second Ink address and still lets Shop change", () => {
+  it("refuses a second Ink address and a second Shop address; the same pair is fine", () => {
     authorize(STORIES);
     expect(() => {
       authorize(STORIES);
       new Stories().set_addresses(new stories.set_addresses_arguments(USDT, SHOP));
     }).toThrow();
     rollback();
+    expect(() => {
+      authorize(STORIES);
+      new Stories().set_addresses(new stories.set_addresses_arguments(INK, ALICE));
+    }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("STORIES: the Shop address is already set and can never be changed");
+    rollback();
     authorize(STORIES);
-    new Stories().set_addresses(new stories.set_addresses_arguments(INK, ALICE));
+    new Stories().set_addresses(new stories.set_addresses_arguments(INK, SHOP));
     checkpoint();
     const cfg = new Stories().get_config(new stories.get_config_arguments());
     expect(cfg.ink!).toStrictEqual(INK);
-    expect(cfg.shop!).toStrictEqual(ALICE);
+    expect(cfg.shop!).toStrictEqual(SHOP);
   });
 });

@@ -214,6 +214,15 @@ message segment {
   // later (the pool pays only for new parts). Refunds pay this back to the
   // writer first, then the rest goes back to the pool.
   uint64 own_paid = 31 [jstype = JS_STRING];
+  // Who hid the part: 0 not hidden (or hidden before this field existed),
+  // 1 writer reports, 2 the moderator (the copy checker), 3 the admin. The
+  // opener or an editor may restore a part hidden by reports or the checker,
+  // never one the admin hid (AB-053).
+  uint32 hidden_by = 32;
+}
+
+message address_list {
+  repeated bytes values = 1 [(koinos.btype) = ADDRESS];
 }
 
 // One version of a part. Version 1 is the original text.
@@ -587,7 +596,8 @@ message contribute_arguments {
 // @description Change (or, with empty text, remove) someone else's part of an OPEN story. Price: the letters
 // added plus the letters removed (at least 10), times 2, doubling with every change to that part (2x, 4x, 8x...).
 // The changer always pays, never the story's pool. A writer never changes their own part this way (edit_segment).
-// Cuts refund nothing once someone else has changed the part; removing it refunds what its writer paid.
+// A cut refunds the writer only Ink they (or the pool) paid for the part and have not had back, never letters
+// someone else paid for; removing it refunds all of that.
 // The part stays its writer's; every version is kept, with the changer's citation and AI flag.
 // @read-only false
 // @result uint32
@@ -611,6 +621,15 @@ message get_versions_arguments {
   uint64 seq = 2 [jstype = JS_STRING];
 }
 
+// @description Every wallet other than the writer that changed a part (a paid change, the final edit or a
+// citation), in the order they first did. The admin may name any of them for a takedown strike.
+// @read-only true
+// @result address_list
+message get_changers_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 seq = 2 [jstype = JS_STRING];
+}
+
 // @description The opener, an editor or a current writer of the story updates "the story so far" while it is
 // open or in its final edit. The admin or the moderator may clear it (empty summary) at any time.
 // @read-only false
@@ -623,7 +642,7 @@ message set_story_summary_arguments {
 
 // @description The part's own writer edits it in an OPEN story. Rewording is free; letters beyond the part's
 // current length cost the normal Ink rate (the writer pays, never the pool). Shortening is always allowed and
-// refunds the removed Ink, but only Ink the writer (or the pool) paid, and nothing once someone else changed the part.
+// refunds the removed Ink, but only Ink the writer (or the pool) paid for the part and has not had back.
 // @read-only false
 // @result empty_object
 message edit_segment_arguments {
@@ -632,6 +651,9 @@ message edit_segment_arguments {
   uint64 seq = 3 [jstype = JS_STRING];
   string new_text = 4;
   uint64 expected_cost = 5 [jstype = JS_STRING];
+  // The most Ink the writer agrees to pay for added letters (the price the page showed). The edit is
+  // refused if it would cost more, e.g. because someone shortened the part since (AB-049).
+  uint64 max_ink = 6 [jstype = JS_STRING];
 }
 
 // @description The part's writer removes it from an OPEN story for free (the opener or an editor may remove a hidden part).
