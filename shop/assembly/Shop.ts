@@ -492,7 +492,10 @@ export class Shop {
     this.requireLinkSignature(signer, this.promoDigest(args.campaign_id, account), args.signature, "SHOP: promo link rejected");
 
     const claimKey = this.codeKey(args.campaign_id, account);
-    System.require(!this.campaignClaimed.get(claimKey)!.value, "SHOP: this wallet has already claimed this promo");
+    // promoClaimed also covers a claim made before per-campaign records existed
+    // (one claim per wallet, ever, until October 2026): it holds that campaign.
+    System.require(!this.campaignClaimed.get(claimKey)!.value && this.promoClaimed.get(account)!.value != args.campaign_id,
+      "SHOP: this wallet has already claimed this promo");
 
     const day = now / DAY_SECONDS;
     if (row.day != day) {
