@@ -1,13 +1,16 @@
 // The browser signs promo and invite links the same way the Shop and
 // Stories contracts recover them. This test recovers each signature with
-// the mock VM's own secp256k1 code (the exact logic the contract runs) and
+// its own copy of the recovery the chain runs (@noble/secp256k1, as in the
+// Koinos mock VM; not koilib's Signer, which made the signature) and
 // checks it lands on the link key's address, and NOT on a copy aimed at a
 // different wallet. That is the on-chain check for fixes H2 and H3.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { utils } from "koilib";
-import mv from "@koinos/mock-vm/src/util.js";
+import * as secp from "@noble/secp256k1";
+import { ripemd160 } from "@noble/hashes/ripemd160";
+import { sha256 } from "@noble/hashes/sha256";
 import { signPromoClaim, signInviteJoin, generateLinkKey, linkKeyAddress, linkSecretFromHash, buildPromoLink, buildInviteLink } from "../src/lib/links.js";
 
 const SHOP = "1MRxjnjFDhZfjtjgpxBNczsMGVEtYqfFyS";
@@ -30,10 +33,22 @@ function cat(parts) {
   for (const p of parts) { o.set(p, at); at += p.length; }
   return o;
 }
-// What the contract does: hash the message to a multihash, recover the signer.
+// What the contract does: sha256 the message, recover the compressed public
+// key from the 65-byte compact signature (first byte = recovery id + 31), and
+// turn it into a Koinos address (version 0, ripemd160(sha256(key)), checksum).
+// The same steps as @koinos/mock-vm's util.js, without its dependencies (AB-018).
 function recoverAddress(message, signature) {
-  const multihash = mv.hashSHA256(message);
-  return mv.bitcoinAddress(mv.recoverPublicKey(multihash, signature));
+  const digest = sha256(message);
+  const recovery = signature[0] - 31;
+  const sig = new secp.Signature(BigInt("0x" + utils.toHexString(signature.slice(1, 33))), BigInt("0x" + utils.toHexString(signature.slice(33, 65))));
+  const publicKey = secp.Point.fromHex(secp.recoverPublicKey(digest, sig.toHex(), recovery)).toRawBytes(true);
+  const payload = new Uint8Array(21);
+  payload.set(ripemd160(sha256(publicKey)), 1);
+  const checksum = sha256(sha256(payload)).slice(0, 4);
+  const address = new Uint8Array(25);
+  address.set(payload);
+  address.set(checksum, 21);
+  return utils.encodeBase58(address);
 }
 const promoMsg = (shop, id, acct) => cat([enc.encode("swarmtales/promo/v1"), utils.decodeBase58(shop), u64(id), utils.decodeBase58(acct)]);
 const inviteMsg = (st, sid, iid, acct) => cat([enc.encode("swarmtales/invite/v1"), utils.decodeBase58(st), u64(sid), u64(iid), utils.decodeBase58(acct)]);
@@ -61,6 +76,26 @@ test("an invite signature recovers to the link key and is bound to one wallet", 
   assert.equal(recoverAddress(inviteMsg(STORIES, "12", "4", ALICE), sig), key.address);
   assert.notEqual(recoverAddress(inviteMsg(STORIES, "12", "4", BOB), sig), key.address);
   assert.notEqual(recoverAddress(inviteMsg(STORIES, "12", "5", ALICE), sig), key.address);
+});
+
+// A fixed known-answer vector (AB-026). The recovery above uses the same
+// secp256k1 library koilib signs with, so on its own it is not an
+// independent check. These bytes are pinned: test link key 0 from
+// scripts/gen-link-fixtures.mjs (sha256("swarmtales-test-link-0"), a public,
+// worthless key) signing story 1, invite 1, for BOB. The same signature is
+// inviteSig(0, 1, 1) in stories/assembly/__tests__/linkFixtures.ts, which the
+// Stories contract tests accept through the Koinos mock VM.
+const KAT_SECRET = "L26euVCoKXxVKqZeDasczL9x1BvLQ96xKLTexv1specUvvvD3km4";
+const KAT_ADDRESS = "13da3M8X4nTyxAVMGYmxFdqGqtmmdy8H8B";
+const KAT_DIGEST = "3e48710bf75d77a87124272827285063664b0991f6f914a039bd27331c99050e";
+const KAT_SIGNATURE = "20a28f83a35497b258225415d8deb51caa5c0d0a08314d3633c3fafef17f621495463153250a3b6076bce9e77507e50bc1aa5a4813f643050b988f9682a6d90f7a";
+
+test("an invite signature matches a fixed known-answer vector", async () => {
+  assert.equal(linkKeyAddress(KAT_SECRET), KAT_ADDRESS);
+  assert.equal(utils.toHexString(sha256(inviteMsg(STORIES, "1", "1", BOB))), KAT_DIGEST);
+  const sig = await signInviteJoin(KAT_SECRET, STORIES, "1", "1", BOB);
+  assert.equal(utils.toHexString(sig), KAT_SIGNATURE);
+  assert.equal(recoverAddress(inviteMsg(STORIES, "1", "1", BOB), utils.toUint8Array(KAT_SIGNATURE)), KAT_ADDRESS);
 });
 
 test("link secrets ride in the # fragment, not a server query", () => {

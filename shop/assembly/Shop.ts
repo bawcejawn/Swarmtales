@@ -264,6 +264,7 @@ export class Shop {
       : shop.item.ITEM_READER_MONTH;
     const unit = this.requirePrice(<u32>item, assetId);
     const price = SafeMath.mul(unit, <u64>args.months);
+    this.requireMaxPrice(price, args.max_price);
     const now = this.now();
     const current = this.memberships.get(member)!;
     const writerActive = this.isActiveWriter(current, now);
@@ -359,6 +360,7 @@ export class Shop {
     const inkAmount = this.packInk(cfg, pack);
     System.require(inkAmount > 0, "SHOP: pack Ink amount is not set");
     const price = this.requirePrice(<u32>pack, assetId);
+    this.requireMaxPrice(price, args.max_price);
     const memo = pack == shop.item.ITEM_PACK_S ? "pack:S" : pack == shop.item.ITEM_PACK_M ? "pack:M" : "pack:L";
 
     this.takePayment(payer, assetId, <u32>pack, price, inkAmount, MINT_PURCHASE, memo);
@@ -396,6 +398,7 @@ export class Shop {
     const multiplier: u64 = args.price_multiplier <= 1 ? 1 : <u64>args.price_multiplier;
     System.require(multiplier <= MAX_PRICE_MULTIPLIER, "SHOP: price multiplier is too high");
     const price = SafeMath.mul(base, multiplier);
+    this.requireMaxPrice(price, args.max_price);
     const memo = isBook ? "open:book" : "open:short";
 
     this.takePayment(payer, assetId, <u32>item, price, starter, MINT_STARTER, memo);
@@ -585,19 +588,44 @@ export class Shop {
     return new shop.empty_object();
   }
 
+  // Step 1 of 2 (AB-016): propose. Admin moves only when the proposed
+  // address accepts, so a typo cannot strand it.
   set_admin(args: shop.set_admin_arguments): shop.empty_object {
     this.enter();
     this.requireAdmin();
-    const newAdmin = this.requireAddress(args.new_admin, "SHOP: invalid admin address");
-    const oldAdmin = this.getAdmin();
+    const proposed = this.requireAddress(args.new_admin, "SHOP: invalid admin address");
+    const admin = this.getAdmin();
     const cfg = this.loadConfig();
-    cfg.admin = newAdmin;
+    // Proposing the current admin cancels a pending handover.
+    cfg.pending_admin = Arrays.equal(proposed, admin) ? null : proposed;
     this.config.put(cfg);
-    const event = new shop.admin_changed_event(oldAdmin, newAdmin);
+    const event = new shop.admin_proposed_event(admin, cfg.pending_admin);
+    System.event(
+      "shop.admin_proposed_event",
+      Protobuf.encode(event, shop.admin_proposed_event.encode),
+      [proposed]
+    );
+    this.leave();
+    return new shop.empty_object();
+  }
+
+  // Step 2 of 2: the proposed admin signs to take over.
+  accept_admin(args: shop.accept_admin_arguments): shop.empty_object {
+    this.requireDirectCall();
+    this.enter();
+    const cfg = this.loadConfig();
+    const pending = cfg.pending_admin;
+    System.require(pending != null && pending.length == ADDRESS_LENGTH, "SHOP: no admin handover is pending");
+    this.requireSigner(pending!, "SHOP: only the proposed admin can accept");
+    const oldAdmin = this.getAdmin();
+    cfg.admin = pending;
+    cfg.pending_admin = null;
+    this.config.put(cfg);
+    const event = new shop.admin_changed_event(oldAdmin, pending);
     System.event(
       "shop.admin_changed_event",
       Protobuf.encode(event, shop.admin_changed_event.encode),
-      [newAdmin]
+      [pending!]
     );
     this.leave();
     return new shop.empty_object();
@@ -878,6 +906,12 @@ export class Shop {
       System.checkAuthority(authority.authorization_type.contract_call, this.getAdmin()),
       "SHOP: admin authority required"
     );
+  }
+
+  // The payer signs the most they agreed to pay (AB-017). A price changed
+  // after they looked, or a client that sends no limit, charges nothing.
+  private requireMaxPrice(price: u64, maxPrice: u64): void {
+    System.require(price <= maxPrice, "SHOP: the price is " + price.toString() + ", more than the most you agreed to pay. Nothing was charged.");
   }
 
   // Security fix H1. A transaction that calls Shop itself has no calling

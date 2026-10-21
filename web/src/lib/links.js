@@ -70,7 +70,10 @@ function inviteMessage(storiesAddress, storyId, inviteId, account) {
  * or an invite's link_signer).
  */
 export function generateLinkKey() {
-  const signer = Signer.fromSeed(crypto.randomUUID() + ":" + Date.now() + ":" + Math.random());
+  // 32 bytes straight from the browser's secure random source (AB-013).
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  const signer = new Signer({ privateKey: utils.toHexString(bytes) });
   return { secret: signer.getPrivateKey("wif"), address: signer.getAddress() };
 }
 
@@ -113,4 +116,35 @@ export function buildPromoLink(base, campaignId, secret) {
 
 export function buildInviteLink(base, storyId, inviteId, secret) {
   return base + "#/join/" + storyId + "/" + inviteId + "?k=" + encodeURIComponent(secret);
+}
+
+/**
+ * Which invite holds this link's key (AB-008). Looks at the story's invites
+ * from `before` (next_invite_id read before sending) up to the current
+ * counter, and returns the id whose link_signer is `linkSigner`, or null.
+ * The id is read back from the chain, never guessed, so a link is only
+ * shown for an invite that exists and opens with this key.
+ */
+export async function findInviteId({ before, linkSigner, readInvite, readNextId, max = 20 }) {
+  const first = Math.max(1, Number(before) || 1);
+  const next = Number(await readNextId().catch(() => 0)) || 0;
+  for (let id = first; id < next && id < first + max; id++) {
+    const invite = await readInvite(id).catch(() => null);
+    if (invite && invite.link_signer === linkSigner) return id;
+  }
+  return null;
+}
+
+/**
+ * The page's hash without the link secret (?k=...), so it can be put back
+ * in the address bar after the page has read it: the secret then stays out
+ * of browser history and of anything that copies the URL (AB-013).
+ */
+export function hashWithoutSecret(hash) {
+  const q = (hash || "").indexOf("?");
+  if (q < 0) return hash || "";
+  const params = new URLSearchParams(hash.slice(q + 1));
+  params.delete("k");
+  const rest = params.toString();
+  return hash.slice(0, q) + (rest ? "?" + rest : "");
 }

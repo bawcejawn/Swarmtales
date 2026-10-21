@@ -6,6 +6,7 @@ import { Contract, Provider, utils } from "koilib";
 import { abis } from "./generated/abis.js";
 import { assertExpectedChain, contracts, network } from "./config.js";
 import { headTimeSeconds } from "./lib/money.js";
+import { confirmTransaction } from "./lib/confirm.js";
 
 let provider;
 let verifiedChainId = "";
@@ -235,17 +236,19 @@ export async function writerFlags(storyId, address) {
 }
 
 /**
- * Wait until a transaction is in a block (or the time runs out), so the page
- * reads the new state afterwards. Returns the node's row, or null.
+ * Wait until a transaction is in a block and its receipt says how it went
+ * (or the time runs out). Returns { state: confirmed | reverted | unknown, logs }.
  */
-export async function waitForInclusion(transactionId, ms = 90000) {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    const row = await lookupTransaction(transactionId);
-    if (row && Array.isArray(row.containing_blocks) && row.containing_blocks.length) return row;
-    await new Promise((r) => setTimeout(r, 3000));
-  }
-  return lookupTransaction(transactionId);
+export function waitForConfirmation(transactionId, ms = 90000) {
+  return confirmTransaction(transactionId, {
+    lookupTransaction,
+    getBlockReceipts: async (blockIds) => {
+      const result = await getProvider().getBlocksById(blockIds, { returnBlock: false, returnReceipt: true });
+      return result && Array.isArray(result.block_items) ? result.block_items : [];
+    },
+    waitMs: ms,
+    sleep: (t) => new Promise((r) => setTimeout(r, t)),
+  });
 }
 
 /**

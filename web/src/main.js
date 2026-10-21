@@ -15,7 +15,7 @@ import {
   loadOverview,
   loadStory,
   lookupTransaction,
-  waitForInclusion,
+  waitForConfirmation,
   hasReported,
   quoteCost,
   read,
@@ -23,6 +23,7 @@ import {
   writerFlags,
 } from "./chain.js";
 import { explainFailure } from "./lib/errors.js";
+import { TX_CONFIRMED, TX_REVERTED } from "./lib/confirm.js";
 import { KIND, STORY_STATUS, TIER, VISIBILITY, label } from "./lib/labels.js";
 import { VAULT_MANA_CEILING, formatMana, formatUnits, formatUtc, kondorManaNote, shortAddress } from "./lib/money.js";
 import { KIND_BOOK, RIGHTS_PROBLEM, assessOpen, assessPromo, assessWrite, assessWriterBuy, isActiveWriter } from "./lib/rules.js";
@@ -37,8 +38,9 @@ import {
   saveSession,
 } from "./wallet.js";
 import { fetchVaultConfig, vaultManaDecision, vaultPairingDecision } from "./lib/vaultApi.js";
-import { buildInviteLink, generateLinkKey, linkSecretFromHash, signInviteJoin, signPromoClaim } from "./lib/links.js";
-import { createTestWallet, storedTestAddress } from "./testWallet.js";
+import { buildInviteLink, findInviteId, generateLinkKey, hashWithoutSecret, linkSecretFromHash, signInviteJoin, signPromoClaim } from "./lib/links.js";
+import { createTestWallet, forgetTestWalletOnMainnet, storedTestAddress } from "./testWallet.js";
+import { isFramed } from "./lib/frame.js";
 import { append, h, icons, replace } from "./ui/dom.js";
 import { renderHowSections } from "./ui/how.js";
 import { renderMarkdown } from "./ui/markdown.js";
@@ -388,6 +390,20 @@ function renderNav() {
 
 function boot() {
   const app = document.getElementById("app");
+  // Inside another site's frame, a wallet confirmation could be clickjacked:
+  // show only a link to the real page (AB-014).
+  if (isFramed(window)) {
+    replace(app, h("main", { class: "container" }, [
+      h("p", {}, ["SwarmTales was opened inside another website, so it won't run here. ",
+        h("a", { href: location.href, target: "_top", rel: "noopener" }, ["Open SwarmTales directly"]), "."]),
+    ]));
+    return;
+  }
+  try {
+    forgetTestWalletOnMainnet(network, localStorage);
+  } catch {
+    /* no storage at all */
+  }
   replace(app, 
     h("a", { class: "skip", href: "#page", onClick: (event) => { event.preventDefault(); focusMain(); } }, ["Skip to content"]),
     network.mainnet
@@ -2079,6 +2095,7 @@ function renderOpen(page) {
         terms_version: termsVersion(),
         fund: plan.fund,
         citation: openCitation.value(),
+        max_price: plan.price,   // the price shown and approved: Shop charges no more (AB-017)
       });
       const sent = await send([approve, open], status);
       if (sent) {
@@ -2157,7 +2174,7 @@ function renderMembership(page) {
           return;
         }
         const approve = await encode("token", "approve", { owner: address, spender: contracts.shop, value: plan.price });
-        const buy = await encode("shop", "buy_membership", { payer: address, tier: 2, months: 1, token: contracts.paymentToken });
+        const buy = await encode("shop", "buy_membership", { payer: address, tier: 2, months: 1, token: contracts.paymentToken, max_price: plan.price });
         const sent = await send([approve, buy], buyStatus);
         if (sent) {
           await refreshAccount();
@@ -2197,7 +2214,7 @@ function renderMembership(page) {
             throw new Error("Your " + contracts.paymentSymbol + " balance is below this pack's price.");
           }
           const approve = await encode("token", "approve", { owner: address, spender: contracts.shop, value: pack.price });
-          const buy = await encode("shop", "buy_pack", { payer: address, pack: pack.item, token: contracts.paymentToken });
+          const buy = await encode("shop", "buy_pack", { payer: address, pack: pack.item, token: contracts.paymentToken, max_price: pack.price });
           const sent = await send([approve, buy], packStatus);
           if (sent) {
             await refreshAccount();
@@ -2302,9 +2319,28 @@ function trustNote(text) {
   return h("div", { class: "trust-note" }, [icons.shield(), h("p", {}, [text])]);
 }
 
+// Link secrets read from the address bar, by route. The page keeps them here
+// and takes them out of the URL at once, so they stay out of browser history
+// and anything that copies the address (AB-013). Re-renders read them here.
+const linkSecrets = new Map();
+
+function takeLinkSecret() {
+  const route = location.hash.split("?")[0];
+  const fromUrl = linkSecretFromHash(location.hash);
+  if (fromUrl) {
+    linkSecrets.set(route, fromUrl);
+    try {
+      history.replaceState(history.state, "", location.pathname + location.search + hashWithoutSecret(location.hash));
+    } catch {
+      /* the secret stays in the URL; the page still works */
+    }
+  }
+  return linkSecrets.get(route) || "";
+}
+
 function renderPromo(page, campaignId) {
   setMeta("Free Ink", "Claim free Ink to start writing on SwarmTales.");
-  const linkSecret = linkSecretFromHash(location.hash);
+  const linkSecret = takeLinkSecret();
   const main = h("div", { class: "landing" });
   append(page, main);
   const card = h("div", { class: "card card-lg" }, [
@@ -2394,7 +2430,7 @@ function renderPromo(page, campaignId) {
 
 function renderJoin(page, storyId, inviteId) {
   setMeta("You're invited to write", "An invitation to write in a private SwarmTales story.");
-  const linkSecret = linkSecretFromHash(location.hash);
+  const linkSecret = takeLinkSecret();
   const main = h("div", { class: "landing" });
   append(page, main);
   const card = h("div", { class: "card card-lg" }, [loadingLine("Opening your invitation…")]);
@@ -2697,9 +2733,17 @@ function sharePanel(id, story, me, flags) {
           opener: me, story_id: String(id), link_signer: key.address, max_uses: n, expires_at: expires,
         });
         const before = Number((await read("stories", "get_story", { story_id: String(id) })).next_invite_id || 1);
-        if (await send([op], status)) {
-          // The invite id is the story's invite counter before this one.
-          const inviteId = before || 1;
+        const sent = await send([op], status);
+        // Read the invite back and use the id that holds this link's key
+        // (AB-008): never a link for an invite that isn't on the record.
+        const showLink = async () => {
+          const inviteId = await findInviteId({
+            before,
+            linkSigner: key.address,
+            readNextId: async () => Number((await read("stories", "get_story", { story_id: String(id) })).next_invite_id || 0),
+            readInvite: (n) => read("stories", "get_invite", { story_id: String(id), invite_id: String(n) }),
+          });
+          if (!inviteId) return false;
           const invite = buildInviteLink(siteBase(), id, inviteId, key.secret);
           replace(out,
             notice("ok", [
@@ -2709,7 +2753,31 @@ function sharePanel(id, story, me, flags) {
             h("div", { class: "row" }, [copyButton(invite, "Copy invite link")]),
             h("p", { class: "meta small" }, ["Copy it now: this page can't show it again. Anyone who has it can join, so send it privately."])
           );
-        }
+          return true;
+        };
+        if (sent && await showLink()) return;
+        // Not confirmed yet, or not found: this page still holds the link's
+        // key, so the opener can look again instead of losing the link.
+        const stillMissing = h("p", { class: "meta small" });
+        const again = h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: async () => {
+          again.disabled = true;
+          stillMissing.textContent = "";
+          try {
+            if (!(await showLink())) stillMissing.textContent = "It isn't on the record yet. Try again in a minute.";
+          } catch (error) {
+            stillMissing.textContent = explainFailure(error);
+          } finally {
+            again.disabled = false;
+          }
+        } }, ["Look for the invite again"]);
+        replace(out,
+          notice("warn", h("p", {}, [
+            sent ? "The invite was sent, but we couldn't find it on the record yet." : "This invite isn't confirmed, so there's no link to share yet.",
+            " Keep this page open and look again in a minute. If it never appears, create a new invite: this one's link can't be used.",
+          ])),
+          h("div", { class: "row" }, [again]),
+          stillMissing
+        );
       } catch (error) {
         failure(status, error);
       } finally {
@@ -2717,6 +2785,7 @@ function sharePanel(id, story, me, flags) {
       }
     } }, [
       h("p", { class: "meta small" }, ["Each person who opens the link joins with one confirmation. Their parts are paid from the writers' pool while it has enough Ink. They also need a Writer month (see below)."]),
+      h("p", { class: "meta small" }, ["When you remove a writer, revoke the invite link they used and send a new one to everyone else."]),
       h("div", { class: "form-grid" }, [field("People", uses), field("Days it works", days)]),
       h("div", { class: "actions" }, [make]),
       status,
@@ -3177,7 +3246,7 @@ function giftSection(me) {
         ? "They already have a Writer month until " + (formatUtc(theirs.paid_until) || "later") + ". This adds one more month."
         : "";
       const approve = await encode("token", "approve", { owner: me, spender: contracts.shop, value: plan.price });
-      const buy = await encode("shop", "buy_membership", { payer: me, tier: 2, months: 1, token: contracts.paymentToken, beneficiary: account });
+      const buy = await encode("shop", "buy_membership", { payer: me, tier: 2, months: 1, token: contracts.paymentToken, beneficiary: account, max_price: plan.price });
       if (await send([approve, buy], status)) {
         who.value = "";
         append(status, notice("ok", h("p", {}, ["Done. " + shortAddress(account) + " has a Writer month, and its Ink went to them."])));
@@ -3307,7 +3376,7 @@ function renderReportPage(page) {
       h("ul", { class: "how-list" }, [
         h("li", {}, ["The part is hidden promptly."]),
         h("li", {}, ["The writer can send a counter-notice. If none arrives within 14 days, the part is taken down for good: its text is cleared from SwarmTales' contract storage, it's left out of future editions, and the writer isn't refunded."]),
-        h("li", {}, ["Each takedown counts against the writer. After three, their wallet can no longer write on SwarmTales."]),
+        h("li", {}, ["Each takedown counts against whoever wrote the text that was taken down. After five (the default limit), their wallet can no longer write on SwarmTales."]),
         h("li", {}, ["The blockchain records that the part was hidden or taken down and why, with a reference number. Your personal details are never put on the blockchain."]),
       ]),
     ]),
@@ -3389,18 +3458,31 @@ async function send(operations, status) {
     replace(status, notice("bad", h("p", {}, [explainFailure(new Error(logs || "The network refused it."))])));
     return false;
   }
-  // Wait for the next block, so whatever the page shows next is up to date.
+  // Wait for the block and read this transaction's own receipt. Only a
+  // receipt that did not revert counts as done (AB-004): callers show links,
+  // "Ink has arrived" and so on only when this returns true.
   if (id) replace(status, notice("info", h("p", {}, ["Sent. Waiting for the next block (usually under a minute)…"])));
-  const found = id ? await waitForInclusion(id) : null;
-  const receipt = found && (found.receipt || (found.transaction && found.transaction.receipt));
-  if (receipt && receipt.reverted) {
-    const logs = Array.isArray(receipt.logs) ? receipt.logs.join(" ") : "";
-    replace(status, notice("bad", h("p", {}, [explainFailure(new Error(logs || "The network refused it."))])));
+  const outcome = await waitForConfirmation(id);
+  if (outcome.state === TX_REVERTED) {
+    const logs = outcome.logs.join(" ");
+    replace(status, notice("bad", [
+      h("p", {}, [explainFailure(new Error(logs || "The network refused it."))]),
+      h("p", { class: "mono small" }, ["Transaction " + id]),
+    ]));
+    return false;
+  }
+  if (outcome.state !== TX_CONFIRMED) {
+    replace(status, notice("warn", [
+      h("p", {}, [
+        "We couldn't confirm this yet. It may still go through. Reload the page in a minute to check, and don't send it again until you have, so you aren't charged twice.",
+      ]),
+      id ? h("p", { class: "mono small" }, ["Transaction " + id]) : null,
+    ]));
     return false;
   }
   replace(status, notice("ok", [
-    h("p", {}, [found ? "Done. It's on the record." : "Sent. It should appear within a minute."]),
-    id ? h("p", { class: "mono small" }, ["Transaction " + id]) : null,
+    h("p", {}, ["Done. It's on the record."]),
+    h("p", { class: "mono small" }, ["Transaction " + id]),
   ]));
   return true;
 }

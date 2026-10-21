@@ -403,3 +403,76 @@ test("moderation reasons map to the contract's numbers", () => {
   assert.throws(() => lib.requireReason("rude"), /--reason must be one of/);
   assert.throws(() => lib.requireReason(undefined), /--reason must be one of/);
 });
+
+// ---------- AB-006: the wasm is checked against a known sha256 ----------
+
+const WASM = Buffer.from("pretend this is contract.wasm");
+const WASM_SHA = crypto.createHash("sha256").update(WASM).digest("hex");
+
+test("the upload reports the wasm's sha256", () => {
+  assert.strictEqual(lib.checkWasmHash(WASM, undefined, false), WASM_SHA);
+});
+
+test("a wasm that does not match --expect-sha256 is refused, on any network", () => {
+  const other = crypto.createHash("sha256").update("a different build").digest("hex");
+  assert.throws(() => lib.checkWasmHash(WASM, other, false), /does not match/);
+  assert.throws(() => lib.checkWasmHash(WASM, other, true), /does not match/);
+  assert.strictEqual(lib.checkWasmHash(WASM, WASM_SHA.toUpperCase(), true), WASM_SHA);
+});
+
+test("mainnet uploads need --expect-sha256; a malformed hash is refused", () => {
+  assert.throws(() => lib.checkWasmHash(WASM, undefined, true), /--expect-sha256/);
+  assert.throws(() => lib.checkWasmHash(WASM, "abc123", false), /64 hex/);
+  assert.throws(() => lib.checkWasmHash(WASM, true, false), /64 hex/);
+});
+
+// ---------- AB-009: on mainnet, trust only the listed node ----------
+
+const MAINNET = { network: "mainnet", "i-understand-this-is-mainnet": true };
+
+test("mainnet refuses a --rpc override that is not a listed node", () => {
+  assert.throws(() => lib.resolveNetwork(Object.assign({ rpc: "https://evil.example.com" }, MAINNET)), /--rpc/);
+  assert.strictEqual(lib.resolveNetwork(Object.assign({ rpc: "https://api.koinos.io" }, MAINNET)).rpc, "https://api.koinos.io");
+  // Testnet still takes any https node.
+  assert.strictEqual(lib.resolveNetwork({ rpc: "https://my-node.example.com" }).rpc, "https://my-node.example.com");
+});
+
+test("on mainnet, wire-stories needs --treasury and --founder instead of trusting the node", () => {
+  const onChain = {
+    treasury: "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6",
+    founder: "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6",
+    ink: "195trftAvPnqeoPmHeGmxtwNYVUVdghm5x",
+  };
+  const stories = "12SVw65QpMjFo9fnc651V7LhXKqVLg15Ww";
+  assert.throws(() => lib.shopAddressesForStories(onChain, { ink: onChain.ink, stories, mainnet: true }), /--treasury and --founder/);
+  assert.throws(() => lib.shopAddressesForStories(onChain, { ink: onChain.ink, stories, treasury: onChain.treasury, mainnet: true }), /--treasury and --founder/);
+  const args = lib.shopAddressesForStories(onChain, { ink: onChain.ink, stories, treasury: onChain.treasury, founder: onChain.founder, mainnet: true });
+  assert.strictEqual(args.treasury, onChain.treasury);
+  // Testnet keeps reading them from the chain.
+  assert.strictEqual(lib.shopAddressesForStories(onChain, { ink: onChain.ink, stories }).founder, onChain.founder);
+});
+
+// ---------- AB-013: link keys stay out of shell history; strong randomness ----------
+
+test("a link key on the command line is refused: it would land in shell history", () => {
+  assert.throws(() => lib.refuseSecretFlag({ "link-key": "5KwdXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" }, "link-key"), /hidden prompt/);
+  assert.throws(() => lib.refuseSecretFlag({ "link-key": true }, "link-key"), /hidden prompt/);
+  lib.refuseSecretFlag({}, "link-key"); // no flag: fine, the prompt asks for it
+});
+
+test("claim-promo and the other test commands refuse mainnet", () => {
+  assert.throws(() => lib.requireTestnet({ mainnet: true }, "claim-promo"), /claim-promo is for testnet only/);
+  lib.requireTestnet({ mainnet: false }, "claim-promo");
+});
+
+test("link keys are 32 bytes from crypto.randomBytes", () => {
+  const real = crypto.randomBytes;
+  crypto.randomBytes = (n) => Buffer.alloc(n, 7);
+  try {
+    assert.strictEqual(lib.newLinkKeyHex(), "07".repeat(32));
+  } finally {
+    crypto.randomBytes = real;
+  }
+  assert.match(lib.newLinkKeyHex(), /^[0-9a-f]{64}$/);
+  assert.notStrictEqual(lib.newLinkKeyHex(), lib.newLinkKeyHex());
+});

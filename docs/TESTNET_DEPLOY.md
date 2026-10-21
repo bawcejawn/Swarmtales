@@ -203,21 +203,24 @@ Type `SEND` and press Enter. Then you see `Transaction id: 0x...` and `included 
 
 ```powershell
 node deploy/deploy.js set-admin ink --contract 195trftAvPnqeoPmHeGmxtwNYVUVdghm5x --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
+node deploy/deploy.js accept-admin ink --contract 195trftAvPnqeoPmHeGmxtwNYVUVdghm5x --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
 ```
 
-Paste the **Ink wallet's** key again, then type `SEND`.
+`set-admin` only proposes: paste the **Ink wallet's** key, then type `SEND`.
+`accept-admin` hands it over: paste your **main wallet's** key, then type `SEND`.
 After this, Ink admin actions are signed by your main wallet, not the Ink wallet.
-**Send back:** the transaction id.
+**Send back:** both transaction ids.
 
 ## Step 8. Upload Shop and make your main wallet its admin (signed by the Shop wallet)
 
 ```powershell
 node deploy/deploy.js upload shop --expect 1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth
 node deploy/deploy.js set-admin shop --contract 1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
+node deploy/deploy.js accept-admin shop --contract 1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
 ```
 
-Both use the **Shop wallet's** key. The Shop upload uses about 5 to 8 mana.
-**Send back:** both transaction ids.
+The first two use the **Shop wallet's** key; `accept-admin` uses your **main wallet's** key. The Shop upload uses about 5 to 8 mana.
+**Send back:** all three transaction ids.
 
 ## Step 9. Connect Shop to Ink (signed by your main wallet)
 
@@ -443,7 +446,8 @@ node deploy/deploy.js upload stories --expect $STORIES
 ### 13c. Make the admin wallet the Stories admin (signed by the Stories wallet)
 
 ```powershell
-node deploy/deploy.js set-admin stories --contract $STORIES --admin $ADMIN
+node deploy/deploy.js set-admin stories --contract $STORIES --admin $ADMIN      # Stories wallet's key: proposes
+node deploy/deploy.js accept-admin stories --contract $STORIES --admin $ADMIN   # admin wallet's key: takes over
 ```
 
 After this, put the Stories wallet's key away. Everything below is signed by the admin or the test user.
