@@ -73,7 +73,7 @@ Writer claims are allowed every **30 days** (2,592,000 seconds). That wait is pa
 
 ### Promo codes
 
-There is no open claim button. An admin creates a campaign with a code, an Ink amount, a total budget, an optional daily cap (`0` means no daily cap), and a start and end. A global switch can turn every campaign off. Each wallet can claim **once, ever**, across every campaign. Optional single-use codes each work once, and that wallet still cannot claim again. The mint note is `campaign:<id>`. `get_promo_claimed` returns that campaign id, or 0 if the wallet has never claimed.
+There is no open claim button. An admin creates a campaign with a code, an Ink amount, a total budget, an optional daily cap (`0` means no daily cap), and a start and end. A global switch can turn every campaign off, and each campaign has its own switch. Each wallet can claim **each campaign once**; a new campaign can be claimed again. Optional single-use codes each work once, and that wallet still cannot claim the same campaign again. The mint note is `campaign:<id>`. `get_campaign_claimed` says whether a wallet claimed a given campaign; `get_promo_claimed` returns the newest campaign id it claimed, or 0 if it never claimed one (Stories reads this for the trial). On mainnet the admin runs `deploy.js promo-new`, `promo-on`, `promo-off` and `promo-end <id>`.
 
 A code sent in an admin transaction is public, because the chain is public.
 
@@ -329,7 +329,7 @@ Other choices already built, which Carl can still change before an upload by ask
 - One membership purchase can be at most 24 months.
 - The Writer Ink rate is locked for the whole active term, including an extension.
 - Unclaimed months are forfeited when `paid_until` passes.
-- One promo claim per wallet, forever.
+- One promo claim per wallet per campaign.
 - A campaign's code, amount, and single-use setting cannot be edited after creation. Budget, daily cap, end date, and on/off can.
 - The fee is 0% to 5%, starting at 1%. Rounding leftovers go to the treasury.
 
