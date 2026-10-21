@@ -1,4 +1,16 @@
 const FRIENDLY = {
+  "STORIES: a hidden part can't be edited while it is checked; you can remove it instead":
+    "This part is hidden while it's checked, so it can't be edited now. You can still remove it.",
+  "STORIES: edit your own part with edit_segment; revise_part is for someone else's part":
+    "This is your own part: use “Edit” on it instead (rewording is free).",
+  "STORIES: the text is unchanged":
+    "Nothing has changed yet.",
+  "STORIES: this part has too many versions to change it again":
+    "This part has been changed so many times that it can't be changed again.",
+  "STORIES: only the opener, an editor or a current writer of this story may update its summary":
+    "Only the opener, an editor or someone who still writes in this story can update its summary.",
+  "STORIES: the summary can't change once the story is finalized or archived":
+    "The summary can't change once the story is finished or archived.",
   "STORIES: confirm that you wrote this text or have the right to use it":
     "Tick “I wrote this myself, or I have the right to use it” before you add a part.",
   "STORIES: the Terms of Use have changed; reload the page and accept the current version":
@@ -35,8 +47,8 @@ const FRIENDLY = {
     "This wallet already has the maximum number of open projects.",
   "STORIES: open fee payment failed":
     "The Shop refused the open fee. Check that you approved the Shop for the price and that you hold enough of the payment token.",
-  "SHOP: this wallet has already claimed a promo":
-    "This wallet has already claimed a promo. One claim per wallet, ever.",
+  "SHOP: this wallet has already claimed this promo":
+    "This wallet has already claimed this promo. Each wallet can claim each promo once.",
   "SHOP: promo code rejected":
     "That promo code was rejected.",
   "SHOP: promo is off":

@@ -49,7 +49,7 @@ import * as reading from "./lib/bookmarks.js";
 import { createReader } from "./ui/readAloud.js";
 import { grammarTool } from "./ui/grammar.js";
 import { findCharacters, openingLines } from "./lib/characters.js";
-import { changeMultiplier, changePrice } from "./lib/change.js";
+import { changeMultiplier, changePrice, editPrice, editorChanged } from "./lib/change.js";
 
 const problems = configProblems();
 const kondor = createKondorWallet();
@@ -1173,14 +1173,15 @@ function segmentView(block, story, storyId, ctx) {
       tools.lastChild.title = "Write new text that appears right below this part";
       tools.lastChild.addEventListener("click", () => toggle("add", () => composer(storyId, story, ctx.active, block.seq, ctx.flags)));
     }
-    // Your own part: edit or remove it for free. Someone else's: change or
-    // remove it for Ink (everyone pays, the opener too). The opener and
-    // editors may remove a hidden part (moderation) for free.
+    // Your own part: reword or remove it for free (letters beyond its length
+    // cost Ink). Someone else's: change or remove it for Ink (everyone pays,
+    // the opener too; never the pool). The opener and editors may remove a
+    // hidden part (moderation) for free.
     const me = currentAddress();
     const ownPart = !!me && segment.author === me;
     const open = Number(story.status) === 1;
     if (open && ownPart && !segment.hidden) {
-      append(tools, h("button", { type: "button", class: "text-button tool", title: "Tidy your part (free)" }, ["Edit"]));
+      append(tools, h("button", { type: "button", class: "text-button tool", title: "Edit your part: rewording is free, added letters cost Ink" }, ["Edit"]));
       tools.lastChild.addEventListener("click", () => toggle("edit", () => editPanel(storyId, block)));
     }
     if (open && (ownPart || (segment.hidden && ctx.canEdit))) {
@@ -1188,7 +1189,7 @@ function segmentView(block, story, storyId, ctx) {
       tools.lastChild.addEventListener("click", () => toggle("remove", () => removePanel(storyId, block)));
     }
     if (ctx.canAdd && !segment.hidden && !ownPart && me) {
-      const times = changeMultiplier(segment.version_count);
+      const times = changeMultiplier(segment.paid_changes);
       append(tools, h("button", { type: "button", class: "text-button tool", title: "Change this part: you pay for the letters you add and remove, \u00d7" + times + ". The earlier version stays readable." }, ["Change (\u00d7" + times + ")"]));
       tools.lastChild.addEventListener("click", () => toggle("change", () => changePanel(storyId, story, block)));
     }
@@ -1224,23 +1225,34 @@ function segmentView(block, story, storyId, ctx) {
   return el;
 }
 
-/** Light edit by the opener or an editor: the contract allows a little growth. */
+/**
+ * The writer edits their own part: rewording is free, letters beyond its
+ * current length cost 1 Ink each (the writer pays, never the pool), and
+ * shortening is always allowed. A cut returns Ink only while nobody else has
+ * changed the part.
+ */
 function editPanel(storyId, block) {
   const seg = block.segment;
-  const original = Number(seg.original_cost || 0);
-  const allowance = Math.max(Math.floor(original / 10), Math.min(original, 20));
-  const maxCost = Number(seg.charged || 0) + allowance;
   const area = h("textarea", { rows: "6", spellcheck: "true" });
   area.value = seg.text || "";
   const counter = h("p", { class: "meta" });
+  const save = h("button", { type: "submit", class: "btn btn-primary btn-small" }, ["Save edit"]);
+  const othersChanged = Number(seg.paid_changes || 0) > 0;
   const update = () => {
-    const n = inkCost(normalizePasted(area.value).trim());
-    counter.textContent = num(n) + " of at most " + num(maxCost) + " characters. Edits are for tidying: your part can grow only a little. Shortening it returns Ink to you.";
+    const text = normalizePasted(area.value).trim();
+    const p = editPrice(seg, text);
+    let line = num(inkCost(text)) + " characters (now " + num(seg.current_cost) + "). ";
+    if (!editorChanged(seg.text, area.value, normalizePasted)) line += "Rewording is free; added letters cost 1 Ink each.";
+    else if (p.cost) line += "The " + num(p.cost) + " added letters cost " + num(p.cost) + " Ink, paid by you.";
+    else if (p.refund) line += num(p.toWriter) + " Ink comes back to you" + (p.toPool ? " and " + num(p.toPool) + " to the story's pool" : "") + ".";
+    else if (inkCost(text) < Number(seg.current_cost || 0) && othersChanged) line += "Someone else changed this part, so a cut returns no Ink. Removing the whole part returns what you paid.";
+    else line += "Free.";
+    counter.textContent = line;
+    save.textContent = p.cost ? "Save edit for " + num(p.cost) + " Ink" : "Save edit";
   };
   area.addEventListener("input", update);
   update();
   const status = statusBox();
-  const save = h("button", { type: "submit", class: "btn btn-primary btn-small" }, ["Save edit"]);
   return h("form", { class: "inline-panel card", onSubmit: async (event) => {
     event.preventDefault();
     save.disabled = true;
@@ -1248,8 +1260,11 @@ function editPanel(storyId, block) {
       const text = normalizePasted(area.value).trim();
       const check = checkStoryText(text, true);
       if (!check.ok) throw new Error(check.reason);
-      if (inkCost(text) > maxCost) throw new Error("That edit makes the part too long. Edits can only add up to " + num(allowance) + " characters.");
-      if (text === seg.text) throw new Error("Nothing has changed yet.");
+      if (text === seg.text || !editorChanged(seg.text, area.value, normalizePasted)) throw new Error("Nothing has changed yet.");
+      const p = editPrice(seg, text);
+      if (p.cost && state.account && Number(state.account.ink || 0) < p.cost) {
+        throw new Error("The added letters cost " + num(p.cost) + " Ink and you have " + num(state.account.ink) + ".");
+      }
       const quoted = await quoteCost(text);
       const op = await encode("stories", "edit_segment", {
         editor: currentAddress(),
@@ -1258,7 +1273,10 @@ function editPanel(storyId, block) {
         new_text: text,
         expected_cost: quoted,
       });
-      if (await send([op], status)) renderPage();
+      if (await send([op], status)) {
+        if (p.cost || p.toWriter) await refreshAccount();
+        renderPage();
+      }
     } catch (error) {
       failure(status, error);
     } finally {
@@ -1266,7 +1284,7 @@ function editPanel(storyId, block) {
     }
   } }, [
     h("h3", { class: "h3" }, ["Edit your part"]),
-    h("p", { class: "meta" }, ["Free for your own words. Readers see a small \u201cedited\u201d note."]),
+    h("p", { class: "meta" }, ["Rewording your own words is free; letters beyond the part's current length cost 1 Ink each. Every edit is kept in the part's history, and readers see a small \u201cedited\u201d note."]),
     area,
     counter,
     h("div", { class: "actions" }, [save]),
@@ -1277,9 +1295,11 @@ function editPanel(storyId, block) {
 
 /**
  * Change (or remove) someone else's part. Price: the letters you add plus
- * the letters you remove (at least 10), times 2, doubling with every change
- * to that part. The writer keeps the part and gets back Ink for letters you
- * remove. Every version stays readable.
+ * the letters you remove (at least 10), times 2, doubling with every paid
+ * change to that part. You always pay, never the story's pool. The writer
+ * keeps the part; cutting it returns them nothing once someone else has
+ * changed it, and removing it returns what they paid. Every version stays
+ * readable, with your source and AI-help note on yours.
  */
 function changePanel(storyId, story, block) {
   const seg = block.segment;
@@ -1291,12 +1311,14 @@ function changePanel(storyId, story, block) {
   const status = statusBox();
   const save = h("button", { type: "submit", class: "btn btn-primary btn-small" }, ["Save change"]);
   const removeAll = h("button", { type: "button", class: "text-button" }, []);
+  const citation = citationField();
+  const aiBox = aiToggle();
   const current = () => normalizePasted(area.value).trim();
   const update = () => {
     const text = current();
-    const p = changePrice(oldText, text, seg.version_count, seg.charged);
+    const p = changePrice(oldText, text, seg.paid_changes, seg.charged);
     const whose = shortAddress(seg.author);
-    if (text === oldText) {
+    if (!editorChanged(oldText, area.value, normalizePasted)) {
       price.textContent = "Make your change above. You pay for the letters you add and remove (at least 10), \u00d7" + p.multiplier + " for this part.";
       save.textContent = "Save change";
       save.disabled = true;
@@ -1307,7 +1329,7 @@ function changePanel(storyId, story, block) {
       save.textContent = "Change for " + num(p.price) + " Ink";
       save.disabled = false;
     }
-    const r = changePrice(oldText, "", seg.version_count, seg.charged);
+    const r = changePrice(oldText, "", seg.paid_changes, seg.charged);
     removeAll.textContent = "Remove the whole part instead (" + num(r.price) + " Ink; " + whose + " gets all " + num(r.refund) + " back)";
   };
   area.addEventListener("input", update);
@@ -1319,16 +1341,17 @@ function changePanel(storyId, story, block) {
         const check = checkStoryText(text, true);
         if (!check.ok) throw new Error(check.reason);
       }
-      if (text === oldText) throw new Error("Change the text first.");
+      if (text === oldText || (text && !editorChanged(oldText, area.value, normalizePasted))) throw new Error("Change the text first.");
       if (!rights.input.checked) throw new Error(RIGHTS_PROBLEM);
-      const p = changePrice(oldText, text, seg.version_count, seg.charged);
-      const pool = inviteOnly(story) ? Number(story.fund || 0) : 0;
-      if (pool < p.price && state.account && Number(state.account.ink || 0) < p.price) {
+      const p = changePrice(oldText, text, seg.paid_changes, seg.charged);
+      // The changer always pays; the story's pool never pays for changes.
+      if (state.account && Number(state.account.ink || 0) < p.price) {
         throw new Error("This costs " + num(p.price) + " Ink and you have " + num(state.account.ink) + ".");
       }
       const op = await encode("stories", "revise_part", {
         writer: currentAddress(), story_id: String(storyId), seq: String(block.seq), text,
-        expected_ink: String(p.price), rights_confirmed: true, terms_version: termsVersion(), citation: "", ai_assisted: false,
+        expected_ink: String(p.price), rights_confirmed: true, terms_version: termsVersion(),
+        citation: text ? citation.value() : "", ai_assisted: !!text && aiBox.input.checked,
       });
       if (await send([op], status)) {
         await refreshAccount();
@@ -1345,11 +1368,13 @@ function changePanel(storyId, story, block) {
     h("h3", { class: "h3" }, ["Change this part"]),
     h("p", { class: "meta" }, [
       "The part stays " + shortAddress(seg.author) + "'s, and the current version stays readable in its history. " +
-        "Every change to someone else's words costs Ink, and each change to the same part costs twice the last.",
+        "Every change to someone else's words costs you Ink (a story's pool never pays for changes), and each change to the same part costs twice the last.",
     ]),
     area,
     grammarTool(area, update),
     price,
+    citation.node,
+    aiBox.node,
     rights.node,
     h("div", { class: "actions" }, [save, removeAll]),
     walletNote(),
@@ -1358,6 +1383,17 @@ function changePanel(storyId, story, block) {
 }
 
 /** "Version 3 · earlier versions": loads a part's history when opened. */
+/** Who made a kept version of a part, in words (kinds as in stories.proto). */
+function versionLabel(v) {
+  switch (Number(v.kind)) {
+    case 1: return "original by " + shortAddress(v.author);
+    case 3: return "removed by " + shortAddress(v.by);
+    case 4: return "edited by its writer, " + shortAddress(v.by);
+    case 5: return "final edit by " + shortAddress(v.by);
+    default: return "changed by " + shortAddress(v.by);
+  }
+}
+
 function versionsView(storyId, block) {
   const n = Number(block.segment.version_count || 0);
   const list = h("ol", { class: "version-list" });
@@ -1375,10 +1411,11 @@ function versionsView(storyId, block) {
       const values = (res && res.values) || [];
       list.replaceChildren(...values.slice().reverse().map((v) => h("li", {}, [
         h("p", { class: "meta small" }, [
-          "Version " + v.version + " \u00b7 " + (Number(v.kind) === 1 ? "original by " + shortAddress(v.author) : (Number(v.kind) === 3 ? "removed by " : "changed by ") + shortAddress(v.by)) +
-            (formatUtc(v.at) ? " \u00b7 " + formatUtc(v.at).split(",")[0] : ""),
+          "Version " + v.version + " \u00b7 " + versionLabel(v) + (formatUtc(v.at) ? " \u00b7 " + formatUtc(v.at).split(",")[0] : ""),
         ]),
         h("p", { class: "version-text" }, [v.text || ""]),
+        v.citation ? h("p", { class: "source-note" }, ["Source: " + v.citation]) : null,
+        v.ai_assisted ? h("span", { class: "tag-ai" }, ["Written with AI help"]) : null,
       ])));
     } catch (error) {
       list.replaceChildren(h("li", { class: "meta small" }, [explainFailure(error)]));
@@ -1420,7 +1457,7 @@ function readingSettings(column) {
 }
 
 /**
- * Story guide: "the story so far" (kept by the opener, editors and writers;
+ * Story guide: "the story so far" (kept by the opener, editors and current writers;
  * Chrome's free built-in AI can draft it) and an automatic character list.
  */
 function storyGuide(id, story, chapters, me, flags, writers) {
@@ -1429,7 +1466,12 @@ function storyGuide(id, story, chapters, me, flags, writers) {
     text: c.blocks.filter((b) => !b.segment.hidden).map((b) => b.segment.text || "").join("\n"),
   }));
   const characters = findCharacters(chapterTexts);
-  const canEdit = !!me && (story.opener === me || (flags && flags.editor) || writers.some(([a]) => a === me));
+  // The contract's rule (AB-034): the opener, an editor, or a writer whose
+  // writing is still in the story and, in an invite-only story, who is still
+  // on its allow-list; only while the story is open, locked or in its final edit.
+  const stillMember = !inviteOnly(story) || !!(flags && flags.allowed);
+  const canEdit = !!me && [1, 2, 3].includes(Number(story.status)) &&
+    (story.opener === me || (flags && flags.editor) || (stillMember && writers.some(([a, n]) => a === me && Number(n || 0) > 0)));
   const summaryText = h("p", { class: "body-2 small guide-summary" }, [story.summary || "No summary yet."]);
   const box = h("section", { class: "card story-guide", "aria-labelledby": "guide-title" }, [
     h("h2", { class: "aside-title", id: "guide-title" }, ["Story guide"]),
@@ -1437,7 +1479,7 @@ function storyGuide(id, story, chapters, me, flags, writers) {
     summaryText,
     story.summary_by ? h("p", { class: "meta small" }, ["Updated by " + shortAddress(story.summary_by) + (formatUtc(story.summary_at) ? " \u00b7 " + formatUtc(story.summary_at).split(",")[0] : "")]) : null,
   ]);
-  if (canEdit && Number(story.status) !== 5) {
+  if (canEdit) {
     const area = h("textarea", { rows: "6", maxlength: "1500" });
     area.value = story.summary || "";
     const status = statusBox();
@@ -2365,7 +2407,7 @@ function renderPromo(page, campaignId) {
     append(facts, 
       h("div", {}, [h("dt", {}, ["You receive"]), h("dd", {}, [num(campaign.amount) + " Ink"])]),
       formatUtc(campaign.ends_at) ? h("div", {}, [h("dt", {}, ["Offer ends"]), h("dd", {}, [formatUtc(campaign.ends_at)])]) : null,
-      h("div", {}, [h("dt", {}, ["Limit"]), h("dd", {}, ["One claim per wallet"])])
+      h("div", {}, [h("dt", {}, ["Limit"]), h("dd", {}, ["One claim per wallet for this promo"])])
     );
     if (!campaign.enabled) append(card, notice("warn", h("p", {}, ["This promo has been switched off."])));
   }).catch(() => {});
@@ -2379,9 +2421,18 @@ function renderPromo(page, campaignId) {
     append(actions, connectButton());
   } else if (!state.account) {
     append(actions, loadingLine("Reading your wallet…"));
-  } else if (state.account.promo !== "0") {
-    append(actions, notice("info", h("p", {}, ["This wallet has already claimed a promo. Each wallet can claim once."])), h("a", { class: "btn btn-secondary", href: "#/stories" }, ["Find a story to write in"]));
   } else {
+    append(actions, loadingLine("Checking this wallet…"));
+    read("shop", "get_campaign_claimed", { campaign_id: String(campaignId), account: address })
+      .then((res) => showClaim(!!(res && res.value)), () => showClaim(false));
+  }
+  // Each wallet may claim each promo campaign once.
+  function showClaim(claimedThis) {
+    replace(actions);
+    if (claimedThis) {
+      append(actions, notice("info", h("p", {}, ["This wallet has already claimed this promo. Each wallet can claim each promo once."])), h("a", { class: "btn btn-secondary", href: "#/stories" }, ["Find a story to write in"]));
+      return;
+    }
     const button = h("button", { type: "button", class: "btn btn-primary" }, ["Claim free Ink"]);
     append(actions, button, h("a", { class: "btn btn-secondary", href: "#/stories" }, ["Read first"]));
     append(card, walletNote());
@@ -2392,7 +2443,7 @@ function renderPromo(page, campaignId) {
         const plan = assessPromo({
           campaignId,
           hasLinkKey: !!linkSecret,
-          alreadyClaimed: state.account.promo !== "0",
+          alreadyClaimed: false, // checked just above for this campaign
           paused: !!cfg.paused,
           promoEnabled: !!cfg.promo_enabled,
         });
@@ -2814,8 +2865,8 @@ function sharePanel(id, story, me, flags) {
     };
     append(panel, tool("Editors", "People who can fix and remove parts, like you.", [h("div", { class: "editor-form" }, [
       h("p", { class: "meta small" }, [vis === 1
-        ? "Editors can fix and remove parts like you can, and write without a Writer month. They use their own Ink. Up to 10."
-        : "Editors can fix and remove parts like you can. In this story they write like invited writers: from the pool, with a Writer month. Up to 10."]),
+        ? "Editors can remove hidden parts like you can, and write without a Writer month. They use their own Ink, and pay for changes to other writers' parts like anyone. Up to 10."
+        : "Editors can remove hidden parts like you can. In this story they write like invited writers: new parts from the pool, with a Writer month; changes to other writers' parts with their own Ink. Up to 10."]),
       field("Editor's wallet", who),
       h("div", { class: "row" }, [
         h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: act(true) }, ["Add editor"]),
@@ -3214,8 +3265,9 @@ function poolSection(id, story, me) {
   } }, [
     h("p", { class: "body-2" }, [h("b", {}, [num(story.fund || 0) + " Ink left"]), " of " + num(story.fund_added || 0) + " you've put in."]),
     h("p", { class: "meta small" }, [
-      "Parts in this story are paid from the pool while it has enough Ink for them; after that, writers pay with their own Ink. " +
-        "When a part is shortened or removed, its Ink goes back to the pool. Whatever is left returns to you when the story is finished or archived.",
+      "New parts in this story are paid from the pool while it has enough Ink for them; after that, writers pay with their own Ink. " +
+        "The pool never pays for changes: a change to someone's part, or letters a writer adds to their own part, is paid by whoever makes it. " +
+        "When a pool-paid part is shortened or removed, its Ink goes back to the pool. Whatever is left returns to you when the story is finished or archived.",
     ]),
     open ? h("div", { class: "form-grid" }, [field("Ink to add", amount, "You have " + num(state.account ? state.account.ink : 0) + " Ink")]) : null,
     open ? h("div", { class: "actions" }, [add, h("a", { href: "#/membership", class: "meta" }, ["Buy an Ink pack"])]) : null,
@@ -3275,11 +3327,11 @@ function writingHelp() {
     h("ul", { class: "how-list" }, [
       h("li", {}, [h("b", {}, ["Add at the end."]), " Use this box. Your part goes after everything written so far. Tick “Start a new chapter” to begin one."]),
       h("li", {}, [h("b", {}, ["Add in the middle."]), " Click “+ Add text here” under any part. Your text appears directly below that part, before what came next. Anyone who can write here can do this."]),
-      h("li", {}, [h("b", {}, ["Your own part."]), " Edit it lightly or remove it, for free. Shortening or removing returns Ink to you."]),
-      h("li", {}, [h("b", {}, ["Someone else's part."]), " Change it with \u201cChange\u201d: you pay for every letter you add or remove (at least 10), \u00d72. Each change to the same part doubles that: \u00d74, \u00d78\u2026 The writer gets Ink back for letters you remove, and every earlier version stays readable. The opener and editors pay too; only the final edit is free."]),
+      h("li", {}, [h("b", {}, ["Your own part."]), " Reword it for free; letters beyond its current length cost 1 Ink each. You can always shorten it: the Ink comes back to you, unless someone else has changed the part (then removing the whole part returns what you paid). Removing it is free."]),
+      h("li", {}, [h("b", {}, ["Someone else's part."]), " Change it with \u201cChange\u201d: you pay for every letter you add or remove (at least 10), \u00d72. Each change to the same part doubles that: \u00d74, \u00d78\u2026 You always pay yourself, never the story's pool. Removing the whole part gives its writer back what they paid, and every earlier version stays readable. The opener and editors pay too; only the final edit is free."]),
       h("li", {}, [h("b", {}, ["Spelling and grammar."]), " Press \u201cCheck spelling & grammar\u201d before you post. Anything missed can be fixed in the final edit."]),
       h("li", {}, [h("b", {}, ["Quoting someone?"]), " Open \u201cQuoting someone? Name the source\u201d and write the book or site. It shows under your part, and the copy checker leaves named quotes alone."]),
-      h("li", {}, [h("b", {}, ["Ink."]), " 1 Ink per letter. In public stories every writer pays for their own words. In private stories the opener's writers' pool pays while it has enough. Long text is split into parts automatically."]),
+      h("li", {}, [h("b", {}, ["Ink."]), " 1 Ink per letter. In public stories every writer pays for their own words. In private stories the opener's writers' pool pays for new parts while it has enough; changes, and letters added to an existing part, are paid by whoever makes them. Long text is split into parts automatically."]),
     ]),
   ]);
 }

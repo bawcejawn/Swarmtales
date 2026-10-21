@@ -248,7 +248,7 @@ export function assessPromo(input) {
   const id = String(input.campaignId ?? "").trim();
   if (!/^[1-9][0-9]*$/.test(id)) problems.push("This promo link is missing a campaign.");
   if (!input.hasLinkKey) problems.push("This promo link is missing its key. Open the full link you were given.");
-  if (input.alreadyClaimed) problems.push("This wallet has already claimed a promo. A wallet can claim once, ever.");
+  if (input.alreadyClaimed) problems.push("This wallet has already claimed this promo. A wallet can claim each promo once.");
   if (input.paused) problems.push("The Shop is paused.");
   if (input.promoEnabled === false) problems.push("Promo claims are turned off.");
   return { ok: problems.length === 0, problems };
