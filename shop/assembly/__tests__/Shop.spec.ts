@@ -678,8 +678,18 @@ describe("Shop: stablecoin payments", () => {
   });
 
   it("lets a reader purchase through with no Ink contract configured", () => {
+    // Ink can't be cleared once set (AB-050), so start from a Shop that never had one.
+    MockVM.reset();
+    MockVM.setContractId(SHOP);
+    setTime(START);
+    callAs(new Uint8Array(0));
+    resetLedger();
+    checkpoint();
     authorize(SHOP);
-    new Shop().set_addresses(new shop.set_addresses_arguments(TREASURY, FOUNDER, new Uint8Array(0), STORIES));
+    const c = new Shop();
+    c.set_addresses(new shop.set_addresses_arguments(TREASURY, FOUNDER, new Uint8Array(0), STORIES));
+    c.set_asset(new shop.set_asset_arguments(USDT, true, 6, "USDT"));
+    c.set_price(new shop.set_price_arguments(shop.item.ITEM_READER_MONTH, USDT, ONE_6));
     checkpoint();
     allowPay(USDT, ONE_6, 0);
     buyReader(1, USDT);
@@ -1849,5 +1859,63 @@ describe("Shop: purchases carry the buyer's price limit (AB-017)", () => {
       new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_SHORT, USDT, 2, ONE_6 * 10));
     }).toThrow();
     expect(MockVM.getErrorMessage()).toBe("SHOP: the price is 20000000, more than the most you agreed to pay. Nothing was charged.");
+  });
+});
+
+// Tests that notice the planted bugs the October 2026 mutation run missed (AB-058),
+// and the set-once Ink address (AB-050).
+describe("Shop: mutation gaps (AB-058) and the set-once Ink address (AB-050)", () => {
+  beforeEach(() => {
+    MockVM.reset();
+    MockVM.setContractId(SHOP);
+    setTime(START);
+    callAs(new Uint8Array(0));
+    resetLedger();
+    checkpoint();
+    configure();
+  });
+
+  it("refuses a second claim of campaign A after the wallet claimed campaign B in between (M0037)", () => {
+    const a = openPromo(0, 1000, 5000, 0, START, START + DAY);
+    const b = openPromo(1, 1000, 5000, 0, START, START + DAY);
+    claim(ALICE, a, 0);
+    checkpoint();
+    claim(ALICE, b, 1);
+    checkpoint();
+    failAccount = ALICE; failId = a; failKey = 0;
+    expect(() => { failClaim(); }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: this wallet has already claimed this promo");
+    MockVM.rollbackTransaction();
+    expect(new Shop().get_campaign(new shop.get_campaign_arguments(a)).budget_used).toBe(1000);
+  });
+
+  it("a campaign's budget can be set to exactly one claim, never below it (M0018, M0019)", () => {
+    const id = openPromo(0, 1000, 5000, 0, START, START + DAY);
+    failId = id;
+    authorize(SHOP);
+    expect(() => {
+      new Shop().set_campaign_limits(new shop.set_campaign_limits_arguments(failId, 999, 0, START + DAY));
+    }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: budget must cover at least one claim");
+    MockVM.rollbackTransaction();
+    authorize(SHOP);
+    new Shop().set_campaign_limits(new shop.set_campaign_limits_arguments(id, 1000, 0, START + DAY));
+    checkpoint();
+    expect(new Shop().get_campaign(new shop.get_campaign_arguments(id)).budget_total).toBe(1000);
+  });
+
+  it("the Ink address can't be changed or cleared once set; treasury and founder still move", () => {
+    authorize(SHOP);
+    expect(() => {
+      new Shop().set_addresses(new shop.set_addresses_arguments(TREASURY, FOUNDER, new Uint8Array(0), STORIES));
+    }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: the Ink address is already set and can never be changed");
+    MockVM.rollbackTransaction();
+    authorize(SHOP);
+    new Shop().set_addresses(new shop.set_addresses_arguments(CARA, MALLORY, INK, STORIES));
+    checkpoint();
+    const cfg = new Shop().get_config(new shop.get_config_arguments());
+    expect(same(cfg.ink, INK)).toBe(true);
+    expect(same(cfg.treasury, CARA)).toBe(true);
   });
 });

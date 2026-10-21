@@ -242,6 +242,8 @@ export class Shop {
 
   get_campaign_claimed(args: shop.get_campaign_claimed_arguments): shop.boole {
     if (args.campaign_id == 0 || args.account == null || args.account!.length != ADDRESS_LENGTH) return new shop.boole(false);
+    // A claim from before per-campaign records counts too (AB-045).
+    if (this.promoClaimed.get(args.account!)!.value == args.campaign_id) return new shop.boole(true);
     return this.campaignClaimed.get(this.codeKey(args.campaign_id, args.account!))!;
   }
 
@@ -492,10 +494,12 @@ export class Shop {
     this.requireLinkSignature(signer, this.promoDigest(args.campaign_id, account), args.signature, "SHOP: promo link rejected");
 
     const claimKey = this.codeKey(args.campaign_id, account);
-    // promoClaimed also covers a claim made before per-campaign records existed
-    // (one claim per wallet, ever, until October 2026): it holds that campaign.
-    System.require(!this.campaignClaimed.get(claimKey)!.value && this.promoClaimed.get(account)!.value != args.campaign_id,
-      "SHOP: this wallet has already claimed this promo");
+    // A claim made before per-campaign records existed (one claim per wallet,
+    // ever, until October 2026) lives only in promoClaimed. Record it for its
+    // campaign before anything reads or overwrites promoClaimed, so claiming a
+    // newer campaign never reopens the old one (AB-045).
+    this.carryLegacyClaim(account);
+    System.require(!this.campaignClaimed.get(claimKey)!.value, "SHOP: this wallet has already claimed this promo");
 
     const day = now / DAY_SECONDS;
     if (row.day != day) {
@@ -563,6 +567,14 @@ export class Shop {
     if (stories.length != 0) this.requireOutside(stories, "SHOP: Stories cannot be the Shop contract");
 
     const cfg = this.loadConfig();
+    // Ink is set once and can never be changed or cleared (AB-050). Every
+    // purchase calls Ink's mint inside the buyer's own signed transaction, so
+    // an "Ink" swapped in by the admin key would act with the buyer's
+    // signature. Moving to a new Ink needs a reviewed code upload with the
+    // Shop contract key. Treasury, founder and Stories stay changeable.
+    const oldInk = cfg.ink;
+    System.require(oldInk == null || oldInk.length == 0 || Arrays.equal(oldInk!, ink),
+      "SHOP: the Ink address is already set and can never be changed");
     cfg.treasury = treasury;
     cfg.founder = founder;
     cfg.ink = ink;
@@ -1082,6 +1094,16 @@ export class Shop {
     memory.copy(key.dataStart, id.dataStart, 8);
     memory.copy(key.dataStart + 8, hash.dataStart, hash.length);
     return key;
+  }
+
+  // promoClaimed holds the newest campaign a wallet claimed. Before October
+  // 2026 it was the only record of a claim, so copy it into campaignClaimed
+  // (once; later calls change nothing).
+  private carryLegacyClaim(account: Uint8Array): void {
+    const legacy = this.promoClaimed.get(account)!.value;
+    if (legacy == 0) return;
+    const key = this.codeKey(legacy, account);
+    if (!this.campaignClaimed.get(key)!.value) this.campaignClaimed.put(key, new shop.boole(true));
   }
 
   private requireCampaign(id: u64): shop.campaign {
