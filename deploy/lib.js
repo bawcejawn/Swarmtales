@@ -427,24 +427,46 @@ const CHANGE_KINDS = [2, 3, 5];
  * AB-029, AB-033). A part nobody else changed strikes its writer
  * automatically; the writer's own edits don't count as a change. Once anyone
  * else changed it, the contract refuses until the admin names the writer or a
- * wallet that changed it, or chooses no strike. `changers` lists the other
- * wallets this tool can see (the contract also remembers ones that only set a
- * citation). `candidates` is who the admin may name: whoever last edited the
- * text first (even the writer), then the writer, then the other changers.
+ * wallet that changed it, or chooses no strike. `recorded` is the contract's
+ * own list of changers (get_changers), citation-only ones included (AB-048);
+ * `changers` adds the ones the versions show. `candidates` is who the admin
+ * may name: whoever last edited the text first (even the writer), then the
+ * writer, then the other changers. When the part was changed by someone this
+ * tool can't name (a contract without get_changers), `unseen` is true and
+ * the candidates end with UNSEEN_CHANGER, so the admin is told to look.
  */
-function takedownStrike(seg, versions, strike, noStrike) {
+const UNSEEN_CHANGER = "someone else changed this part that this tool can't name (a citation or a change made before this " +
+  "Stories version): look up the part's stories.citation_event and stories.revise_event on a block explorer";
+
+function takedownStrike(seg, versions, strike, noStrike, recorded) {
   if (strike && noStrike) fail("Use --strike or --no-strike, not both.");
   const writer = (seg && seg.author) || "";
-  const changed = !!(seg && seg.edited_by_others) || Number((seg && seg.paid_changes) || 0) > 0;
   const changers = [];
   const add = (who) => { if (who && who !== writer && !changers.includes(who)) changers.push(who); };
-  for (const v of versions || []) if (CHANGE_KINDS.includes(Number(v.kind))) add(v.by);
+  for (const who of recorded || []) add(who);
+  for (const v of versions || []) if (CHANGE_KINDS.includes(Number(v.kind)) || (v.by && v.by !== writer && Number(v.kind) !== 1)) add(v.by);
   const lastEditedBy = (seg && seg.last_edited_by) || "";
   if (seg && seg.edited_by_others) add(lastEditedBy);
+  // A part revised before edited_by_others existed shows it only in its versions (AB-052).
+  const changed = !!(seg && seg.edited_by_others) || Number((seg && seg.paid_changes) || 0) > 0 || changers.length > 0;
+  const unseen = changed && changers.length === 0;
   const candidates = [];
   for (const who of [lastEditedBy, writer, ...changers]) if (who && !candidates.includes(who)) candidates.push(who);
-  return { writer, changed, changers, lastEditedBy, candidates, needsChoice: changed && !strike && !noStrike };
+  if (unseen) candidates.push(UNSEEN_CHANGER);
+  return { writer, changed, changers, lastEditedBy, candidates, unseen, needsChoice: changed && !strike && !noStrike };
 }
+
+/** A set-once address (AB-037, AB-050): empty on chain, or already exactly `wanted`. */
+function requireSetOnce(what, onChain, wanted) {
+  if (onChain && onChain !== wanted) {
+    fail(what + " is already " + onChain + " and can never be changed (you gave " + wanted + "). Nothing was changed.\n" + SHOP_MOVE_HELP);
+  }
+}
+
+const SHOP_MOVE_HELP =
+  "Stories' Shop address and Shop's Ink address are set once and can never be changed (AB-050): both run inside " +
+  "users' own signed transactions. Moving to a new Shop or Ink needs a reviewed code upload with the contract key " +
+  "(docs/ADMIN_POWERS.md, docs/KEY_CUSTODY.md section 6), not wire.";
 
 /**
  * One line per kept version of a part, oldest first, with the full text, for
@@ -712,6 +734,9 @@ module.exports = {
   MODERATION_REASONS,
   requireReason,
   takedownStrike,
+  UNSEEN_CHANGER,
+  requireSetOnce,
+  SHOP_MOVE_HELP,
   versionHistory,
   resolveNetwork,
   checkChainId,

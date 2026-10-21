@@ -37,7 +37,7 @@ These keys can replace a contract's code, so they are the most valuable keys.
 
 ## 5. Moderator (copy checker)
 
-- [ ] A fresh key from `node deploy/deploy.js new-moderator-key`, used for nothing else. It can only hide, unhide and add notes.
+- [ ] A fresh key from `node deploy/deploy.js new-moderator-key`, used for nothing else. It can only hide and unhide parts, add notes and clear a story's summary. It can't take a part down or delete a part's text, touch Ink or change settings.
 - [ ] Stored only as the `MODERATOR_WIF` secret of the `copy-checker` environment (Settings > Environments > copy-checker), with "Deployment branches" limited to `main`. The workflow's `check` job runs in that environment, so a run dispatched on any other branch never gets the key. Delete any repository-level `MODERATOR_WIF` secret: every branch can read those.
 - [ ] Set the `EXPECTED_CHAIN_ID` variable if the checker uses a node other than the Foundation testnet or api.koinos.io.
 - [ ] If it leaks: set a new moderator with `set-moderation` (admin), then replace the secret.
@@ -48,21 +48,22 @@ These keys can replace a contract's code, so they are the most valuable keys.
 |---|---|
 | Admin | Once a handover has been accepted, the contract key is no longer admin and cannot propose a new one: every admin check, `set-admin` included, needs the current admin's signature. The only way back is a **code re-upload with the contract key**: upload a reviewed recovery build that lets a new admin be set, have the new admin accept, then upload the normal release build again with its recorded sha256. If the contract key is also gone, admin cannot be recovered. This is why the admin should be a 2-of-3 multisig with a spare key offline (section 3): a lost signer is replaced by the other two, with no upload |
 | Contract key | Nobody else can upload, so the code stays as it is. Plan a migration to a new contract address if an upgrade is ever needed |
-| Contract key leaked | Treat as critical: the holder can replace the code. Pause the contract (admin), warn users publicly, and stop sending payments to it |
+| Contract key leaked | Treat as critical: the holder can replace the code. Pause the contract with its admin (`node deploy/deploy.js pause ink\|shop\|stories --contract <addr> --admin <addr>`), warn users publicly, and stop sending payments to it |
 | Treasury or founder | The Shop admin points payments at new addresses with `set_addresses` |
 | Moderator | The Stories admin sets a new moderator |
+| Shop or Ink must move to a new address | Not an admin action: Stories' Shop address and Shop's Ink address are set once (AB-050). It needs a reviewed code upload of the contract that points at it, with its contract key, as below |
 
 ### Replacing contract code on mainnet (the re-upload above, or a reviewed fix after launch)
 
 The contract key is the only key that can do this, and the stored data (stories, memberships, balances, settings) is kept.
 
 1. Build the reviewed code (`npx yarn@1.22.22 build:release` in the contract's folder) and record its sha256. Have a second person build the same commit and compare the hash.
-2. Pause the contract with its admin first, if the admin still works.
+2. Pause the contract with its admin first, if the admin still works: `node deploy/deploy.js pause ink|shop|stories --contract <contract address> --admin <admin address>` (with the mainnet flags).
 3. Run, from the repository root:
    `node deploy/deploy.js upload ink|shop|stories --expect <contract address> --expect-sha256 <recorded hash> --upgrade --network mainnet --i-understand-this-is-mainnet --i-understand-this-replaces-mainnet-code`
-   The script stops on a sha256 mismatch, on an unlisted node, or without both mainnet flags. It runs a dry run, then waits for you to type SEND.
+   The script stops on a sha256 mismatch, on an unlisted node, without both mainnet flags, or when the node can't say whether a contract is already there. It runs a dry run, then waits for you to type SEND.
 4. For a lost admin: the recovery build lets a new admin be proposed. Propose and accept it (`set-admin`, `accept-admin`), then upload the normal release build again the same way, with its own recorded sha256.
-5. Check `status`, unpause, and publish what changed and why.
+5. Check `status`, unpause (`deploy.js unpause ...`), and publish what changed and why.
 
 ## 7. Before the mainnet upload
 

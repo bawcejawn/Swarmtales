@@ -526,3 +526,24 @@ test("takedown --no-strike reaches the operation through the built ABI", async (
     assert.strictEqual(!!(await c.decodeOperation(op)).args.no_strike, noStrike);
   }
 });
+
+test("takedown: every wallet the contract recorded is a candidate, citation-only ones too (AB-048, AB-052)", () => {
+  const ADDR_C = "1NRNShd6oHh1JCxfbnWj47PrgqvqeyK7w1";
+  // Only a citation by ADDR_B: no version, last_edited_by is still the writer.
+  let who = lib.takedownStrike({ author: ADDR_A, edited_by_others: true, last_edited_by: ADDR_A }, [], "", false, [ADDR_B]);
+  assert.deepStrictEqual([who.needsChoice, who.changers, who.unseen], [true, [ADDR_B], false]);
+  assert.ok(who.candidates.includes(ADDR_B));
+  // An older contract can't list them: the admin is told someone it can't name exists.
+  who = lib.takedownStrike({ author: ADDR_A, edited_by_others: true, last_edited_by: ADDR_A }, [], "", false);
+  assert.deepStrictEqual([who.unseen, who.candidates[who.candidates.length - 1]], [true, lib.UNSEEN_CHANGER]);
+  // A part revised before edited_by_others existed: the versions show the change.
+  who = lib.takedownStrike({ author: ADDR_A, version_count: 2 },
+    [{ version: 1, kind: 1, by: ADDR_A }, { version: 2, kind: 2, by: ADDR_C }], "", false);
+  assert.deepStrictEqual([who.changed, who.needsChoice, who.changers], [true, true, [ADDR_C]]);
+});
+
+test("wire: set-once addresses refuse a different value, accept the same or an empty one (AB-050)", () => {
+  assert.doesNotThrow(() => lib.requireSetOnce("Shop's Ink address", "", ADDR_A));
+  assert.doesNotThrow(() => lib.requireSetOnce("Shop's Ink address", ADDR_A, ADDR_A));
+  assert.throws(() => lib.requireSetOnce("Shop's Ink address", ADDR_A, ADDR_B), /can never be changed/);
+});

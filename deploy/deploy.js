@@ -33,9 +33,11 @@
  *        first time, or --from after that. Nothing moves yet)
  *   node deploy/deploy.js accept-admin ink|shop|stories --contract <addr> --admin <addr>
  *       (step 2: the proposed admin signs to take over, so a mistyped address can never become admin)
- *   node deploy/deploy.js wire     --admin <addr> --ink <addr> --shop <addr> --treasury <addr> --founder <addr> [--replace-shop <old addr>]
- *       (--replace-shop retires an older Shop: it loses its Ink mint rights in the same transaction.
- *        Memberships live in the Shop, so on a new Shop everyone starts without one)
+ *   node deploy/deploy.js pause|unpause ink|shop|stories --contract <addr> --admin <addr>
+ *       (the admin stops or restarts the contract's writes; step one when a contract key leaks, docs/KEY_CUSTODY.md section 6)
+ *   node deploy/deploy.js wire     --admin <addr> --ink <addr> --shop <addr> --treasury <addr> --founder <addr>
+ *       (Shop's Ink address and Stories' Shop address are set once and never change (AB-050). Moving to a
+ *        new Shop needs a reviewed code upload of Stories with its contract key, not this command)
  *   node deploy/deploy.js test-asset --admin <addr> --shop <addr> [--token <addr>] [--symbol tKOIN] [--decimals 8]
  *   node deploy/deploy.js test-buy --user <addr> --shop <addr> [--tier writer|reader] [--token <addr>]
  *   node deploy/deploy.js test-promo --admin <addr> --shop <addr>
@@ -358,7 +360,17 @@ async function cmdUpload(args) {
   const sha = lib.checkWasmHash(wasm, args.flags["expect-sha256"], net.mainnet);
   console.log("wasm sha256: " + sha + (args.flags["expect-sha256"] === undefined ? "" : "  (matches --expect-sha256)"));
 
-  const meta = await provider.call("contract_meta_store.get_contract_meta", { contract_id: expected }).catch(() => ({}));
+  // On mainnet a failed lookup stops: treating it as "no contract here" would
+  // skip the upgrade guard below and replace live code without its flags (AB-054).
+  let meta = {};
+  try {
+    meta = (await provider.call("contract_meta_store.get_contract_meta", { contract_id: expected })) || {};
+  } catch (e) {
+    if (net.mainnet) {
+      lib.fail("Could not check whether a contract is already at " + expected + " (" + (e && e.message ? e.message : String(e)) + ").\n" +
+        "Nothing was sent. Try again, or with another listed node (--rpc).");
+    }
+  }
   // --upgrade replaces the code and keeps the contract's stored data (stories,
   // memberships, settings). On mainnet it also needs a second explicit flag; the
   // sha256 check above already ran (AB-041, docs/KEY_CUSTODY.md section 6).
@@ -404,6 +416,25 @@ async function cmdSetAdmin(args) {
   console.log("Send back: the transaction id (" + txId + ").");
 }
 
+/**
+ * pause | unpause ink|shop|stories: the contract's admin stops (or restarts)
+ * its writes, the first step of KEY_CUSTODY.md section 6 (AB-054).
+ */
+async function cmdPause(args, paused) {
+  const target = args.target;
+  contractFiles(target);
+  const contractAddr = lib.requireAddress(args.flags.contract, "contract");
+  const admin = lib.requireAddress(args.flags.admin, "admin");
+  const { net, provider } = await connect(args.flags);
+  const signer = await getSigner(provider, admin, "the " + target + " admin wallet");
+  const { Contract } = koilib();
+  const contract = new Contract({ id: contractAddr, abi: loadAbiJson(target), provider });
+  const op = await contract.encodeOperation({ name: "set_paused", args: { paused } });
+  const txId = await dryRunThenSend(signer, provider, net, [op],
+    target + ".set_paused(" + paused + "): " + (paused ? "PAUSE " : "UNPAUSE ") + target + " at " + contractAddr);
+  console.log("Send back: the transaction id (" + txId + "). Check it with status.");
+}
+
 /** Step 2 of the admin handover: the proposed admin signs to take over. */
 async function cmdAcceptAdmin(args) {
   const target = args.target;
@@ -428,29 +459,27 @@ async function cmdWire(args) {
   const founder = lib.requireAddress(f.founder, "founder");
   if (ink === shop) lib.fail("Ink and Shop must be different addresses.");
   if (treasury === shop || founder === shop) lib.fail("Treasury and founder cannot be the Shop address.");
+  if (f["replace-shop"] !== undefined) lib.fail(lib.SHOP_MOVE_HELP);
   const { net, provider } = await connect(f);
+  // Shop's Ink address is set once (AB-050), and a Stories link already made is kept.
+  const shopCfg = await readOnly(provider, "shop", shop, "get_config").catch(() => ({}));
+  lib.requireSetOnce("Shop's Ink address", shopCfg && shopCfg.ink, ink);
+  const stories = (shopCfg && shopCfg.stories) || "";
   const signer = await getSigner(provider, admin, "the admin wallet");
   const { Contract } = koilib();
   const inkC = new Contract({ id: ink, abi: loadAbiJson("ink"), provider });
   const shopC = new Contract({ id: shop, abi: loadAbiJson("shop"), provider });
   const ops = [
     await inkC.encodeOperation({ name: "set_minter", args: { account: shop, reasons_mask: lib.SHOP_MINT_MASK } }),
-    await shopC.encodeOperation({ name: "set_addresses", args: { treasury, founder, ink, stories: "" } }),
+    await shopC.encodeOperation({ name: "set_addresses", args: { treasury, founder, ink, stories } }),
     await shopC.encodeOperation({ name: "set_ink_amounts", args: lib.DEFAULT_INK_AMOUNTS }),
   ];
-  let retiring = "";
-  if (f["replace-shop"] !== undefined) {
-    retiring = lib.requireAddress(f["replace-shop"], "replace-shop");
-    if (retiring === shop) lib.fail("--replace-shop is the OLD Shop address, not the new one.");
-    console.log("Retiring the old Shop " + retiring + ": its Ink mint rights are removed.");
-    ops.push(await inkC.encodeOperation({ name: "set_minter", args: { account: retiring, reasons_mask: 0 } }));
-  }
   const txId = await dryRunThenSend(
     signer,
     provider,
     net,
     ops,
-    "ink.set_minter(Shop, mask 30) + shop.set_addresses + shop.set_ink_amounts" + (retiring ? " + ink.set_minter(old Shop, 0)" : "") + ", in one transaction"
+    "ink.set_minter(Shop, mask 30) + shop.set_addresses + shop.set_ink_amounts, in one transaction"
   );
   console.log("Send back: the transaction id (" + txId + ").");
 }
@@ -784,6 +813,9 @@ async function cmdWireStories(args) {
   if (storiesCfg.admin !== admin) {
     lib.fail("Stories admin is " + (storiesCfg.admin || "(not readable)") + ", not " + admin + ". Run set-admin stories first.");
   }
+  // Stories' Ink and Shop addresses are set once (AB-037, AB-050).
+  lib.requireSetOnce("Stories' Ink address", storiesCfg.ink, ink);
+  lib.requireSetOnce("Stories' Shop address", storiesCfg.shop, shop);
   const haveCategories = storiesCfg.next_category_id && storiesCfg.next_category_id !== 0 && storiesCfg.next_category_id !== 1;
 
   console.log("");
@@ -1239,10 +1271,20 @@ async function cmdTakedown(args) {
   if (!seg || !seg.author) lib.fail("Story " + storyId + " has no part " + seq + ".");
   const { result: kept } = await storiesC.functions.get_versions({ story_id: storyId, seq });
   const versions = (kept && kept.values) || [];
-  const who = lib.takedownStrike(seg, versions, strike, noStrike);
+  // Every wallet the contract recorded as a changer, citation-only ones too
+  // (AB-048). A Stories contract older than get_changers can't list them.
+  let recorded;
+  try {
+    const { result: list } = await storiesC.functions.get_changers({ story_id: storyId, seq });
+    recorded = (list && list.values) || [];
+  } catch (e) {
+    recorded = undefined;
+  }
+  const who = lib.takedownStrike(seg, versions, strike, noStrike, recorded);
   console.log("Writer:            " + who.writer);
   console.log("Last edited by:    " + (seg.last_edited_by || who.writer) + (seg.last_edited_by && seg.last_edited_by !== who.writer ? "" : " (the writer)"));
   console.log("Changed by others: " + (who.changed ? (who.changers.join(", ") || "yes") : "no"));
+  if (who.unseen) console.log("                   " + lib.UNSEEN_CHANGER);
   console.log("Live text:         " + JSON.stringify(String(seg.text || "")));
   if (versions.length) {
     // Every change to the text is a version naming who made it (AB-033), printed in full.
@@ -1257,7 +1299,8 @@ async function cmdTakedown(args) {
       "The same history is public on a block explorer: each stories.revise_event and stories.segment_changed_event\n" +
       "for this part (\"by\" is who changed it).\n" +
       "Then run this command again with one of (whoever last edited the text comes first, even the writer):\n" +
-      who.candidates.map((a) => "  --strike " + a + (a === who.writer ? "   (the writer)" : "")).join("\n") + "\n" +
+      who.candidates.filter((a) => lib.isAddress(a)).map((a) => "  --strike " + a + (a === who.writer ? "   (the writer)" : "")).join("\n") + "\n" +
+      (who.unseen ? "  --strike <the wallet you found>   (" + lib.UNSEEN_CHANGER + ")\n" : "") +
       "  --no-strike   (take the part down without striking anyone)");
   }
   if (strike && !who.candidates.includes(strike)) {
@@ -1348,6 +1391,10 @@ async function main() {
       return cmdSetAdmin(args);
     case "accept-admin":
       return cmdAcceptAdmin(args);
+    case "pause":
+      return cmdPause(args, true);
+    case "unpause":
+      return cmdPause(args, false);
     case "wire":
       return cmdWire(args);
     case "test-asset":
