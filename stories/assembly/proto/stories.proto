@@ -165,6 +165,10 @@ message story {
   // or archived.
   uint64 fund = 33 [jstype = JS_STRING];
   uint64 fund_added = 34 [jstype = JS_STRING];
+  // "The story so far": a short summary the opener, editors and writers keep up to date.
+  string summary = 35;
+  bytes summary_by = 36 [(koinos.btype) = ADDRESS];
+  uint64 summary_at = 37 [jstype = JS_STRING];
 }
 
 message segment {
@@ -195,6 +199,22 @@ message segment {
   string citation = 23;          // the writer's own source note, e.g. a quoted book and author (up to 200 characters)
   string source_note = 24;       // added by the copy checker: where parts of this text also appear (does not hide it)
   bool restored = 25;            // brought back by the story's opener or an editor after being hidden
+  uint32 version_count = 26;     // 0: never revised. Otherwise versions 1..version_count are kept (get_versions)
+}
+
+// One version of a part. Version 1 is the original text.
+message segment_version {
+  uint32 version = 1;
+  bytes author = 2 [(koinos.btype) = ADDRESS];  // whose words these are
+  string text = 3;
+  uint64 cost = 4 [jstype = JS_STRING];
+  uint64 at = 5 [jstype = JS_STRING];
+  uint32 kind = 6;               // 1 original, 2 written over (paid 2x)
+  bytes by = 7 [(koinos.btype) = ADDRESS];      // who made this version
+}
+
+message version_list {
+  repeated segment_version values = 1;
 }
 
 // A wallet's standing under the repeat-infringer policy.
@@ -546,6 +566,40 @@ message contribute_arguments {
   string citation = 11;          // optional: what this part quotes, e.g. "Pride and Prejudice, Jane Austen" (up to 200 characters)
 }
 
+// @description Write over a part of an OPEN story. The price doubles with every write-over of that part:
+// 2x the text's Ink, then 4x, 8x and so on. The replaced words' normal Ink goes back to whoever paid for
+// them, and every version is kept.
+// @read-only false
+// @result uint32
+message revise_part_arguments {
+  bytes writer = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  uint64 seq = 3 [jstype = JS_STRING];
+  string text = 4;
+  uint64 expected_ink = 5 [jstype = JS_STRING]; // text Ink x 2^(write-overs so far + 1)
+  bool rights_confirmed = 6;
+  uint32 terms_version = 7;
+  string citation = 8;
+  bool ai_assisted = 9;
+}
+
+// @description Every kept version of a part, oldest first (empty if it was never revised).
+// @read-only true
+// @result version_list
+message get_versions_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 seq = 2 [jstype = JS_STRING];
+}
+
+// @description The opener, an editor or anyone who has written in the story updates "the story so far".
+// @read-only false
+// @result empty_object
+message set_story_summary_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  string summary = 3;            // up to 1,500 characters
+}
+
 // @description Opener or editor lightly edits a segment of an OPEN story. Shortening refunds the author.
 // @read-only false
 // @result empty_object
@@ -866,6 +920,23 @@ message status_event {
   story_status status = 2;
   string why = 3;  // "auto-lock", "closed", "admin-take-over", "archived", "revived", "finalized"
   bytes by = 4 [(koinos.btype) = ADDRESS];
+}
+
+message revise_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 seq = 2 [jstype = JS_STRING];
+  bytes by = 3 [(koinos.btype) = ADDRESS];
+  uint32 kind = 4;               // 2 written over
+  uint32 version = 5;
+  uint64 paid = 6 [jstype = JS_STRING];
+  bytes replaced_author = 7 [(koinos.btype) = ADDRESS];
+  uint64 refund = 8 [jstype = JS_STRING];
+}
+
+message summary_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  bytes by = 2 [(koinos.btype) = ADDRESS];
+  string summary = 3;
 }
 
 message contribution_event {

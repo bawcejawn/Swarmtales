@@ -114,6 +114,11 @@ const ACCOUNT_STATUS_SPACE_ID: u32 = 22;
 const READING_PLACE_SPACE_ID: u32 = 23;
 const READING_COUNT_SPACE_ID: u32 = 24;
 const READING_LIST_SPACE_ID: u32 = 25;
+const VERSIONS_SPACE_ID: u32 = 26;
+const MAX_SUMMARY: i32 = 1500;
+const VERSION_ORIGINAL: u32 = 1;
+const VERSION_WRITE_OVER: u32 = 2;
+
 
 const ADDRESS_LENGTH: i32 = 25;
 const DAY_SECONDS: u64 = 86400;
@@ -220,6 +225,7 @@ export class Stories {
   readingPlace: Storage.Map<Uint8Array, stories.reading_place>;
   readingCount: Storage.Map<Uint8Array, stories.uint64>;
   readingList: Storage.Map<Uint8Array, stories.uint64>;
+  versions: Storage.Map<Uint8Array, stories.segment_version>;
   // How many removed segments this call may still fold in (fix M2).
   skipBudget: u32 = MAX_SKIP_PER_CALL;
 
@@ -259,6 +265,7 @@ export class Stories {
     this.readingPlace = new Storage.Map(id, READING_PLACE_SPACE_ID, stories.reading_place.decode, stories.reading_place.encode, null);
     this.readingCount = new Storage.Map(id, READING_COUNT_SPACE_ID, stories.uint64.decode, stories.uint64.encode, () => new stories.uint64(0));
     this.readingList = new Storage.Map(id, READING_LIST_SPACE_ID, stories.uint64.decode, stories.uint64.encode, null);
+    this.versions = new Storage.Map(id, VERSIONS_SPACE_ID, stories.segment_version.decode, stories.segment_version.encode, null);
   }
 
   // ===================================================================
@@ -362,6 +369,17 @@ export class Stories {
       const storyId = this.readingList.get(this.addrIdxKey(args.reader!, i))!.value;
       const place = this.readingPlace.get(this.idAddrKey(storyId, args.reader!));
       if (place != null && place.seq > 0) out.values.push(place);
+    }
+    return out;
+  }
+
+  get_versions(args: stories.get_versions_arguments): stories.version_list {
+    const out = new stories.version_list();
+    const seg = this.segments.get(this.pairKey(args.story_id, args.seq));
+    if (seg == null) return out;
+    for (let v: u32 = 1; v <= seg.version_count; v++) {
+      const found = this.versions.get(this.versionKey(args.story_id, args.seq, v));
+      if (found != null) out.values.push(found);
     }
     return out;
   }
@@ -706,27 +724,8 @@ export class Stories {
         "STORIES: you can only add text after a part that is still in the story");
     }
 
-    const privileged = this.isPrivileged(args.story_id, st, author);
     const inviteOnly = st.visibility != stories.visibility.VISIBILITY_PUBLIC;
-    if (inviteOnly) {
-      System.require(
-        privileged || this.allowed.get(this.idAddrKey(args.story_id, author))!.value,
-        st.visibility == stories.visibility.VISIBILITY_PRIVATE ? "STORIES: this story is private" : "STORIES: only invited writers can write in this story"
-      );
-      // Everyone but the opener needs a Writer month here (no promo trial).
-      if (!Arrays.equal(author, st.opener!)) {
-        System.require(this.isActiveWriter(author), "STORIES: an active Writer month is required to write in invite-only stories");
-      }
-    }
-    let trial = false;
-    if (!inviteOnly && !privileged && !this.isActiveWriter(author)) {
-      System.require(this.promoClaimed(author), "STORIES: an active Writer membership is required");
-      const used = this.trialUsed.get(author)!;
-      System.require(SafeMath.add(used.value, cost) <= <u64>cfg.trial_limit, "STORIES: trial writing limit reached");
-      used.value = used.value + cost;
-      this.trialUsed.put(author, used);
-      trial = true;
-    }
+    const trial = this.checkWriter(args.story_id, st, author, cost, cfg);
 
     // Paid from the story's fund when it has enough; otherwise by the writer.
     const fromFund = inviteOnly && st.fund >= cost;
@@ -744,9 +743,14 @@ export class Stories {
     const ink = this.requireAddress(this.config.get()!.ink, "STORIES: Ink contract is not set");
     const st = this.requireStory(args.story_id);
     System.require(st.status == stories.story_status.STATUS_OPEN, "STORIES: text can only be edited while the story is open");
-    System.require(this.isPrivileged(args.story_id, st, editor), "STORIES: only the opener or an editor may edit");
     const key = this.pairKey(args.story_id, args.seq);
     const seg = this.requireActiveSegment(key);
+    // Private stories: the opener and editors edit anyone's part. Public
+    // stories: only the part's own writer; everyone else uses revise_part.
+    System.require(this.canManagePart(args.story_id, st, editor, seg),
+      st.visibility == stories.visibility.VISIBILITY_PUBLIC
+        ? "STORIES: in a public story only the part's writer may edit it; others can revise it"
+        : "STORIES: only the opener, an editor or the part's writer may edit");
 
     const text = this.text(args.new_text);
     const newCost = <u64>this.requireText(text, true);
@@ -787,9 +791,12 @@ export class Stories {
     const ink = this.requireAddress(this.config.get()!.ink, "STORIES: Ink contract is not set");
     const st = this.requireStory(args.story_id);
     System.require(st.status == stories.story_status.STATUS_OPEN, "STORIES: text can only be removed while the story is open");
-    System.require(this.isPrivileged(args.story_id, st, editor), "STORIES: only the opener or an editor may remove text");
     const key = this.pairKey(args.story_id, args.seq);
     const seg = this.requireActiveSegment(key);
+    System.require(this.canManagePart(args.story_id, st, editor, seg),
+      st.visibility == stories.visibility.VISIBILITY_PUBLIC
+        ? "STORIES: in a public story only the part's writer may remove it"
+        : "STORIES: only the opener, an editor or the part's writer may remove text");
 
     // A part hidden for a suspected copy or abuse is not refunded.
     const refund = seg.hidden ? 0 : seg.charged;
@@ -1067,6 +1074,149 @@ export class Stories {
     this.emitModeration(args.story_id, args.seq,
       args.hidden ? stories.moderation_action.ACTION_HIDE : stories.moderation_action.ACTION_UNHIDE,
       args.hidden ? args.reason : stories.moderation_reason.REASON_UNSPECIFIED, actor, seg, note);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  // Write over a part while the story is open. The price doubles with every
+  // write-over of the same part (2x the text's Ink, then 4x, 8x, ...). The
+  // replaced words' Ink (their normal 1x price) goes back to whoever paid for
+  // them; the extra is burned. The new words are credited to the new writer.
+  // There are no free fixes.
+  // Every version is kept and can be read back.
+  revise_part(args: stories.revise_part_arguments): stories.uint32 {
+    this.enter();
+    this.requireNotPaused();
+    const writer = this.requireAddress(args.writer, "STORIES: invalid writer address");
+    this.requireSigner(writer, "STORIES: writer has not authorized this");
+    this.requireNotBlocked(writer);
+    const cfg = this.config.get()!;
+    const ink = this.requireAddress(cfg.ink, "STORIES: Ink contract is not set");
+    const st = this.requireStory(args.story_id);
+    System.require(st.status == stories.story_status.STATUS_OPEN, "STORIES: parts can only be revised while the story is open");
+    const key = this.pairKey(args.story_id, args.seq);
+    const seg = this.requireActiveSegment(key);
+    System.require(!seg.hidden, "STORIES: a hidden part can't be revised");
+    this.requireRightsAndTerms(writer, args.rights_confirmed, args.terms_version, cfg);
+
+    const text = this.text(args.text);
+    const cost = <u64>this.requireText(text, true);
+    System.require(cost <= <u64>cfg.contribution_cap, "STORIES: text is over the per-submission cap");
+    const oldText = seg.text != null ? seg.text! : "";
+    System.require(text != oldText, "STORIES: the text is unchanged");
+    const now = this.now();
+    const oldCost = seg.current_cost;
+    const nextUsed = SafeMath.add(SafeMath.sub(st.used_chars, oldCost), cost);
+    if (cost > oldCost) System.require(nextUsed <= st.max_chars, "STORIES: not enough space left in this story");
+
+    // Keep the original as version 1 the first time a part is revised.
+    if (seg.version_count == 0) {
+      this.versions.put(this.versionKey(args.story_id, args.seq, 1), new stories.segment_version(
+        1, seg.author, oldText, seg.original_cost, seg.created_at, VERSION_ORIGINAL, seg.author));
+      seg.version_count = 1;
+    }
+    const version = seg.version_count + 1;
+    let paid: u64 = 0;
+    let refund: u64 = 0;
+    let mint = false;
+    const replaced = seg.author!;
+
+    {
+      // Write over: the price doubles with every write-over of this part
+      // (2x the text's Ink the first time, then 4x, 8x, ...). There is no
+      // limit on how often a part can be written over.
+      const overwrites: u32 = seg.version_count == 0 ? 0 : seg.version_count - 1;
+      System.require(overwrites < 60, "STORIES: writing over this part again would cost more Ink than exists");
+      const price = SafeMath.mul(cost, (<u64>1) << (<u64>overwrites + 1));
+      System.require(args.expected_ink == price, "STORIES: the write-over price does not match expected_ink (it doubles each time)");
+      this.checkWriter(args.story_id, st, writer, cost, cfg);
+      const hash = this.sha256(StringBytes.stringToBytes(text));
+      const dupKey = this.join(this.u64Key(args.story_id), hash);
+      System.require(!this.textHashes.get(dupKey)!.value, "STORIES: this exact text is already in this story");
+      this.textHashes.put(dupKey, new stories.boole(true));
+
+      refund = seg.charged;
+      mint = this.settleRefund(args.story_id, st, seg, refund);
+
+      const inviteOnly = st.visibility != stories.visibility.VISIBILITY_PUBLIC;
+      const fromFund = inviteOnly && st.fund >= price;
+      if (fromFund) st.fund = st.fund - price;
+      else st.total_burned = SafeMath.add(st.total_burned, price);
+      paid = price;
+
+      seg.author = writer;
+      seg.text = text;
+      seg.text_hash = hash;
+      seg.original_cost = cost;
+      seg.charged = cost;
+      seg.current_cost = cost;
+      seg.fund_paid = fromFund;
+      seg.citation = this.requireCitation(args.citation);
+      seg.source_note = "";
+      seg.ai_assisted = args.ai_assisted;
+      seg.report_count = 0;
+      seg.restored = false;
+      seg.rights_confirmed = true;
+      seg.terms_version = args.terms_version;
+      seg.last_edited_by = new Uint8Array(0);
+      seg.last_edited_at = 0;
+      this.versions.put(this.versionKey(args.story_id, args.seq, version), new stories.segment_version(
+        version, writer, text, cost, now, VERSION_WRITE_OVER, writer));
+
+      // Credit the new writer.
+      const totalKey = this.idAddrKey(args.story_id, writer);
+      const total = this.contributorTotals.get(totalKey);
+      if (total == null) {
+        st.contributor_count = st.contributor_count + 1;
+        this.contributorTotals.put(totalKey, new stories.uint64(cost));
+      } else {
+        total.value = SafeMath.add(total.value, cost);
+        this.contributorTotals.put(totalKey, total);
+      }
+      const count = this.authorCount.get(writer)!;
+      this.authorList.put(this.addrIdxKey(writer, count.value), new stories.segment_ref(args.story_id, args.seq));
+      count.value = count.value + 1;
+      this.authorCount.put(writer, count);
+      if (!fromFund) {
+        const burn = new stories.ink_burn_call(writer, price, BURN_CONTRIBUTION, "o:" + args.story_id.toString() + ":" + args.seq.toString());
+        this.callOut(ink, INK_BURN_ENTRY, Protobuf.encode(burn, stories.ink_burn_call.encode), [writer], "STORIES: Ink burn failed");
+      }
+    }
+    seg.version_count = version;
+    this.segments.put(key, seg);
+    st.used_chars = nextUsed;
+    st.last_activity_at = now;
+    if (Arrays.equal(writer, st.opener!)) st.opener_last_active = now;
+    this.maybeAutoLock(args.story_id, st, writer);
+    this.putStory(args.story_id, st);
+    const ev = new stories.revise_event(args.story_id, args.seq, writer, VERSION_WRITE_OVER, version, paid, replaced, refund);
+    System.event("stories.revise_event", Protobuf.encode(ev, stories.revise_event.encode), [writer, replaced]);
+    if (mint) this.refundInk(ink, replaced, refund, args.story_id, args.seq);
+    this.leave();
+    return new stories.uint32(version);
+  }
+
+  // "The story so far": the opener, an editor, or anyone who has written in
+  // the story keeps a short summary up to date.
+  set_story_summary(args: stories.set_story_summary_arguments): stories.empty_object {
+    this.enter();
+    const account = this.requireAddress(args.account, "STORIES: invalid address");
+    this.requireSigner(account, "STORIES: account has not authorized this");
+    this.requireNotBlocked(account);
+    const st = this.requireStory(args.story_id);
+    System.require(
+      this.isPrivileged(args.story_id, st, account) || this.contributorTotals.get(this.idAddrKey(args.story_id, account)) != null,
+      "STORIES: only the opener, an editor or a writer of this story may update its summary"
+    );
+    const summary = this.text(args.summary);
+    System.require(summary.length <= MAX_SUMMARY, "STORIES: the summary must be at most 1,500 characters");
+    if (summary.length > 0) this.requireText(summary, false);
+    st.summary = summary;
+    st.summary_by = account;
+    st.summary_at = this.now();
+    this.putStory(args.story_id, st);
+    const ev = new stories.summary_event(args.story_id, account, summary);
+    System.event("stories.summary_event", Protobuf.encode(ev, stories.summary_event.encode), [account]);
     this.leave();
     return new stories.empty_object();
   }
@@ -1565,6 +1715,38 @@ export class Stories {
     return seq;
   }
 
+  /**
+   * Who may write in this story: invite-only stories need an invite (and a
+   * Writer month, except for the opener); public stories need a Writer
+   * month, unless the writer is the opener or an editor, or uses the promo
+   * trial (which counts `units` against the trial limit). Returns true when
+   * the trial was used.
+   */
+  private checkWriter(storyId: u64, st: stories.story, author: Uint8Array, units: u64, cfg: stories.config): bool {
+    const privileged = this.isPrivileged(storyId, st, author);
+    const inviteOnly = st.visibility != stories.visibility.VISIBILITY_PUBLIC;
+    if (inviteOnly) {
+      System.require(
+        privileged || this.allowed.get(this.idAddrKey(storyId, author))!.value,
+        st.visibility == stories.visibility.VISIBILITY_PRIVATE ? "STORIES: this story is private" : "STORIES: only invited writers can write in this story"
+      );
+      // Everyone but the opener needs a Writer month here (no promo trial).
+      if (!Arrays.equal(author, st.opener!)) {
+        System.require(this.isActiveWriter(author), "STORIES: an active Writer month is required to write in invite-only stories");
+      }
+      return false;
+    }
+    if (privileged || this.isActiveWriter(author)) return false;
+    System.require(this.promoClaimed(author), "STORIES: an active Writer membership is required");
+    if (units > 0) {
+      const used = this.trialUsed.get(author)!;
+      System.require(SafeMath.add(used.value, units) <= <u64>cfg.trial_limit, "STORIES: trial writing limit reached");
+      used.value = used.value + units;
+      this.trialUsed.put(author, used);
+    }
+    return true;
+  }
+
   private maybeAutoLock(storyId: u64, st: stories.story, by: Uint8Array): void {
     if (st.status == stories.story_status.STATUS_OPEN && st.used_chars >= st.max_chars) {
       st.status = stories.story_status.STATUS_LOCKED;
@@ -1959,6 +2141,11 @@ export class Stories {
     System.require(Arrays.equal(account, st.opener!), "STORIES: only the opener may do this");
   }
 
+  private canManagePart(storyId: u64, st: stories.story, account: Uint8Array, seg: stories.segment): bool {
+    if (Arrays.equal(account, seg.author!)) return true;
+    return st.visibility != stories.visibility.VISIBILITY_PUBLIC && this.isPrivileged(storyId, st, account);
+  }
+
   private isPrivileged(storyId: u64, st: stories.story, account: Uint8Array): bool {
     if (Arrays.equal(account, st.opener!)) return true;
     return this.editors.get(this.idAddrKey(storyId, account))!.value;
@@ -2119,6 +2306,10 @@ export class Stories {
 
   private pairKey(a: u64, b: u64): Uint8Array {
     return this.join(this.u64Key(a), this.u64Key(b));
+  }
+
+  private versionKey(storyId: u64, seq: u64, version: u32): Uint8Array {
+    return this.join(this.pairKey(storyId, seq), this.u32Key(version));
   }
 
   private idAddrKey(storyId: u64, account: Uint8Array): Uint8Array {

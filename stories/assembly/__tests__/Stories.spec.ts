@@ -717,10 +717,10 @@ describe("Stories: writing", () => {
     expect(new Stories().get_trial_used(new stories.get_trial_used_arguments(BOB)).value).toBe(1000);
     fWho = BOB; fId = 1; fText = "x"; fExpected = 1; fResults = [okCall(), promo(true), okCall()];
     fails(failContribute, "STORIES: trial writing limit reached");
-    // Alice removes Bob's trial text; Bob gets his Ink back but not more trial.
-    authorize(ALICE);
+    // Bob removes his own trial text; Bob gets his Ink back but not more trial.
+    authorize(BOB);
     allowCalls(1);
-    new Stories().remove_segment(new stories.remove_segment_arguments(ALICE, 1, 2));
+    new Stories().remove_segment(new stories.remove_segment_arguments(BOB, 1, 2));
     checkpoint();
     fails(failContribute, "STORIES: trial writing limit reached");
     // A real Writer is not limited by the trial.
@@ -900,9 +900,11 @@ describe("Stories: edits, removals and refunds", () => {
     writeAsWriter(BOB, 1, chars(100)); // seq 2, Bob, 100
   });
 
-  it("refunds a shrinking edit to the author, not the editor", () => {
+  it("in a public story, only the writer edits their part; a shrinking edit refunds them", () => {
     addEditor(1, CARA);
-    edit(CARA, 1, 2, chars(50));
+    fWho = CARA; fId = 1; fSeq = 2; fText = chars(50); fExpected = 50; fResults = [okCall()];
+    fails(failEdit, "STORIES: in a public story only the part's writer may edit it; others can revise it");
+    edit(BOB, 1, 2, chars(50));
     const mint = lastMint();
     expect(same(mint.to, BOB)).toBe(true);
     expect(mint.value).toBe(50);
@@ -911,7 +913,7 @@ describe("Stories: edits, removals and refunds", () => {
     const seg = segment(1, 2);
     expect(seg.charged).toBe(50);
     expect(seg.current_cost).toBe(50);
-    expect(same(seg.last_edited_by, CARA)).toBe(true);
+    expect(same(seg.last_edited_by, BOB)).toBe(true);
     const st = story(1);
     expect(st.used_chars).toBe(67);
     expect(st.total_refunded).toBe(50);
@@ -919,24 +921,24 @@ describe("Stories: edits, removals and refunds", () => {
   });
 
   it("closes the shrink-then-regrow loophole", () => {
-    edit(ALICE, 1, 2, chars(50));          // refund 50, 50 still paid for
-    edit(ALICE, 1, 2, chars(70));          // free growth: allowance is 20 of the original 100
+    edit(BOB, 1, 2, chars(50));          // refund 50, 50 still paid for
+    edit(BOB, 1, 2, chars(70));          // free growth: allowance is 20 of the original 100
     const mintsBefore = callsTo(MINT_ENTRY).length;
-    fWho = ALICE; fId = 1; fSeq = 2; fText = chars(71); fExpected = 71; fResults = [okCall()];
+    fWho = BOB; fId = 1; fSeq = 2; fText = chars(71); fExpected = 71; fResults = [okCall()];
     fails(failEdit, "STORIES: edit grows the text too much (light edits only)");
     // Shrinking back to 50 refunds nothing: only 50 was ever left paid.
-    edit(ALICE, 1, 2, chars(50));
+    edit(BOB, 1, 2, chars(50));
     expect(callsTo(MINT_ENTRY).length).toBe(mintsBefore);
     expect(segment(1, 2).charged).toBe(50);
     expect(story(1).total_refunded).toBe(50);
     // Shrinking further refunds only what is still paid for.
-    edit(ALICE, 1, 2, chars(10));
+    edit(BOB, 1, 2, chars(10));
     expect(lastMint().value).toBe(40);
     expect(story(1).total_refunded).toBe(90);
     // And growth is still measured from what is paid for now (10 + 20).
     fText = chars(31); fExpected = 31;
     fails(failEdit, "STORIES: edit grows the text too much (light edits only)");
-    edit(ALICE, 1, 2, chars(30));
+    edit(BOB, 1, 2, chars(30));
   });
 
   it("does not let a tiny segment be padded by 20", () => {
@@ -946,23 +948,23 @@ describe("Stories: edits, removals and refunds", () => {
     fails(failEdit, "STORIES: edit grows the text too much (light edits only)");
   });
 
-  it("only lets the opener or an editor edit, while the story is open", () => {
-    fWho = BOB; fId = 1; fSeq = 2; fText = chars(50); fExpected = 50; fResults = [okCall()];
-    fails(failEdit, "STORIES: only the opener or an editor may edit");
+  it("in a public story, lets only the part's writer edit or remove it, while the story is open", () => {
+    fWho = ALICE; fId = 1; fSeq = 2; fText = chars(50); fExpected = 50; fResults = [okCall()];
+    fails(failEdit, "STORIES: in a public story only the part's writer may edit it; others can revise it");
     fWho = MALLORY;
-    fails(failEdit, "STORIES: only the opener or an editor may edit");
-    fWho = ALICE; fExpected = 49;
+    fails(failEdit, "STORIES: in a public story only the part's writer may edit it; others can revise it");
+    fWho = BOB; fExpected = 49;
     fails(failEdit, "STORIES: Ink cost does not match expected_cost");
     fExpected = 50; fSeq = 9;
     fails(failEdit, "STORIES: unknown segment");
-    fails(() => { authorize(BOB); allowCalls(1); new Stories().remove_segment(new stories.remove_segment_arguments(BOB, 1, 2)); }, "STORIES: only the opener or an editor may remove text");
+    fails(() => { authorize(ALICE); allowCalls(1); new Stories().remove_segment(new stories.remove_segment_arguments(ALICE, 1, 2)); }, "STORIES: in a public story only the part's writer may remove it");
   });
 
   it("removes a segment: clears the text, keeps the hash, refunds what was paid", () => {
     const hash = segment(1, 2).text_hash!;
-    authorize(ALICE);
+    authorize(BOB);
     allowCalls(1);
-    new Stories().remove_segment(new stories.remove_segment_arguments(ALICE, 1, 2));
+    new Stories().remove_segment(new stories.remove_segment_arguments(BOB, 1, 2));
     checkpoint();
     const seg = segment(1, 2);
     expect(seg.status).toBe(stories.segment_status.SEGMENT_REMOVED);
@@ -977,18 +979,18 @@ describe("Stories: edits, removals and refunds", () => {
     expect(st.total_refunded).toBe(100);
     expect(st.total_refunded <= st.total_burned).toBe(true);
     expect(contributorTotal(1, BOB)).toBe(0);
-    fails(() => { authorize(ALICE); allowCalls(1); new Stories().remove_segment(new stories.remove_segment_arguments(ALICE, 1, 2)); }, "STORIES: segment was already removed");
-    fWho = ALICE; fId = 1; fSeq = 2; fText = "x"; fExpected = 1; fResults = [okCall()];
+    fails(() => { authorize(BOB); allowCalls(1); new Stories().remove_segment(new stories.remove_segment_arguments(BOB, 1, 2)); }, "STORIES: segment was already removed");
+    fWho = BOB; fId = 1; fSeq = 2; fText = "x"; fExpected = 1; fResults = [okCall()];
     fails(failEdit, "STORIES: segment was already removed");
   });
 
   it("keeps total refunds at or below total burned after many edits", () => {
-    edit(ALICE, 1, 2, chars(1));
-    edit(ALICE, 1, 2, chars(21));
-    edit(ALICE, 1, 2, chars(1));
-    authorize(ALICE);
+    edit(BOB, 1, 2, chars(1));
+    edit(BOB, 1, 2, chars(21));
+    edit(BOB, 1, 2, chars(1));
+    authorize(BOB);
     allowCalls(1);
-    new Stories().remove_segment(new stories.remove_segment_arguments(ALICE, 1, 2));
+    new Stories().remove_segment(new stories.remove_segment_arguments(BOB, 1, 2));
     checkpoint();
     const st = story(1);
     expect(st.total_refunded).toBe(100);
@@ -996,7 +998,7 @@ describe("Stories: edits, removals and refunds", () => {
   });
 
   it("fails the edit if the refund mint fails or answers false", () => {
-    fWho = ALICE; fId = 1; fSeq = 2; fText = chars(50); fExpected = 50;
+    fWho = BOB; fId = 1; fSeq = 2; fText = chars(50); fExpected = 50;
     fResults = [falseCall()];
     fails(failEdit, "STORIES: Ink refund failed");
     fResults = [errorCall()];
@@ -1097,9 +1099,9 @@ function lockedStory(): void {
   openShort();
   writeAsWriter(BOB, 1, chars(2000));
   writeAsWriter(BOB, 1, chars(100));
-  authorize(ALICE);
+  authorize(BOB);
   allowCalls(1);
-  new Stories().remove_segment(new stories.remove_segment_arguments(ALICE, 1, 3));
+  new Stories().remove_segment(new stories.remove_segment_arguments(BOB, 1, 3));
   checkpoint();
   fillShort(1);
 }

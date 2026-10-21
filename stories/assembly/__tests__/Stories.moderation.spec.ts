@@ -404,14 +404,14 @@ describe("Moderation: hide and unhide", () => {
     expect(seg(1, 1).hidden).toBe(true);
   });
 
-  it("never refunds a hidden part that an editor removes", () => {
+  it("never refunds a hidden part, even when its writer removes it", () => {
     open(OPENING);
     writerWrites(BOB, 1, "Bob adds a sentence of his own.");
     setModerator();
     hide(BOT, 1, 2, true);
     const before = mints();
-    directly(); authorize(ALICE); allowCalls(1);
-    c().remove_segment(new stories.remove_segment_arguments(ALICE, 1, 2));
+    directly(); authorize(BOB); allowCalls(1);
+    c().remove_segment(new stories.remove_segment_arguments(BOB, 1, 2));
     checkpoint();
     expect(mints()).toBe(before);
     expect(story(1).hidden_count).toBe(0);
