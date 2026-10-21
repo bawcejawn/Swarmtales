@@ -205,11 +205,11 @@ message segment {
 // One version of a part. Version 1 is the original text.
 message segment_version {
   uint32 version = 1;
-  bytes author = 2 [(koinos.btype) = ADDRESS];  // whose words these are
+  bytes author = 2 [(koinos.btype) = ADDRESS];  // the part's writer
   string text = 3;
   uint64 cost = 4 [jstype = JS_STRING];
   uint64 at = 5 [jstype = JS_STRING];
-  uint32 kind = 6;               // 1 original, 2 written over (paid 2x)
+  uint32 kind = 6;               // 1 original, 2 changed by someone (paid), 3 removed by someone (paid)
   bytes by = 7 [(koinos.btype) = ADDRESS];      // who made this version
 }
 
@@ -566,9 +566,9 @@ message contribute_arguments {
   string citation = 11;          // optional: what this part quotes, e.g. "Pride and Prejudice, Jane Austen" (up to 200 characters)
 }
 
-// @description Write over a part of an OPEN story. The price doubles with every write-over of that part:
-// 2x the text's Ink, then 4x, 8x and so on. The replaced words' normal Ink goes back to whoever paid for
-// them, and every version is kept.
+// @description Change (or, with empty text, remove) a part of an OPEN story. Price: the letters added plus
+// the letters removed (at least 10), times 2, doubling with every change to that part (2x, 4x, 8x...).
+// Removed letters' Ink goes back to whoever paid for them. The part stays its writer's; every version is kept.
 // @read-only false
 // @result uint32
 message revise_part_arguments {
@@ -576,7 +576,7 @@ message revise_part_arguments {
   uint64 story_id = 2 [jstype = JS_STRING];
   uint64 seq = 3 [jstype = JS_STRING];
   string text = 4;
-  uint64 expected_ink = 5 [jstype = JS_STRING]; // text Ink x 2^(write-overs so far + 1)
+  uint64 expected_ink = 5 [jstype = JS_STRING]; // max(10, added + removed) x 2^(changes so far + 1)
   bool rights_confirmed = 6;
   uint32 terms_version = 7;
   string citation = 8;
@@ -926,7 +926,7 @@ message revise_event {
   uint64 story_id = 1 [jstype = JS_STRING];
   uint64 seq = 2 [jstype = JS_STRING];
   bytes by = 3 [(koinos.btype) = ADDRESS];
-  uint32 kind = 4;               // 2 written over
+  uint32 kind = 4;               // 2 changed, 3 removed
   uint32 version = 5;
   uint64 paid = 6 [jstype = JS_STRING];
   bytes replaced_author = 7 [(koinos.btype) = ADDRESS];

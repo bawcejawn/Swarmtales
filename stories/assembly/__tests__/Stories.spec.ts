@@ -903,7 +903,7 @@ describe("Stories: edits, removals and refunds", () => {
   it("in a public story, only the writer edits their part; a shrinking edit refunds them", () => {
     addEditor(1, CARA);
     fWho = CARA; fId = 1; fSeq = 2; fText = chars(50); fExpected = 50; fResults = [okCall()];
-    fails(failEdit, "STORIES: in a public story only the part's writer may edit it; others can revise it");
+    fails(failEdit, "STORIES: only the part's writer may edit it for free; others can change it for Ink");
     edit(BOB, 1, 2, chars(50));
     const mint = lastMint();
     expect(same(mint.to, BOB)).toBe(true);
@@ -950,14 +950,14 @@ describe("Stories: edits, removals and refunds", () => {
 
   it("in a public story, lets only the part's writer edit or remove it, while the story is open", () => {
     fWho = ALICE; fId = 1; fSeq = 2; fText = chars(50); fExpected = 50; fResults = [okCall()];
-    fails(failEdit, "STORIES: in a public story only the part's writer may edit it; others can revise it");
+    fails(failEdit, "STORIES: only the part's writer may edit it for free; others can change it for Ink");
     fWho = MALLORY;
-    fails(failEdit, "STORIES: in a public story only the part's writer may edit it; others can revise it");
+    fails(failEdit, "STORIES: only the part's writer may edit it for free; others can change it for Ink");
     fWho = BOB; fExpected = 49;
     fails(failEdit, "STORIES: Ink cost does not match expected_cost");
     fExpected = 50; fSeq = 9;
     fails(failEdit, "STORIES: unknown segment");
-    fails(() => { authorize(ALICE); allowCalls(1); new Stories().remove_segment(new stories.remove_segment_arguments(ALICE, 1, 2)); }, "STORIES: in a public story only the part's writer may remove it");
+    fails(() => { authorize(ALICE); allowCalls(1); new Stories().remove_segment(new stories.remove_segment_arguments(ALICE, 1, 2)); }, "STORIES: only the part's writer may remove it for free; others can remove it for Ink");
   });
 
   it("removes a segment: clears the text, keeps the hash, refunds what was paid", () => {

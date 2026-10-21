@@ -372,66 +372,73 @@ function failSummary(): void {
 
 // ---------- tests ----------
 
-describe("Stories: writing over a part", () => {
+describe("Stories: changing someone else's part", () => {
   beforeEach(() => { reset(); configure(); openShort(); writeAsWriter(BOB, 1, BOB_TEXT); });
 
-  it("costs twice the Ink, refunds the replaced writer, credits the new one, and keeps both versions", () => {
-    const text = "Cara rewrites this part with her own words entirely.";
-    const cost = <u64>text.length;
-    const v = reviseAs(CARA, 2, text, cost * 2);
+  it("charges 2x the letters added and removed (at least 10), refunds removed letters, and keeps the writer", () => {
+    // Delete one letter: "plain" -> "plan". 1 removed, minimum 10, x2 = 20.
+    const text = BOB_TEXT.replace("plain", "plan");
+    const v = reviseAs(CARA, 2, text, 20);
     expect(v).toBe(2);
     const seg = segment(1, 2);
-    expect(same(seg.author, CARA)).toBe(true);
+    expect(same(seg.author, BOB)).toBe(true);
     expect(seg.text).toBe(text);
-    expect(seg.charged).toBe(cost);
-    expect(seg.version_count).toBe(2);
-    const burn = lastBurn();
-    expect(same(burn.from, CARA)).toBe(true);
-    expect(burn.value).toBe(cost * 2);
+    expect(same(seg.last_edited_by, CARA)).toBe(true);
+    expect(seg.charged).toBe(<u64>BOB_TEXT.length - 1);
+    expect(lastBurn().value).toBe(20);
+    expect(same(lastBurn().from, CARA)).toBe(true);
     const mint = lastMint();
     expect(same(mint.to, BOB)).toBe(true);
-    expect(mint.value).toBe(<u64>BOB_TEXT.length);
-    expect(contributorTotal(1, BOB)).toBe(0);
-    expect(contributorTotal(1, CARA)).toBe(cost);
+    expect(mint.value).toBe(1);
     const versions = new Stories().get_versions(new stories.get_versions_arguments(1, 2)).values;
     expect(versions.length).toBe(2);
     expect(versions[0].text).toBe(BOB_TEXT);
-    expect(same(versions[0].author, BOB)).toBe(true);
-    expect(versions[0].kind).toBe(1);
     expect(versions[1].kind).toBe(2);
-    const st = story(1);
-    expect(st.total_refunded <= st.total_burned).toBe(true);
+    expect(same(versions[1].by, CARA)).toBe(true);
+    expect(same(versions[1].author, BOB)).toBe(true);
   });
 
-  it("doubles the price with every write-over of the same part, with no limit", () => {
-    const t1 = "First write-over of the part, by Cara, at two times.";
-    reviseAs(CARA, 2, t1, <u64>t1.length * 2);
-    const t2 = "Second write-over of the part, by Bob, at four times!";
-    fWho = BOB; fId = 1; fSeq = 2; fText = t2; fPrice = <u64>t2.length * 2; fResults = [writer(), okCall(), okCall()];
-    fails(failRevise, "STORIES: the write-over price does not match expected_ink (it doubles each time)");
-    reviseAs(BOB, 2, t2, <u64>t2.length * 4);
-    expect(lastBurn().value).toBe(<u64>t2.length * 4);
-    // Cara gets back the normal Ink of her words, not the 2x she paid.
-    expect(lastMint().value).toBe(<u64>t1.length);
-    const t3 = "Third write-over of the part, by Cara, at eight times.";
-    reviseAs(CARA, 2, t3, <u64>t3.length * 8);
+  it("charges for added letters, and doubles with every change to the same part, without limit", () => {
+    // Add " Cara adds this." (16 letters) at the end: 16 x 2 = 32.
+    const t1 = BOB_TEXT + " Cara adds this.";
+    reviseAs(CARA, 2, t1, 32);
+    expect(contributorTotal(1, CARA)).toBe(16);
+    // Next change to the same part: x4. Replace "Cara" with "Dana": 4 removed + 4 added = 8 -> 10 minimum, x4 = 40.
+    const t2 = BOB_TEXT + " Dana adds this.";
+    fWho = BOB; fId = 1; fSeq = 2; fText = t2; fPrice = 20; fResults = [writer(), okCall(), okCall()];
+    fails(failRevise, "STORIES: the change price does not match expected_ink (2x the letters added and removed, at least 10, doubling each time)");
+    reviseAs(MALLORY, 2, t2, 40);
+    // Third change: x8.
+    const t3 = t2 + "!";
+    reviseAs(CARA, 2, t3, 80);
     expect(segment(1, 2).version_count).toBe(4);
-    expect(new Stories().get_versions(new stories.get_versions_arguments(1, 2)).values.length).toBe(4);
   });
 
-  it("refuses unchanged text, hidden parts and closed stories", () => {
-    fWho = CARA; fId = 1; fSeq = 2; fText = BOB_TEXT; fPrice = <u64>BOB_TEXT.length * 2; fResults = [writer(), okCall(), okCall()];
+  it("removes a whole part for Ink: empty text refunds the writer everything", () => {
+    const price = <u64>BOB_TEXT.length * 2;
+    reviseAs(CARA, 2, "", price);
+    const seg = segment(1, 2);
+    expect(seg.status).toBe(stories.segment_status.SEGMENT_REMOVED);
+    expect(lastMint().value).toBe(<u64>BOB_TEXT.length);
+    expect(contributorTotal(1, BOB)).toBe(0);
+    const versions = new Stories().get_versions(new stories.get_versions_arguments(1, 2)).values;
+    expect(versions[0].text).toBe(BOB_TEXT);
+    expect(versions[1].kind).toBe(3);
+  });
+
+  it("lets only the part's writer edit or remove it for free, even the opener pays", () => {
+    fWho = ALICE; fId = 1; fSeq = 2; fText = BOB_TEXT.replace("plain", "plan"); fExpected = <u64>BOB_TEXT.length - 1; fResults = [okCall()];
+    fails(failEdit, "STORIES: only the part's writer may edit it for free; others can change it for Ink");
+    fails(() => { authorize(ALICE); allowCalls(1); new Stories().remove_segment(new stories.remove_segment_arguments(ALICE, 1, 2)); }, "STORIES: only the part's writer may remove it for free; others can remove it for Ink");
+    reviseAs(ALICE, 2, BOB_TEXT.replace("plain", "plan"), 20);
+    expect(lastBurn().value).toBe(20);
+  });
+
+  it("refuses unchanged text and unknown parts", () => {
+    fWho = CARA; fId = 1; fSeq = 2; fText = BOB_TEXT; fPrice = 20; fResults = [writer(), okCall(), okCall()];
     fails(failRevise, "STORIES: the text is unchanged");
     fSeq = 9; fText = "Something new and long enough to count.";
     fails(failRevise, "STORIES: unknown segment");
-  });
-
-  it("in a public story the opener can't edit or remove someone else's part, but can write over it", () => {
-    fWho = ALICE; fId = 1; fSeq = 2; fText = "Alice tidies Bob."; fExpected = 17; fResults = [okCall()];
-    fails(failEdit, "STORIES: in a public story only the part's writer may edit it; others can revise it");
-    const text = "Alice writes over Bob's part in her own words.";
-    reviseAs(ALICE, 2, text, <u64>text.length * 2);
-    expect(same(segment(1, 2).author, ALICE)).toBe(true);
   });
 });
 

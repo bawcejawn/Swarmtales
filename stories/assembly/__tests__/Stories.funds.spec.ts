@@ -541,12 +541,12 @@ describe("Stories: story funds", () => {
     writeAsWriter(BOB, id, "A part paid by the fund");  // 23
     expect(story(id).fund).toBe(9977);
     const mintsBefore = callsTo(MINT_ENTRY).length;
-    edit(ALICE, id, 2, "Shorter part, by fund");     // 21: 2 back
+    edit(BOB, id, 2, "Shorter part, by fund");       // 21: 2 back
     expect(story(id).fund).toBe(9979);
     expect(contributorTotal(id, BOB)).toBe(21);
-    authorize(ALICE);
+    authorize(BOB);
     allowCalls(1);
-    new Stories().remove_segment(new stories.remove_segment_arguments(ALICE, id, 2));
+    new Stories().remove_segment(new stories.remove_segment_arguments(BOB, id, 2));
     checkpoint();
     expect(story(id).fund).toBe(10000);
     expect(contributorTotal(id, BOB)).toBe(0);
