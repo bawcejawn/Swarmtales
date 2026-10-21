@@ -8,11 +8,15 @@
 //     starter Ink, then Stories burns Ink for the opening text. One
 //     transaction: if any part fails, nothing happens.
 //   - Writing burns the writer's own Ink (Ink checks their signature).
-//   - While a story is OPEN, a part's own writer may edit it (light
-//     edits) or remove it for free. Anyone else who can write in the story
-//     changes it with revise_part, which costs Ink and keeps every
-//     version. The ORIGINAL author is re-credited through Ink mint, reason
-//     REFUND, the only mint reason Stories is allowed.
+//   - While a story is OPEN, a part's own writer may reword it for free
+//     (letters beyond its current length cost the normal Ink rate) or
+//     remove it. Anyone else who can write in the story changes it with
+//     revise_part, which costs the changer Ink. Every change to a part's
+//     text is kept as a version naming who made it. Refunds go to whoever
+//     paid, through Ink mint, reason REFUND, the only mint reason Stories
+//     is allowed. Once someone else changed a part, cutting it refunds
+//     nothing (the contract cannot tell whose letters were cut); removing
+//     it still refunds what its writer paid.
 //   - Closing (opener pays the close fee through Shop), the final edit
 //     in ordered batches, surviving characters, and finalize.
 //   - The 3-open-projects limit, the promo trial, private allow-lists
@@ -55,9 +59,11 @@
 //   - The opener must set Ink aside in the story's fund (the writers'
 //     pool) when opening: at least the kind's minimum length (10,000 for a
 //     Short Story, 100,000 for a Book). It can be topped up later. Parts are paid from the fund while it has enough; otherwise
-//     the writer pays. Refunds of fund-paid parts go back to the fund, and
-//     what is left returns to the opener when the story is finalized or
-//     archived.
+//     the writer pays. The pool pays only for new parts, never for changes
+//     to a part: the changer, or the writer adding letters, pays. Refunds
+//     of fund-paid parts go back to the fund (after any Ink the writer
+//     added themselves), and what is left returns to the opener when the
+//     story is finalized or archived.
 //   - Opening costs the normal price for the first few open projects
 //     (default 3); each one beyond doubles it, until it reaches the
 //     ceiling (default 4x), up to the open limit.
@@ -65,7 +71,8 @@
 // WHAT THIS CONTRACT DOES NOT DO
 //   - It never moves stablecoins and holds no money.
 //   - The admin cannot move or burn Ink, refund outside the rules, or
-//     finalize except under the admin rule. It edits text only as the
+//     finalize except under the admin rule. The Ink address is set once
+//     and can never be changed (AB-037). It edits text only as the
 //     finalizer after admin_take_over, under the same light-edit limits
 //     (recorded as a change to the part); otherwise it can only remove text
 //     through a recorded takedown.
@@ -137,7 +144,14 @@ const MAX_SUMMARY: i32 = 1500;
 const VERSION_ORIGINAL: u32 = 1;
 const VERSION_CHANGED: u32 = 2;
 const VERSION_REMOVED: u32 = 3;
+const VERSION_EDITED: u32 = 4;
+const VERSION_FINAL: u32 = 5;
 const MIN_CHANGE_UNITS: u64 = 10;
+const MAX_PAID_CHANGES: u32 = 60;
+// Kept versions per part, so a takedown can always wipe them in one call.
+// Paid changes stop 2 short of it, leaving room for the writer's edit and the
+// final edit; at the limit the writer's edit replaces their own newest version.
+const MAX_VERSIONS: u32 = 100;
 
 const ADDRESS_LENGTH: i32 = 25;
 const DAY_SECONDS: u64 = 86400;
@@ -403,7 +417,7 @@ export class Stories {
   get_versions(args: stories.get_versions_arguments): stories.version_list {
     const out = new stories.version_list();
     const seg = this.segments.get(this.pairKey(args.story_id, args.seq));
-    if (seg == null) return out;
+    if (seg == null || seg.taken_down) return out;
     for (let v: u32 = 1; v <= seg.version_count; v++) {
       const found = this.versions.get(this.versionKey(args.story_id, args.seq, v));
       if (found != null) out.values.push(found);
@@ -782,31 +796,53 @@ export class Stories {
     this.requireNotPaused();
     const editor = this.requireAddress(args.editor, "STORIES: invalid editor address");
     this.requireSigner(editor, "STORIES: editor has not authorized this");
-    const ink = this.requireAddress(this.config.get()!.ink, "STORIES: Ink contract is not set");
+    this.requireNotBlocked(editor);
+    const cfg = this.config.get()!;
+    const ink = this.requireAddress(cfg.ink, "STORIES: Ink contract is not set");
     const st = this.requireStory(args.story_id);
     System.require(st.status == stories.story_status.STATUS_OPEN, "STORIES: text can only be edited while the story is open");
     const key = this.pairKey(args.story_id, args.seq);
     const seg = this.requireActiveSegment(key);
-    // Private stories: the opener and editors edit anyone's part. Public
-    // stories: only the part's own writer; everyone else uses revise_part.
-    // Only the part's own writer edits it here (free, light edits). Anyone
-    // else changes it with revise_part, which costs Ink.
+    // Only the part's own writer edits it here. Anyone else changes it with
+    // revise_part, which costs Ink.
     System.require(Arrays.equal(editor, seg.author!), "STORIES: only the part's writer may edit it for free; others can change it for Ink");
+    // The text is evidence while the admin or the checker looks at it (AB-036).
+    System.require(!seg.hidden, "STORIES: a hidden part can't be edited while it is checked; you can remove it instead");
 
     const text = this.text(args.new_text);
     const newCost = <u64>this.requireText(text, true);
     System.require(newCost == args.expected_cost, "STORIES: Ink cost does not match expected_cost");
-    System.require(newCost <= SafeMath.add(seg.charged, this.allowance(seg.original_cost)), "STORIES: edit grows the text too much (light edits only)");
+    System.require(newCost <= <u64>cfg.contribution_cap, "STORIES: text is over the per-submission cap");
+    const oldText = seg.text != null ? seg.text! : "";
+    System.require(text != oldText, "STORIES: the text is unchanged");
     const oldCost = seg.current_cost;
     const nextUsed = SafeMath.add(SafeMath.sub(st.used_chars, oldCost), newCost);
-    if (newCost > oldCost) System.require(nextUsed <= st.max_chars, "STORIES: not enough space left in this story");
 
-    const refund = seg.charged > newCost ? seg.charged - newCost : 0;
+    // Rewording is free. Letters beyond the part's current length cost the
+    // normal Ink rate, paid by the writer (the pool pays only for new parts).
+    // Shortening is always allowed (AB-040) and refunds only Ink the writer
+    // or the pool paid (AB-035).
+    const growth: u64 = newCost > oldCost ? newCost - oldCost : 0;
+    if (growth > 0) {
+      System.require(nextUsed <= st.max_chars, "STORIES: not enough space left in this story");
+      this.checkWriter(args.story_id, st, editor, growth, cfg);
+    }
+    const refund = this.cutRefund(seg, newCost);
     const now = this.now();
+    this.keepVersion(args.story_id, args.seq, seg, oldText, VERSION_EDITED, editor, text, newCost, now, "", false);
+    const mint = this.settleRefund(args.story_id, st, seg, refund);
+    seg.charged = SafeMath.add(seg.charged - refund, growth);
+    if (growth > 0) {
+      if (seg.fund_paid) seg.own_paid = SafeMath.add(seg.own_paid, growth);
+      const totalKey = this.idAddrKey(args.story_id, editor);
+      const total = this.contributorTotals.get(totalKey)!;
+      total.value = SafeMath.add(total.value, growth);
+      this.contributorTotals.put(totalKey, total);
+      st.total_burned = SafeMath.add(st.total_burned, growth);
+    }
     seg.text = text;
     seg.text_hash = this.sha256(StringBytes.stringToBytes(text));
     seg.current_cost = newCost;
-    seg.charged = seg.charged - refund;
     seg.last_edited_by = editor;
     seg.last_edited_at = now;
     this.segments.put(key, seg);
@@ -814,12 +850,15 @@ export class Stories {
     st.used_chars = nextUsed;
     st.last_activity_at = now;
     if (Arrays.equal(editor, st.opener!)) st.opener_last_active = now;
-    const mint = this.settleRefund(args.story_id, st, seg, refund);
     this.maybeAutoLock(args.story_id, st, editor);
     this.putStory(args.story_id, st);
 
     this.emitChange(args.story_id, args.seq, editor, oldCost, newCost, refund, false, false, seg.author!);
-    if (mint) this.refundInk(ink, seg.author!, refund, args.story_id, args.seq);
+    if (growth > 0) {
+      const burn = new stories.ink_burn_call(editor, growth, BURN_CONTRIBUTION, "e:" + args.story_id.toString() + ":" + args.seq.toString());
+      this.callOut(ink, INK_BURN_ENTRY, Protobuf.encode(burn, stories.ink_burn_call.encode), [editor], "STORIES: Ink burn failed");
+    }
+    if (mint > 0) this.refundInk(ink, seg.author!, mint, args.story_id, args.seq);
     this.leave();
     return new stories.empty_object();
   }
@@ -845,17 +884,17 @@ export class Stories {
     if (seg.hidden) this.unhideCount(st);
     const oldCost = seg.current_cost;
     const now = this.now();
+    const mint = this.settleRefund(args.story_id, st, seg, refund);
     this.clearSegment(seg, editor, now);
     this.segments.put(key, seg);
 
     st.used_chars = SafeMath.sub(st.used_chars, oldCost);
     st.last_activity_at = now;
     if (Arrays.equal(editor, st.opener!)) st.opener_last_active = now;
-    const mint = this.settleRefund(args.story_id, st, seg, refund);
     this.putStory(args.story_id, st);
 
     this.emitChange(args.story_id, args.seq, editor, oldCost, 0, refund, true, false, seg.author!);
-    if (mint) this.refundInk(ink, seg.author!, refund, args.story_id, args.seq);
+    if (mint > 0) this.refundInk(ink, seg.author!, mint, args.story_id, args.seq);
     this.leave();
     return new stories.empty_object();
   }
@@ -979,6 +1018,7 @@ export class Stories {
       const seg = this.segments.get(key)!;
       const oldCost = seg.current_cost;
       let refund: u64 = 0;
+      let mint: u64 = 0;
       let removed = false;
       System.require(
         !seg.hidden || item.mode == stories.final_mode.FINAL_REMOVED,
@@ -988,13 +1028,17 @@ export class Stories {
       if (item.mode == stories.final_mode.FINAL_UNCHANGED) {
         seg.surviving = oldCost < seg.charged ? oldCost : seg.charged;
       } else if (item.mode == stories.final_mode.FINAL_EDITED) {
+        // A blocked opener may still finish the book, but not change its text (AB-036).
+        this.requireNotBlocked(finalizer);
         const text = this.text(item.text);
         const newCost = <u64>this.requireText(text, true);
         System.require(newCost == item.expected_cost, "STORIES: Ink cost does not match expected_cost");
         System.require(newCost <= SafeMath.add(seg.charged, this.allowance(seg.original_cost)), "STORIES: edit grows the text too much (light edits only)");
         units = SafeMath.add(units, newCost);
         System.require(units <= MAX_BATCH_UNITS, "STORIES: batch text is over 20,000 Ink units");
-        refund = seg.charged > newCost ? seg.charged - newCost : 0;
+        refund = this.cutRefund(seg, newCost);
+        const oldText = seg.text != null ? seg.text! : "";
+        if (text != oldText) this.keepVersion(args.story_id, next, seg, oldText, VERSION_FINAL, finalizer, text, newCost, now, "", false);
         this.recordChanger(key, seg, finalizer);
         seg.text = text;
         seg.text_hash = this.sha256(StringBytes.stringToBytes(text));
@@ -1009,6 +1053,7 @@ export class Stories {
       } else if (item.mode == stories.final_mode.FINAL_REMOVED) {
         refund = this.refundable(seg) ? seg.charged : 0;
         if (seg.hidden) this.unhideCount(st);
+        mint = this.settleRefund(args.story_id, st, seg, refund);
         this.clearSegment(seg, finalizer, now);
         st.used_chars = SafeMath.sub(st.used_chars, oldCost);
         removed = true;
@@ -1016,16 +1061,16 @@ export class Stories {
         System.require(false, "STORIES: unknown final mode");
       }
 
+      if (!removed) mint = this.settleRefund(args.story_id, st, seg, refund);
       seg.final_mode = item.mode;
       this.segments.put(key, seg);
-      const mint = this.settleRefund(args.story_id, st, seg, refund);
       this.addSurviving(args.story_id, seg.author!, seg.surviving);
       st.running_hash = this.foldHash(st.running_hash, next, <u8>item.mode, removed ? new Uint8Array(32) : seg.text_hash!);
       st.final_cursor = next;
       if (item.mode != stories.final_mode.FINAL_UNCHANGED) {
         this.emitChange(args.story_id, next, finalizer, oldCost, seg.current_cost, refund, removed, true, seg.author!);
       }
-      if (mint) this.refundInk(ink, seg.author!, refund, args.story_id, next);
+      if (mint > 0) this.refundInk(ink, seg.author!, mint, args.story_id, next);
     }
     this.skipRemoved(args.story_id, st);
     if (!st.finalizer_is_admin) st.opener_last_active = now;
@@ -1122,13 +1167,16 @@ export class Stories {
     return new stories.empty_object();
   }
 
-  // Change someone's part while the story is open: anyone who can write in
-  // the story (the opener and editors too) pays for the letters they add
-  // and remove, at least 10, times 2. The multiplier doubles with every
-  // change to the same part (2x, 4x, 8x, ...), with no limit. The part stays
-  // its writer's; letters removed from it are refunded to whoever paid for
-  // them. Empty text removes the part (the writer gets all their Ink back).
-  // Every version is kept and can be read back. There are no free changes.
+  // Change someone else's part while the story is open: anyone who can
+  // write in the story (the opener and editors too) pays for the letters
+  // they add and remove, at least 10, times 2. The multiplier doubles with
+  // every paid change to the same part (2x, 4x, 8x, ...), up to 60 changes.
+  // The changer always pays, never the story's pool. A writer edits their
+  // own part with edit_segment, never here. The part stays its writer's.
+  // Cutting it refunds nothing once someone else changed it, because the
+  // contract cannot tell whose letters were cut; empty text removes the
+  // part and refunds what its writer (or the pool) paid. Every version is
+  // kept with the changer's citation and AI flag. There are no free changes.
   revise_part(args: stories.revise_part_arguments): stories.uint32 {
     this.enter();
     this.requireNotPaused();
@@ -1142,7 +1190,10 @@ export class Stories {
     const key = this.pairKey(args.story_id, args.seq);
     const seg = this.requireActiveSegment(key);
     System.require(!seg.hidden, "STORIES: a hidden part can't be changed");
+    const owner = seg.author!;
+    System.require(!Arrays.equal(writer, owner), "STORIES: edit your own part with edit_segment; revise_part is for someone else's part");
     this.requireRightsAndTerms(writer, args.rights_confirmed, args.terms_version, cfg);
+    const citation = this.requireCitation(args.citation);
 
     const text = this.text(args.text);
     const removing = text.length == 0;
@@ -1165,8 +1216,9 @@ export class Stories {
     const removed = <u64>(oldText.length - pre - suf);
     const added = <u64>(text.length - pre - suf);
 
-    const changes: u32 = seg.version_count == 0 ? 0 : seg.version_count - 1;
-    System.require(changes < 60, "STORIES: changing this part again would cost more Ink than exists");
+    const changes: u32 = seg.paid_changes;
+    System.require(changes < MAX_PAID_CHANGES, "STORIES: changing this part again would cost more Ink than exists");
+    System.require(seg.version_count < MAX_VERSIONS - 2, "STORIES: this part has too many versions to change it again");
     const units = removed + added < MIN_CHANGE_UNITS ? MIN_CHANGE_UNITS : removed + added;
     const price = SafeMath.mul(units, (<u64>1) << (<u64>changes + 1));
     System.require(args.expected_ink == price, "STORIES: the change price does not match expected_ink (2x the letters added and removed, at least 10, doubling each time)");
@@ -1177,58 +1229,44 @@ export class Stories {
     const nextUsed = SafeMath.add(SafeMath.sub(st.used_chars, oldCost), newCost);
     if (newCost > oldCost) System.require(nextUsed <= st.max_chars, "STORIES: not enough space left in this story");
 
-    // Keep the original as version 1 the first time a part is changed.
-    if (seg.version_count == 0) {
-      this.versions.put(this.versionKey(args.story_id, args.seq, 1), new stories.segment_version(
-        1, seg.author, oldText, seg.original_cost, seg.created_at, VERSION_ORIGINAL, seg.author));
-      seg.version_count = 1;
-    }
-    const version = seg.version_count + 1;
+    // Removing the part refunds what its writer (or the pool) paid. A cut
+    // refunds only while nobody else had changed the part (AB-035).
+    const refund = removing ? seg.charged : this.cutRefund(seg, newCost);
+    const version = this.keepVersion(args.story_id, args.seq, seg, oldText,
+      removing ? VERSION_REMOVED : VERSION_CHANGED, writer, text, newCost, now, citation, args.ai_assisted);
     this.recordChanger(key, seg, writer);
-    const owner = seg.author!;
-
-    // Removed letters go back to whoever paid for them.
-    const refund = removing ? seg.charged : (removed < seg.charged ? removed : seg.charged);
+    seg.paid_changes = changes + 1;
     const mint = this.settleRefund(args.story_id, st, seg, refund);
 
-    // The changer pays: from the pool in private stories while it has enough.
-    const inviteOnly = st.visibility != stories.visibility.VISIBILITY_PUBLIC;
-    const fromFund = inviteOnly && st.fund >= price;
-    if (fromFund) st.fund = st.fund - price;
-    else st.total_burned = SafeMath.add(st.total_burned, price);
+    // The changer always pays; the pool pays only for new parts.
+    st.total_burned = SafeMath.add(st.total_burned, price);
 
     if (removing) {
-      this.versions.put(this.versionKey(args.story_id, args.seq, version), new stories.segment_version(
-        version, owner, "", 0, now, VERSION_REMOVED, writer));
-      seg.version_count = version;
       this.clearSegment(seg, writer, now);
     } else {
-      if (!Arrays.equal(writer, owner)) {
-        // The changer's added words count toward their part of the story.
-        const totalKey = this.idAddrKey(args.story_id, writer);
-        const total = this.contributorTotals.get(totalKey);
-        if (total == null) {
-          st.contributor_count = st.contributor_count + 1;
-          this.contributorTotals.put(totalKey, new stories.uint64(added));
-        } else {
-          total.value = SafeMath.add(total.value, added);
-          this.contributorTotals.put(totalKey, total);
-        }
-        const count = this.authorCount.get(writer)!;
-        this.authorList.put(this.addrIdxKey(writer, count.value), new stories.segment_ref(args.story_id, args.seq));
-        count.value = count.value + 1;
-        this.authorCount.put(writer, count);
+      // The changer's added words count toward their part of the story.
+      const totalKey = this.idAddrKey(args.story_id, writer);
+      const total = this.contributorTotals.get(totalKey);
+      if (total == null) {
+        st.contributor_count = st.contributor_count + 1;
+        this.contributorTotals.put(totalKey, new stories.uint64(added));
+      } else {
+        total.value = SafeMath.add(total.value, added);
+        this.contributorTotals.put(totalKey, total);
       }
+      const count = this.authorCount.get(writer)!;
+      this.authorList.put(this.addrIdxKey(writer, count.value), new stories.segment_ref(args.story_id, args.seq));
+      count.value = count.value + 1;
+      this.authorCount.put(writer, count);
       seg.charged = seg.charged - refund;
       seg.text = text;
       seg.text_hash = this.sha256(StringBytes.stringToBytes(text));
       seg.current_cost = newCost;
       seg.last_edited_by = writer;
       seg.last_edited_at = now;
-      seg.source_note = "";
-      seg.version_count = version;
-      this.versions.put(this.versionKey(args.story_id, args.seq, version), new stories.segment_version(
-        version, owner, text, newCost, now, VERSION_CHANGED, writer));
+      // The changer's AI-assisted words make the part AI-assisted (AB-039).
+      // The copy checker's source note stays: only the admin or moderator sets it.
+      if (args.ai_assisted) seg.ai_assisted = true;
     }
     this.segments.put(key, seg);
     st.used_chars = nextUsed;
@@ -1238,11 +1276,9 @@ export class Stories {
     this.putStory(args.story_id, st);
     const ev = new stories.revise_event(args.story_id, args.seq, writer, removing ? VERSION_REMOVED : VERSION_CHANGED, version, price, owner, refund);
     System.event("stories.revise_event", Protobuf.encode(ev, stories.revise_event.encode), [writer, owner]);
-    if (!fromFund) {
-      const burn = new stories.ink_burn_call(writer, price, BURN_CONTRIBUTION, "c:" + args.story_id.toString() + ":" + args.seq.toString());
-      this.callOut(ink, INK_BURN_ENTRY, Protobuf.encode(burn, stories.ink_burn_call.encode), [writer], "STORIES: Ink burn failed");
-    }
-    if (mint) this.refundInk(ink, owner, refund, args.story_id, args.seq);
+    const burn = new stories.ink_burn_call(writer, price, BURN_CONTRIBUTION, "c:" + args.story_id.toString() + ":" + args.seq.toString());
+    this.callOut(ink, INK_BURN_ENTRY, Protobuf.encode(burn, stories.ink_burn_call.encode), [writer], "STORIES: Ink burn failed");
+    if (mint > 0) this.refundInk(ink, owner, mint, args.story_id, args.seq);
     this.leave();
     return new stories.uint32(version);
   }
@@ -1251,19 +1287,35 @@ export class Stories {
     return c >= 0xdc00 && c <= 0xdfff;
   }
 
-  // "The story so far": the opener, an editor, or anyone who has written in
-  // the story keeps a short summary up to date.
+  // "The story so far": the opener, an editor, or a current writer of the
+  // story keeps a short summary up to date while the story is being written.
+  // The admin or the moderator may clear it at any time, even while paused
+  // (AB-034).
   set_story_summary(args: stories.set_story_summary_arguments): stories.empty_object {
     this.enter();
     const account = this.requireAddress(args.account, "STORIES: invalid address");
-    this.requireSigner(account, "STORIES: account has not authorized this");
-    this.requireNotBlocked(account);
     const st = this.requireStory(args.story_id);
-    System.require(
-      this.isPrivileged(args.story_id, st, account) || this.contributorTotals.get(this.idAddrKey(args.story_id, account)) != null,
-      "STORIES: only the opener, an editor or a writer of this story may update its summary"
-    );
     const summary = this.text(args.summary);
+    if (summary.length == 0 && this.isModeratorOrAdmin(account)) {
+      this.requireModeratorOrAdmin(account);
+    } else {
+      this.requireNotPaused();
+      this.requireSigner(account, "STORIES: account has not authorized this");
+      this.requireNotBlocked(account);
+      System.require(
+        st.status != stories.story_status.STATUS_FINALIZED && st.status != stories.story_status.STATUS_ARCHIVED,
+        "STORIES: the summary can't change once the story is finalized or archived"
+      );
+      // Writers count only while their writing is still in the story and,
+      // in an invite-only story, while they are still on its allow-list.
+      const key = this.idAddrKey(args.story_id, account);
+      const total = this.contributorTotals.get(key);
+      const member = st.visibility == stories.visibility.VISIBILITY_PUBLIC || this.allowed.get(key)!.value;
+      System.require(
+        this.isPrivileged(args.story_id, st, account) || (total != null && total.value > 0 && member),
+        "STORIES: only the opener, an editor or a current writer of this story may update its summary"
+      );
+    }
     System.require(summary.length <= MAX_SUMMARY, "STORIES: the summary must be at most 1,500 characters");
     if (summary.length > 0) this.requireText(summary, false);
     st.summary = summary;
@@ -1279,6 +1331,8 @@ export class Stories {
   // A reader saves their place (bookmark) so it follows their wallet. Anyone
   // may read any story, so any wallet may save a place in any existing story.
   set_reading_place(args: stories.set_reading_place_arguments): stories.empty_object {
+    // No lock (it calls nothing out), but the direct-call rule still holds (AB-020).
+    this.requireDirectCall();
     const reader = this.requireAddress(args.reader, "STORIES: invalid address");
     this.requireSigner(reader, "STORIES: reader has not authorized this");
     const st = this.requireStory(args.story_id);
@@ -1298,9 +1352,12 @@ export class Stories {
   }
 
   // The part's writer, the opener or an editor sets the part's citation:
-  // what it quotes. The copy checker leaves cited quotes alone.
+  // what it quotes. The copy checker leaves cited quotes alone, so a
+  // citation by anyone but the writer counts as a change to the part: the
+  // admin can strike them on a takedown (AB-038).
   set_citation(args: stories.set_citation_arguments): stories.empty_object {
     this.enter();
+    this.requireNotPaused();
     const account = this.requireAddress(args.account, "STORIES: invalid address");
     this.requireSigner(account, "STORIES: account has not authorized this");
     const st = this.requireStory(args.story_id);
@@ -1311,6 +1368,7 @@ export class Stories {
       "STORIES: only the part's writer, the opener or an editor may do this");
     const citation = this.requireCitation(args.citation);
     seg.citation = citation;
+    this.recordChanger(key, seg, account);
     this.segments.put(key, seg);
     const ev = new stories.citation_event(args.story_id, args.seq, account, citation, false);
     System.event("stories.citation_event", Protobuf.encode(ev, stories.citation_event.encode), [seg.author!]);
@@ -1340,6 +1398,7 @@ export class Stories {
   // writer reports hid it). A part taken down by the admin stays removed.
   restore_segment(args: stories.restore_segment_arguments): stories.empty_object {
     this.enter();
+    this.requireNotPaused();
     const actor = this.requireAddress(args.actor, "STORIES: invalid address");
     this.requireSigner(actor, "STORIES: actor has not authorized this");
     const st = this.requireStory(args.story_id);
@@ -1383,9 +1442,8 @@ export class Stories {
     // one-letter fix or a cut, no rule can tell who made it infringing, so
     // the admin compares the versions and names the writer or a wallet that
     // changed the part, or chooses no strike. Removing a part is not a
-    // change of its words. version_count also catches parts revised before
-    // edited_by_others existed (it is also set when the writer revises their own).
-    const changed = seg.edited_by_others || seg.version_count > 0;
+    // change of its words, and the writer's own edits don't count.
+    const changed = seg.edited_by_others || seg.paid_changes > 0;
     const named = args.strike != null && args.strike!.length > 0;
     System.require(!(named && args.no_strike), "STORIES: name a wallet to strike or choose no strike, not both");
     let struck: Uint8Array = new Uint8Array(0);
@@ -1417,9 +1475,6 @@ export class Stories {
       st.used_chars = SafeMath.sub(st.used_chars, seg.current_cost);
       this.clearSegment(seg, admin, now);
       seg.hidden = false;
-      // A takedown also wipes every kept version of the part.
-      for (let v: u32 = 1; v <= seg.version_count; v++) this.versions.remove(this.versionKey(args.story_id, args.seq, v));
-      seg.version_count = 0;
       // Already processed by the final edit: record it as removed there too.
       if (args.seq <= st.final_cursor) seg.final_mode = stories.final_mode.FINAL_REMOVED;
       if (st.status == stories.story_status.STATUS_FINALIZED) st.needs_new_pdf = true;
@@ -1430,6 +1485,10 @@ export class Stories {
         this.emitStatus(args.story_id, st.status, "reopened-after-takedown", admin);
       }
     }
+    // A takedown wipes every kept version of the part, live or already
+    // removed (AB-032). MAX_VERSIONS bounds this loop.
+    for (let v: u32 = 1; v <= seg.version_count; v++) this.versions.remove(this.versionKey(args.story_id, args.seq, v));
+    seg.version_count = 0;
     seg.taken_down = true;
     seg.moderation_reason = args.reason;
     this.segments.put(key, seg);
@@ -1560,6 +1619,10 @@ export class Stories {
     System.require(!Arrays.equal(ink, this.contractId) && !Arrays.equal(shopId, this.contractId), "STORIES: Ink and Shop cannot be the Stories contract");
     System.require(!Arrays.equal(ink, shopId), "STORIES: Ink and Shop must be different contracts");
     const cfg = this.config.get()!;
+    // Ink is set once (AB-037). Pointing Stories at another Ink and back
+    // would let refunds mint real Ink for burns that happened elsewhere.
+    System.require(cfg.ink == null || cfg.ink!.length == 0 || Arrays.equal(cfg.ink!, ink),
+      "STORIES: the Ink address is already set and can never be changed");
     cfg.ink = ink;
     cfg.shop = shopId;
     this.saveConfig(cfg);
@@ -1883,6 +1946,39 @@ export class Stories {
     seg.edited_by_others = true;
   }
 
+  // Every change to a part's text is kept as a version naming who made it
+  // (AB-033); the text before the first change becomes version 1. At
+  // MAX_VERSIONS - 1 the writer's edit replaces their own newest version, so
+  // the writer can always edit and a takedown always wipes them all.
+  private keepVersion(storyId: u64, seq: u64, seg: stories.segment, oldText: string, kind: u32, by: Uint8Array,
+    text: string, cost: u64, now: u64, citation: string, aiAssisted: bool): u32 {
+    if (seg.version_count == 0) {
+      this.versions.put(this.versionKey(storyId, seq, 1), new stories.segment_version(
+        1, seg.author, oldText, seg.original_cost, seg.created_at, VERSION_ORIGINAL, seg.author));
+      seg.version_count = 1;
+    }
+    let version = seg.version_count + 1;
+    if (version >= MAX_VERSIONS && kind == VERSION_EDITED) {
+      const newest = this.versions.get(this.versionKey(storyId, seq, seg.version_count));
+      if (newest != null && newest.kind == VERSION_EDITED) version = seg.version_count;
+    }
+    System.require(version <= MAX_VERSIONS, "STORIES: this part has too many versions to change it again");
+    this.versions.put(this.versionKey(storyId, seq, version), new stories.segment_version(
+      version, seg.author, text, cost, now, kind, by, citation, aiAssisted));
+    seg.version_count = version;
+    return version;
+  }
+
+  // Ink refunded when a part gets shorter. While nobody else has changed the
+  // part, every letter in it was paid by its writer (or the pool), so the cut
+  // letters are refunded. Once someone else changed it, the contract cannot
+  // tell whose letters were cut, so nothing is refunded (AB-035); what the
+  // writer paid stays in `charged` and comes back if the part is removed.
+  private cutRefund(seg: stories.segment, newCost: u64): u64 {
+    if (seg.paid_changes > 0) return 0;
+    return seg.charged > newCost ? seg.charged - newCost : 0;
+  }
+
   // Removing a part refunds it unless the admin or the moderator hid it.
   // Writer reports alone never cost the writer their Ink (AB-012).
   private refundable(seg: stories.segment): bool {
@@ -1894,6 +1990,7 @@ export class Stories {
     seg.citation = "";
     seg.source_note = "";
     seg.charged = 0;
+    seg.own_paid = 0;
     seg.current_cost = 0;
     seg.surviving = 0;
     seg.status = stories.segment_status.SEGMENT_REMOVED;
@@ -1987,20 +2084,27 @@ export class Stories {
     this.callOut(ink, INK_BURN_ENTRY, Protobuf.encode(burn, stories.ink_burn_call.encode), [opener], "STORIES: Ink burn failed");
   }
 
-  // A refund for a part: back to the fund if the fund paid for it (no mint),
-  // otherwise to the writer (returns true: mint it after saving).
-  private settleRefund(storyId: u64, st: stories.story, seg: stories.segment, refund: u64): bool {
-    if (refund == 0) return false;
+  // A refund for a part. A part the fund paid for gives back first what the
+  // writer paid themselves for letters added later (own_paid), then the rest
+  // goes back to the fund (no mint). Otherwise it all goes to the writer.
+  // Returns the Ink to mint to the writer after saving (call before saving seg).
+  private settleRefund(storyId: u64, st: stories.story, seg: stories.segment, refund: u64): u64 {
+    if (refund == 0) return 0;
+    let toWriter = refund;
     if (seg.fund_paid) {
-      const key = this.idAddrKey(storyId, seg.author!);
-      const total = this.contributorTotals.get(key)!;
-      total.value = SafeMath.sub(total.value, refund);
-      this.contributorTotals.put(key, total);
-      st.fund = SafeMath.add(st.fund, refund);
-      return false;
+      toWriter = refund < seg.own_paid ? refund : seg.own_paid;
+      seg.own_paid = seg.own_paid - toWriter;
+      const toFund = refund - toWriter;
+      if (toFund > 0) {
+        const key = this.idAddrKey(storyId, seg.author!);
+        const total = this.contributorTotals.get(key)!;
+        total.value = SafeMath.sub(total.value, toFund);
+        this.contributorTotals.put(key, total);
+        st.fund = SafeMath.add(st.fund, toFund);
+      }
     }
-    this.applyRefund(storyId, st, seg.author!, refund);
-    return true;
+    if (toWriter > 0) this.applyRefund(storyId, st, seg.author!, toWriter);
+    return toWriter;
   }
 
   // Empty the fund for its return to the opener (call before saving the story).
@@ -2057,6 +2161,12 @@ export class Stories {
         "automatic: " + status.strikes.toString() + " takedowns");
       System.event("stories.account_blocked_event", Protobuf.encode(ev, stories.account_blocked_event.encode), [author]);
     }
+  }
+
+  private isModeratorOrAdmin(actor: Uint8Array): bool {
+    if (Arrays.equal(actor, this.getAdmin())) return true;
+    const mod = this.config.get()!.moderator;
+    return mod != null && mod.length == ADDRESS_LENGTH && Arrays.equal(actor, mod!);
   }
 
   private requireModeratorOrAdmin(actor: Uint8Array): void {
@@ -2314,19 +2424,23 @@ export class Stories {
   // Held across the whole call, so a token, Shop, Ink or authority
   // contract cannot call back into Stories mid-transaction.
   private enter(): void {
-    // Fix H1: Stories is only ever called directly by a transaction. A
-    // call that arrives from another contract is some other app acting in
-    // a user's (or the admin's) name, and is refused before anything else.
-    const caller = System.getCaller().caller;
-    System.require(
-      caller == null || caller.length == 0,
-      "STORIES: call SwarmTales directly from your wallet, not through another contract"
-    );
+    this.requireDirectCall();
     this.skipBudget = MAX_SKIP_PER_CALL;
     const flag = this.lock.get()!;
     System.require(!flag.value, "STORIES: reentrant call");
     flag.value = true;
     this.lock.put(flag);
+  }
+
+  // Fix H1: Stories is only ever called directly by a transaction. A call
+  // that arrives from another contract is some other app acting in a user's
+  // (or the admin's) name, and is refused before anything else.
+  private requireDirectCall(): void {
+    const caller = System.getCaller().caller;
+    System.require(
+      caller == null || caller.length == 0,
+      "STORIES: call SwarmTales directly from your wallet, not through another contract"
+    );
   }
 
   private leave(): void {

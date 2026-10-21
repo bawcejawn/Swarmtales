@@ -692,14 +692,17 @@ function addEditor(id: u64, who: Uint8Array): void {
 
 // The writer's own free edit.
 function ownEdit(as: Uint8Array, id: u64, seq: u64, text: string): void {
-  directly(); authorize(as); allowCalls(1);
+  directly(); authorize(as);
+  // Growing the part reads the Writer membership and burns the added letters.
+  if (<u64>text.length > seg(id, seq).current_cost) MockVM.setCallContractResults([writerAnswer(), okCall()]);
+  else allowCalls(1);
   c().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length));
   checkpoint();
 }
 
 // What revise_part charges: everything between the common start and the
 // common end counts, at least 10, times 2, doubling with every change.
-function changePrice(oldText: string, newText: string, versionCount: u32): u64 {
+function changePrice(oldText: string, newText: string, paidChanges: u32): u64 {
   let pre = 0;
   const maxPre = min<i32>(oldText.length, newText.length);
   while (pre < maxPre && oldText.charCodeAt(pre) == newText.charCodeAt(pre)) pre++;
@@ -708,14 +711,14 @@ function changePrice(oldText: string, newText: string, versionCount: u32): u64 {
   while (suf < maxSuf && oldText.charCodeAt(oldText.length - 1 - suf) == newText.charCodeAt(newText.length - 1 - suf)) suf++;
   const changed = <u64>(oldText.length - pre - suf + newText.length - pre - suf);
   const units: u64 = changed < 10 ? 10 : changed;
-  const changes: u32 = versionCount == 0 ? 0 : versionCount - 1;
+  const changes: u32 = paidChanges; // doubles per earlier paid change
   return units * ((<u64>1) << (<u64>changes + 1));
 }
 
 // Someone else changes a part: the paid revise_part.
 function revise(as: Uint8Array, id: u64, seq: u64, text: string): void {
   const s = seg(id, seq);
-  const price = changePrice(s.text != null ? s.text! : "", text, s.version_count);
+  const price = changePrice(s.text != null ? s.text! : "", text, s.paid_changes);
   directly(); authorize(as);
   MockVM.setCallContractResults([writerAnswer(), okCall(), okCall()]);
   c().revise_part(new stories.revise_part_arguments(as, id, seq, text, price, true, cfg().terms_version, "", false));

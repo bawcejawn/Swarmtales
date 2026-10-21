@@ -207,6 +207,13 @@ message segment {
   // edit), even only by cutting words. A takedown then needs the admin to
   // name who gets the strike, or to choose no strike.
   bool edited_by_others = 29;
+  // Paid changes by others (revise_part). The change price doubles with each
+  // (2x, 4x, 8x...), up to 60. Free edits by the writer do not count.
+  uint32 paid_changes = 30;
+  // In a pool-paid part: Ink the writer paid themselves for letters they added
+  // later (the pool pays only for new parts). Refunds pay this back to the
+  // writer first, then the rest goes back to the pool.
+  uint64 own_paid = 31 [jstype = JS_STRING];
 }
 
 // One version of a part. Version 1 is the original text.
@@ -216,8 +223,10 @@ message segment_version {
   string text = 3;
   uint64 cost = 4 [jstype = JS_STRING];
   uint64 at = 5 [jstype = JS_STRING];
-  uint32 kind = 6;               // 1 original, 2 changed by someone (paid), 3 removed by someone (paid)
+  uint32 kind = 6;               // 1 original, 2 changed by someone (paid), 3 removed by someone (paid), 4 edited by its writer, 5 final edit
   bytes by = 7 [(koinos.btype) = ADDRESS];      // who made this version
+  string citation = 8;           // what the changer said their words quote (paid changes only)
+  bool ai_assisted = 9;          // the changer said their words are AI-assisted (paid changes only)
 }
 
 message version_list {
@@ -575,9 +584,11 @@ message contribute_arguments {
   string citation = 11;          // optional: what this part quotes, e.g. "Pride and Prejudice, Jane Austen" (up to 200 characters)
 }
 
-// @description Change (or, with empty text, remove) a part of an OPEN story. Price: the letters added plus
-// the letters removed (at least 10), times 2, doubling with every change to that part (2x, 4x, 8x...).
-// Removed letters' Ink goes back to whoever paid for them. The part stays its writer's; every version is kept.
+// @description Change (or, with empty text, remove) someone else's part of an OPEN story. Price: the letters
+// added plus the letters removed (at least 10), times 2, doubling with every change to that part (2x, 4x, 8x...).
+// The changer always pays, never the story's pool. A writer never changes their own part this way (edit_segment).
+// Cuts refund nothing once someone else has changed the part; removing it refunds what its writer paid.
+// The part stays its writer's; every version is kept, with the changer's citation and AI flag.
 // @read-only false
 // @result uint32
 message revise_part_arguments {
@@ -592,7 +603,7 @@ message revise_part_arguments {
   bool ai_assisted = 9;
 }
 
-// @description Every kept version of a part, oldest first (empty if it was never revised).
+// @description Every kept version of a part, oldest first (empty if its text never changed or it was taken down).
 // @read-only true
 // @result version_list
 message get_versions_arguments {
@@ -600,7 +611,8 @@ message get_versions_arguments {
   uint64 seq = 2 [jstype = JS_STRING];
 }
 
-// @description The opener, an editor or anyone who has written in the story updates "the story so far".
+// @description The opener, an editor or a current writer of the story updates "the story so far" while it is
+// open or in its final edit. The admin or the moderator may clear it (empty summary) at any time.
 // @read-only false
 // @result empty_object
 message set_story_summary_arguments {
@@ -609,7 +621,9 @@ message set_story_summary_arguments {
   string summary = 3;            // up to 1,500 characters
 }
 
-// @description Opener or editor lightly edits a segment of an OPEN story. Shortening refunds the author.
+// @description The part's own writer edits it in an OPEN story. Rewording is free; letters beyond the part's
+// current length cost the normal Ink rate (the writer pays, never the pool). Shortening is always allowed and
+// refunds the removed Ink, but only Ink the writer (or the pool) paid, and nothing once someone else changed the part.
 // @read-only false
 // @result empty_object
 message edit_segment_arguments {
@@ -620,7 +634,8 @@ message edit_segment_arguments {
   uint64 expected_cost = 5 [jstype = JS_STRING];
 }
 
-// @description Opener or editor removes a segment of an OPEN story. The author is refunded.
+// @description The part's writer removes it from an OPEN story for free (the opener or an editor may remove a hidden part).
+// What the writer paid comes back to them; what the pool paid goes back to the pool.
 // @read-only false
 // @result empty_object
 message remove_segment_arguments {
@@ -833,7 +848,7 @@ message revive_arguments {
 
 // ---------- Admin ----------
 
-// @description Set the Ink and Shop contract addresses
+// @description Set the Ink and Shop contract addresses. Ink can be set once and never changed; Shop can change.
 // @read-only false
 // @result empty_object
 message set_addresses_arguments {
