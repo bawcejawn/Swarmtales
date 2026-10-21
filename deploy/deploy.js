@@ -98,6 +98,9 @@
  *   node deploy/deploy.js block --admin <addr> --stories <addr> --account <addr> [--note "..."] [--unblock]
  *   node deploy/deploy.js clear-summary --actor <admin or moderator addr> --stories <addr> --story <id>
  *       (empties a story's "story so far", for copied or abusive text. Works while Stories is paused)
+ *   node deploy/deploy.js legacy-parts --stories <addr> --story <id>
+ *       (read only: before the audit-2 upgrade, lists parts revised by someone else before edited_by_others
+ *        existed, and hidden parts not hidden by reports. See docs/TESTNET_UPGRADE_AUDIT2.md)
  * Common flags: --network testnet|mainnet  --rpc <https url>
  */
 "use strict";
@@ -1318,6 +1321,38 @@ async function cmdTakedown(args) {
   console.log("Send back: the transaction id (" + txId + ").");
 }
 
+/**
+ * legacy-parts: read only, nothing is signed. Before the audit-2 upgrade,
+ * lists the parts of one story that the new code reads differently (AB-052,
+ * AB-053): ones someone else revised before edited_by_others existed, and
+ * hidden ones not hidden by reports (an admin hide must be redone after it).
+ */
+async function cmdLegacyParts(args) {
+  const f = args.flags;
+  const stories = lib.requireAddress(f.stories, "stories");
+  const storyId = lib.requireStoryId(f.story);
+  const { provider } = await connect(f);
+  const { Contract } = koilib();
+  const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  const { result: st } = await storiesC.functions.get_story({ story_id: storyId });
+  if (!st || !st.opener) lib.fail("There is no story " + storyId + ".");
+  const count = Number(st.segment_count || 0);
+  let found = 0;
+  for (let seq = 1; seq <= count; seq++) {
+    const { result: seg } = await storiesC.functions.get_segment({ story_id: storyId, seq: String(seq) });
+    let versions = [];
+    if (seg && Number(seg.version_count || 0) > 0) {
+      const { result: kept } = await storiesC.functions.get_versions({ story_id: storyId, seq: String(seq) });
+      versions = (kept && kept.values) || [];
+    }
+    for (const line of lib.legacyPartNotes(seq, seg, versions)) {
+      console.log(line);
+      found++;
+    }
+  }
+  console.log(found ? "Send back: the lines above." : "Story " + storyId + ": nothing to note in its " + count + " parts.");
+}
+
 async function cmdStatus(args) {
   const f = Object.assign({}, args.flags);
   if (f.user && !f.buyer) f.buyer = f.user;
@@ -1443,6 +1478,8 @@ async function main() {
       return cmdClearSummary(args);
     case "block":
       return cmdBlock(args);
+    case "legacy-parts":
+      return cmdLegacyParts(args);
     default: {
       const head = fs.readFileSync(__filename, "utf8").split("*/")[0];
       console.log(head.replace(/^#!.*\n/, "").replace(/^\/\*\*?|^ \* ?/gm, ""));

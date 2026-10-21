@@ -456,6 +456,25 @@ function takedownStrike(seg, versions, strike, noStrike, recorded) {
   return { writer, changed, changers, lastEditedBy, candidates, unseen, needsChoice: changed && !strike && !noStrike };
 }
 
+/**
+ * What the audit-2 upgrade reads differently for one part made by older code
+ * (AB-052, AB-053), as lines to print; [] when nothing applies.
+ */
+function legacyPartNotes(seq, seg, versions) {
+  if (!seg || !seg.author) return [];
+  const notes = [];
+  const others = [];
+  for (const v of versions || []) if (v.by && v.by !== seg.author && Number(v.kind) !== 1 && !others.includes(v.by)) others.push(v.by);
+  if (others.length && !seg.edited_by_others) {
+    notes.push("part " + seq + ": revised by " + others.join(", ") + " before edited_by_others existed (writer " + seg.author +
+      "). After the upgrade a takedown asks who gets the strike.");
+  }
+  if (seg.hidden && !seg.hidden_by_reports && !Number(seg.hidden_by || 0)) {
+    notes.push("part " + seq + ": hidden by the admin or the checker. If the admin hid it, unhide and hide it again after the upgrade, so the opener can't restore it.");
+  }
+  return notes;
+}
+
 /** A set-once address (AB-037, AB-050): empty on chain, or already exactly `wanted`. */
 function requireSetOnce(what, onChain, wanted) {
   if (onChain && onChain !== wanted) {
@@ -737,6 +756,7 @@ module.exports = {
   UNSEEN_CHANGER,
   requireSetOnce,
   SHOP_MOVE_HELP,
+  legacyPartNotes,
   versionHistory,
   resolveNetwork,
   checkChainId,

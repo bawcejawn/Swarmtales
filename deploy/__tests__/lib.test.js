@@ -547,3 +547,13 @@ test("wire: set-once addresses refuse a different value, accept the same or an e
   assert.doesNotThrow(() => lib.requireSetOnce("Shop's Ink address", ADDR_A, ADDR_A));
   assert.throws(() => lib.requireSetOnce("Shop's Ink address", ADDR_A, ADDR_B), /can never be changed/);
 });
+
+test("legacy-parts: notes old parts the audit-2 upgrade reads differently (AB-052, AB-053)", () => {
+  const ADDR_C = "1NRNShd6oHh1JCxfbnWj47PrgqvqeyK7w1";
+  const old = [{ version: 1, kind: 1, by: ADDR_A }, { version: 2, kind: 2, by: ADDR_C }];
+  assert.strictEqual(lib.legacyPartNotes(3, { author: ADDR_A, version_count: 2 }, old).length, 1);
+  assert.strictEqual(lib.legacyPartNotes(3, { author: ADDR_A, version_count: 2, edited_by_others: true }, old).length, 0);
+  assert.match(lib.legacyPartNotes(4, { author: ADDR_A, hidden: true }, [])[0], /part 4: hidden/);
+  assert.strictEqual(lib.legacyPartNotes(4, { author: ADDR_A, hidden: true, hidden_by_reports: true }, []).length, 0);
+  assert.deepStrictEqual(lib.legacyPartNotes(5, { author: ADDR_A }, [{ version: 2, kind: 4, by: ADDR_A }]), []);
+});
