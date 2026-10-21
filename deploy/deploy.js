@@ -94,6 +94,8 @@
  *        A part nobody else changed is one strike for its writer. Once someone else changed it, it stops until you
  *        choose: --strike the writer or a wallet that changed it, or --no-strike)
  *   node deploy/deploy.js block --admin <addr> --stories <addr> --account <addr> [--note "..."] [--unblock]
+ *   node deploy/deploy.js clear-summary --actor <admin or moderator addr> --stories <addr> --story <id>
+ *       (empties a story's "story so far", for copied or abusive text. Works while Stories is paused)
  * Common flags: --network testnet|mainnet  --rpc <https url>
  */
 "use strict";
@@ -1198,6 +1200,24 @@ async function cmdHide(args) {
   console.log("Send back: the transaction id (" + txId + ").");
 }
 
+/** clear-summary: the admin or moderator empties a story's "story so far" (AB-034). Works while paused. */
+async function cmdClearSummary(args) {
+  const f = args.flags;
+  const actor = lib.requireAddress(f.actor, "actor (the admin or moderator address)");
+  const stories = lib.requireAddress(f.stories, "stories");
+  const storyId = lib.requireStoryId(f.story);
+  const { net, provider } = await connect(f);
+  const { Contract } = koilib();
+  const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  const { result: st } = await storiesC.functions.get_story({ story_id: storyId });
+  if (!st || !st.opener) lib.fail("There is no story " + storyId + ".");
+  console.log("Summary now (by " + (st.summary_by || "nobody") + "): " + JSON.stringify(String(st.summary || "")));
+  const signer = await getSigner(provider, actor, "the admin or moderator wallet");
+  const op = await storiesC.encodeOperation({ name: "set_story_summary", args: { account: actor, story_id: storyId, summary: "" } });
+  const txId = await dryRunThenSend(signer, provider, net, [op], "CLEAR the summary of story " + storyId);
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
 async function cmdTakedown(args) {
   const f = args.flags;
   const admin = lib.requireAddress(f.admin, "admin");
@@ -1372,6 +1392,8 @@ async function main() {
       return cmdHide(args);
     case "takedown":
       return cmdTakedown(args);
+    case "clear-summary":
+      return cmdClearSummary(args);
     case "block":
       return cmdBlock(args);
     default: {

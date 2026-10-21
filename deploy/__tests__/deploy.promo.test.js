@@ -96,3 +96,18 @@ test("promo commands ask for confirmation (dry run, then SEND) and reach the Sho
   const on = await c.encodeOperation({ name: "set_promo_enabled", args: { enabled: true } });
   assert.strictEqual((await c.decodeOperation(on)).args.enabled, true);
 });
+
+// AB-034: the admin or moderator clears a story summary through the same checked path.
+test("clear-summary sends an empty set_story_summary as the admin or moderator, after the dry run", async () => {
+  const start = SRC.indexOf("async function cmdClearSummary(");
+  const b = SRC.slice(start, SRC.indexOf("\nasync function ", start + 10));
+  assert.match(b, /await connect\(f\)/);
+  assert.match(b, /dryRunThenSend\(/);
+  assert.match(b, /summary: ""/);
+  assert.match(SRC, /case "clear-summary":/);
+  const { Contract } = require("koilib");
+  const abi = lib.toKoilibAbi(JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "stories", "abi", "stories.abi"), "utf8")));
+  const c = new Contract({ id: "16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt", abi });
+  const op = await c.encodeOperation({ name: "set_story_summary", args: { account: "1DdeLhBvZdMJtBUNZBEobkDPJ2jAu9BFCz", story_id: "4", summary: "" } });
+  assert.strictEqual((await c.decodeOperation(op)).args.story_id, "4");
+});
