@@ -6,7 +6,8 @@
 //   - Collects Book and Short Story open/close fees when Stories asks.
 //   - Mints Ink by calling the Ink contract, only for the reasons Shop
 //     is allowed: PURCHASE, MEMBERSHIP, STARTER, PROMO.
-//   - Gives promo Ink to a wallet that presents a campaign code.
+//   - Gives promo Ink to a wallet that presents a campaign code. Each
+//     wallet may claim each campaign once (October 2026; it was once ever).
 //   - Splits every payment in that same transaction:
 //       founder gets floor(price * fee_bps / 10000)
 //       treasury gets the rest
@@ -54,6 +55,7 @@ const CAMPAIGNS_SPACE_ID: u32 = 4;
 const PROMO_CLAIMED_SPACE_ID: u32 = 5;
 const SINGLE_USE_SPACE_ID: u32 = 6;
 const LOCK_SPACE_ID: u32 = 7;
+const CAMPAIGN_CLAIMED_SPACE_ID: u32 = 8;
 
 const ADDRESS_LENGTH: i32 = 25;
 const MAX_FEE_BPS: u32 = 500;
@@ -99,6 +101,8 @@ export class Shop {
   campaigns: Storage.Map<Uint8Array, shop.campaign>;
   promoClaimed: Storage.Map<Uint8Array, shop.uint64>;
   singleUse: Storage.Map<Uint8Array, shop.uint32>;
+  // (campaign, wallet) pairs that were claimed: one claim per wallet per campaign.
+  campaignClaimed: Storage.Map<Uint8Array, shop.boole>;
   lock: Storage.Obj<shop.boole>;
 
   constructor() {
@@ -176,6 +180,14 @@ export class Shop {
       () => new shop.uint32(0)
     );
 
+    this.campaignClaimed = new Storage.Map(
+      this.contractId,
+      CAMPAIGN_CLAIMED_SPACE_ID,
+      shop.boole.decode,
+      shop.boole.encode,
+      () => new shop.boole(false)
+    );
+
     this.lock = new Storage.Obj(
       this.contractId,
       LOCK_SPACE_ID,
@@ -226,6 +238,11 @@ export class Shop {
   get_promo_claimed(args: shop.get_promo_claimed_arguments): shop.uint64 {
     if (args.account == null || args.account!.length != ADDRESS_LENGTH) return new shop.uint64(0);
     return this.promoClaimed.get(args.account!)!;
+  }
+
+  get_campaign_claimed(args: shop.get_campaign_claimed_arguments): shop.boole {
+    if (args.campaign_id == 0 || args.account == null || args.account!.length != ADDRESS_LENGTH) return new shop.boole(false);
+    return this.campaignClaimed.get(this.codeKey(args.campaign_id, args.account!))!;
   }
 
   // 0 = never added, 1 = waiting to be claimed, 2 = already claimed.
@@ -474,8 +491,8 @@ export class Shop {
     }
     this.requireLinkSignature(signer, this.promoDigest(args.campaign_id, account), args.signature, "SHOP: promo link rejected");
 
-    const already = this.promoClaimed.get(account)!.value;
-    System.require(already == 0, "SHOP: this wallet has already claimed a promo");
+    const claimKey = this.codeKey(args.campaign_id, account);
+    System.require(!this.campaignClaimed.get(claimKey)!.value, "SHOP: this wallet has already claimed this promo");
 
     const day = now / DAY_SECONDS;
     if (row.day != day) {
@@ -491,6 +508,8 @@ export class Shop {
     }
     row.budget_used = nextBudget;
     this.campaigns.put(key, row);
+    this.campaignClaimed.put(claimKey, new shop.boole(true));
+    // The newest campaign claimed (Stories only asks "ever claimed?").
     this.promoClaimed.put(account, new shop.uint64(args.campaign_id));
 
     const memo = "campaign:" + args.campaign_id.toString();

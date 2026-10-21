@@ -1131,18 +1131,58 @@ describe("Shop: signed promo links", () => {
     expect(new Shop().get_promo_claimed(new shop.get_promo_claimed_arguments(ALICE)).value).toBe(0);
   });
 
-  it("allows one promo claim per wallet across every campaign", () => {
+  // Changed in October 2026: one claim per wallet per campaign (it was one ever).
+  it("allows one promo claim per wallet per campaign; a second campaign works", () => {
     const first = openPromo(0, 1000, 5000, 0, START, START + DAY);
     const second = openPromo(1, 1000, 5000, 0, START, START + DAY);
     claim(ALICE, first, 0);
     checkpoint();
     failAccount = ALICE;
-    failId = second;
-    failKey = 1;
+    failId = first;
+    failKey = 0;
     expect(() => { failClaim(); }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: this wallet has already claimed this promo");
+    MockVM.rollbackTransaction();
+    claim(ALICE, second, 1);
+    checkpoint();
     claim(BOB, second, 1);
-    expect(new Shop().get_promo_claimed(new shop.get_promo_claimed_arguments(ALICE)).value).toBe(first);
+    checkpoint();
+    expect(new Shop().get_promo_claimed(new shop.get_promo_claimed_arguments(ALICE)).value).toBe(second);
     expect(new Shop().get_promo_claimed(new shop.get_promo_claimed_arguments(BOB)).value).toBe(second);
+    expect(new Shop().get_campaign_claimed(new shop.get_campaign_claimed_arguments(first, ALICE)).value).toBe(true);
+    expect(new Shop().get_campaign_claimed(new shop.get_campaign_claimed_arguments(second, ALICE)).value).toBe(true);
+    expect(new Shop().get_campaign_claimed(new shop.get_campaign_claimed_arguments(first, BOB)).value).toBe(false);
+    expect(new Shop().get_campaign(new shop.get_campaign_arguments(second)).budget_used).toBe(2000);
+  });
+
+  it("refuses an ended campaign and a campaign that was switched off; the others keep working", () => {
+    const ended = openPromo(0, 1000, 5000, 0, START, START + 100);
+    const off = openPromo(1, 1000, 5000, 0, START, START + DAY);
+    const open = openPromo(2, 1000, 5000, 0, START, START + DAY);
+    authorize(SHOP);
+    new Shop().set_campaign_enabled(new shop.set_campaign_enabled_arguments(off, false));
+    checkpoint();
+    setTime(START + 100);
+    failAccount = ALICE; failId = ended; failKey = 0;
+    expect(() => { failClaim(); }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: campaign has ended");
+    MockVM.rollbackTransaction();
+    failId = off; failKey = 1;
+    expect(() => { failClaim(); }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: campaign is disabled");
+    MockVM.rollbackTransaction();
+    claim(ALICE, open, 2);
+    checkpoint();
+    expect(new Shop().get_campaign_claimed(new shop.get_campaign_claimed_arguments(ended, ALICE)).value).toBe(false);
+    expect(new Shop().get_campaign_claimed(new shop.get_campaign_claimed_arguments(off, ALICE)).value).toBe(false);
+    expect(new Shop().get_campaign_claimed(new shop.get_campaign_claimed_arguments(open, ALICE)).value).toBe(true);
+    // The global switch stops every campaign.
+    authorize(SHOP);
+    new Shop().set_promo_enabled(new shop.set_promo_enabled_arguments(false));
+    checkpoint();
+    failAccount = BOB; failId = open; failKey = 2;
+    expect(() => { failClaim(); }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: promo is off");
   });
 
   it("refuses a shared campaign without a link key, and a single-use campaign with one", () => {
@@ -1180,7 +1220,7 @@ describe("Shop: signed promo links", () => {
     expect(() => { replay(); }).toThrow();
     expect(MockVM.getErrorMessage()).toBe("SHOP: promo link already used");
 
-    // Alice tries a second link: one claim per wallet, ever.
+    // Alice tries a second link of the same campaign: one claim per wallet per campaign.
     replayAccount = ALICE;
     replaySigner = linkKey(2);
     replaySig = promoSig(2, <i32>id, 0);
