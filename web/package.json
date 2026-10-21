@@ -16,7 +16,6 @@
     "read-testnet": "node scripts/read-testnet.mjs"
   },
   "dependencies": {
-    "@fontsource/cormorant-garamond": "5.2.6",
     "@fontsource/ibm-plex-sans": "5.3.0",
     "@fontsource/literata": "5.3.0",
     "koilib": "9.4.0",
