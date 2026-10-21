@@ -1,4 +1,4 @@
-# Testnet upgrade: write over parts, story summary (Windows PowerShell)
+# Testnet upgrade: paid changes to other writers' parts, story summary (Windows PowerShell)
 
 This updates the code of your **Stories** contract. The address stays the same and all data
 is kept. Run it **before** you merge the website pull request.
@@ -19,11 +19,11 @@ Get-FileHash stories\build\release\contract.wasm
 
 **Expect:**
 
-- Seven test summaries that add up to **153 pass**, 0 fail.
+- Seven test summaries that add up to **154 pass**, 0 fail.
 - This fingerprint:
 
 ```
-E7F96F44489B432A867C736BBD07B5B8AE49198140D07C2B8A0549C907A074A8
+3BF25A77DEE6F862C88A9F5DB1A3EC85AE91E517C13B4B342305C71E3235D3EF
 ```
 
 The "INFO AS210" lines are harmless compiler notes. If the fingerprint is different, stop and
@@ -35,7 +35,7 @@ send me the output.
 node deploy/deploy.js upload stories --expect 1MJz8k1jSgbf1QU9Zdyfip1M7nuXJP3eCZ --upgrade
 ```
 
-**Expect** a dry run of about 2.7 mana. Type `SEND`. If it says the wallet's mana is too low,
+**Expect** a dry run of about 2.2 mana. Type `SEND`. If it says the wallet's mana is too low,
 send `ST-Stories-v3` 3 tKOIN and try again.
 
 ## 3. Merge the website pull request

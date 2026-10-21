@@ -4,9 +4,6 @@ import "@fontsource/literata/latin-600.css";
 import "@fontsource/ibm-plex-sans/latin-400.css";
 import "@fontsource/ibm-plex-sans/latin-500.css";
 import "@fontsource/ibm-plex-sans/latin-600.css";
-import "@fontsource/cormorant-garamond/latin-500.css";
-import "@fontsource/cormorant-garamond/latin-600.css";
-import "@fontsource/cormorant-garamond/latin-500-italic.css";
 import "./style.css";
 
 import { utils } from "koilib";
@@ -50,6 +47,7 @@ import * as reading from "./lib/bookmarks.js";
 import { createReader } from "./ui/readAloud.js";
 import { grammarTool } from "./ui/grammar.js";
 import { findCharacters, openingLines } from "./lib/characters.js";
+import { changeMultiplier, changePrice } from "./lib/change.js";
 
 const problems = configProblems();
 const kondor = createKondorWallet();
@@ -71,7 +69,8 @@ const state = {
   libraryPromise: null,
   excerpts: new Map(),
   discover: { tab: "open", kind: "all", category: 0 },
-  showAuthors: readPref("st-show-authors", "1") === "1",
+  // Off by default: the story reads like a book. Readers can switch it on.
+  showAuthors: readPref("st-show-authors-v2", "0") === "1",
   openKind: "short",
   kondorAccounts: null, // accounts Kondor shared, while the person is choosing
 };
@@ -899,7 +898,7 @@ function renderReader(page, id) {
     toggle.checked = state.showAuthors;
     toggle.addEventListener("change", () => {
       state.showAuthors = toggle.checked;
-      writePref("st-show-authors", toggle.checked ? "1" : "0");
+      writePref("st-show-authors-v2", toggle.checked ? "1" : "0");
       column.classList.toggle("hide-authors", !toggle.checked);
     });
 
@@ -966,14 +965,11 @@ function renderReader(page, id) {
     // The book's contents: each chapter is a fold you open. A one-chapter
     // story starts open.
     chapters.forEach((chapter, i) => {
-      const visible = chapter.blocks.filter((b) => !b.segment.hidden);
-      const opening = visible.length ? clip(visible[0].segment.text || "", 110) : "";
       const parts = h("div", { class: "chapter-body" });
       for (const block of chapter.blocks) append(parts, segmentView(block, story, id, ctx));
       append(article, h("details", { class: "chapter" + (i === 0 ? " first" : ""), id: "chapter-" + chapter.number, open: chapters.length === 1 ? true : null }, [
         h("summary", { class: "chapter-summary" }, [
           h("span", { class: "chapter-number" }, ["Chapter " + chapterWord(chapter.number)]),
-          h("span", { class: "chapter-opening" }, [opening]),
           h("span", { class: "chapter-meta meta small" }, [plural(chapter.blocks.length, "part")]),
         ]),
         h("div", { class: "chapter-ornament", "aria-hidden": "true" }, ["\u2766"]),
@@ -1114,8 +1110,9 @@ function segmentView(block, story, storyId, ctx) {
   if (removed) {
     const why = segment.taken_down
       ? "Removed for good: " + (REASON_LABELS[Number(segment.moderation_reason)] || "a policy problem") + "."
-      : "Removed by the story's editor.";
+      : Number(segment.version_count || 0) > 1 ? "Removed. Its earlier versions stay in its history." : "Removed by its writer.";
     body = h("p", { class: "seg-text seg-placeholder" }, [why]);
+    if (!segment.taken_down && Number(segment.version_count || 0) > 1) notes.push(versionsView(storyId, block));
   } else if (segment.hidden) {
     body = h("div", {}, [
       h("p", { class: "seg-text seg-placeholder" }, [
@@ -1160,23 +1157,24 @@ function segmentView(block, story, storyId, ctx) {
       tools.lastChild.title = "Write new text that appears right below this part";
       tools.lastChild.addEventListener("click", () => toggle("add", () => composer(storyId, story, ctx.active, block.seq, ctx.flags)));
     }
-    // Private stories: the opener and editors edit or remove any part.
-    // Public stories: only the part's own writer; everyone else can write over it.
+    // Your own part: edit or remove it for free. Someone else's: change or
+    // remove it for Ink (everyone pays, the opener too). The opener and
+    // editors may remove a hidden part (moderation) for free.
     const me = currentAddress();
     const ownPart = !!me && segment.author === me;
-    const canManage = Number(story.status) === 1 && !!me && (ownPart || (inviteOnly(story) && ctx.canEdit));
-    if (canManage && !segment.hidden) {
-      append(tools, h("button", { type: "button", class: "text-button tool", title: ownPart ? "Tidy your part" : "Fix typos or tidy this part (opener and editors)" }, ["Edit"]));
+    const open = Number(story.status) === 1;
+    if (open && ownPart && !segment.hidden) {
+      append(tools, h("button", { type: "button", class: "text-button tool", title: "Tidy your part (free)" }, ["Edit"]));
       tools.lastChild.addEventListener("click", () => toggle("edit", () => editPanel(storyId, block)));
     }
-    if (canManage) {
+    if (open && (ownPart || (segment.hidden && ctx.canEdit))) {
       append(tools, h("button", { type: "button", class: "text-button tool" }, ["Remove"]));
       tools.lastChild.addEventListener("click", () => toggle("remove", () => removePanel(storyId, block)));
     }
     if (ctx.canAdd && !segment.hidden && !ownPart && me) {
-      const times = writeOverMultiplier(segment);
-      append(tools, h("button", { type: "button", class: "text-button tool", title: "Replace this part with your version for " + times + "\u00d7 the Ink. The earlier version stays readable." }, ["Write over (" + times + "\u00d7)"]));
-      tools.lastChild.addEventListener("click", () => toggle("over", () => writeOverPanel(storyId, story, block)));
+      const times = changeMultiplier(segment.version_count);
+      append(tools, h("button", { type: "button", class: "text-button tool", title: "Change this part: you pay for the letters you add and remove, \u00d7" + times + ". The earlier version stays readable." }, ["Change (\u00d7" + times + ")"]));
+      tools.lastChild.addEventListener("click", () => toggle("change", () => changePanel(storyId, story, block)));
     }
     if (!segment.hidden && typeof window !== "undefined" && window.speechSynthesis) {
       append(tools, h("button", { type: "button", class: "text-button tool", onClick: () => ctx.listen && ctx.listen.startFrom(block.seq) }, ["Listen from here"]));
@@ -1191,7 +1189,7 @@ function segmentView(block, story, storyId, ctx) {
     if (!segment.hidden && author !== currentAddress()) append(tools, reportControl(storyId, block.index));
   }
   const isMarked = !!ctx && ctx.markSeq === block.seq && !segment.hidden;
-  return h("div", { class: "seg" + (removed || segment.hidden ? " seg-muted" : "") + (isMarked ? " bookmarked" : ""), dataset: { seq: String(block.seq || block.index) } }, [
+  const el = h("div", { class: "seg" + (removed || segment.hidden ? " seg-muted" : "") + (isMarked ? " bookmarked" : ""), dataset: { seq: String(block.seq || block.index) } }, [
     h("p", { class: "seg-author" }, [h("b", {}, [shortAddress(author)]), h("span", {}, [(author === story.opener ? "opener · " : "") + num(segment.current_cost || segment.charged) + " Ink"])]),
     h("div", {}, [
       body,
@@ -1200,6 +1198,14 @@ function segmentView(block, story, storyId, ctx) {
       slot,
     ]),
   ]);
+  // On a phone there's no pointer: tapping the text shows that part's tools.
+  body.addEventListener("click", () => {
+    if (window.getSelection && String(window.getSelection())) return; // selecting text, not tapping
+    const wasActive = el.classList.contains("active");
+    el.closest("article")?.querySelectorAll(".seg.active").forEach((s) => s.classList.remove("active"));
+    if (!wasActive) el.classList.add("active");
+  });
+  return el;
 }
 
 /** Light edit by the opener or an editor: the contract allows a little growth. */
@@ -1213,7 +1219,7 @@ function editPanel(storyId, block) {
   const counter = h("p", { class: "meta" });
   const update = () => {
     const n = inkCost(normalizePasted(area.value).trim());
-    counter.textContent = num(n) + " of at most " + num(maxCost) + " characters. Edits are for tidying: the part can grow only a little. Shortening it returns Ink to " + shortAddress(seg.author) + ".";
+    counter.textContent = num(n) + " of at most " + num(maxCost) + " characters. Edits are for tidying: your part can grow only a little. Shortening it returns Ink to you.";
   };
   area.addEventListener("input", update);
   update();
@@ -1243,8 +1249,8 @@ function editPanel(storyId, block) {
       save.disabled = false;
     }
   } }, [
-    h("h3", { class: "h3" }, ["Edit this part"]),
-    h("p", { class: "meta" }, ["The part stays credited to " + shortAddress(seg.author) + ", and readers see that it was edited."]),
+    h("h3", { class: "h3" }, ["Edit your part"]),
+    h("p", { class: "meta" }, ["Free for your own words. Readers see a small \u201cedited\u201d note."]),
     area,
     counter,
     h("div", { class: "actions" }, [save]),
@@ -1253,47 +1259,60 @@ function editPanel(storyId, block) {
   ]);
 }
 
-/** Writing over a part costs 2x its Ink the first time, then 4x, 8x... */
-function writeOverMultiplier(segment) {
-  const versions = Number(segment.version_count || 0);
-  const overwrites = versions === 0 ? 0 : versions - 1;
-  return 2 ** (overwrites + 1);
-}
-
-function writeOverPanel(storyId, story, block) {
+/**
+ * Change (or remove) someone else's part. Price: the letters you add plus
+ * the letters you remove (at least 10), times 2, doubling with every change
+ * to that part. The writer keeps the part and gets back Ink for letters you
+ * remove. Every version stays readable.
+ */
+function changePanel(storyId, story, block) {
   const seg = block.segment;
-  const times = writeOverMultiplier(seg);
+  const oldText = seg.text || "";
   const area = h("textarea", { rows: "7", spellcheck: "true" });
-  area.value = seg.text || "";
-  const price = h("p", { class: "meta" });
+  area.value = oldText;
+  const price = h("p", { class: "change-price" });
   const rights = rightsBox();
+  const status = statusBox();
+  const save = h("button", { type: "submit", class: "btn btn-primary btn-small" }, ["Save change"]);
+  const removeAll = h("button", { type: "button", class: "text-button" }, []);
+  const current = () => normalizePasted(area.value).trim();
   const update = () => {
-    const n = inkCost(normalizePasted(area.value).trim());
-    price.textContent = "Costs " + num(n * times) + " Ink (" + times + "\u00d7 the " + num(n) + " characters). " +
-      shortAddress(seg.author) + " gets back the " + num(seg.charged || 0) + " Ink their words cost. The next write-over of this part will cost " + times * 2 + "\u00d7.";
+    const text = current();
+    const p = changePrice(oldText, text, seg.version_count, seg.charged);
+    const whose = shortAddress(seg.author);
+    if (text === oldText) {
+      price.textContent = "Make your change above. You pay for the letters you add and remove (at least 10), \u00d7" + p.multiplier + " for this part.";
+      save.textContent = "Save change";
+      save.disabled = true;
+    } else {
+      price.textContent = "You add " + num(p.added) + " and remove " + num(p.removed) + " letters: " + num(p.units) + " \u00d7 " + p.multiplier +
+        " = " + num(p.price) + " Ink." + (p.refund ? " " + whose + " gets " + num(p.refund) + " Ink back for the removed letters." : "") +
+        " The next change to this part will cost \u00d7" + p.multiplier * 2 + ".";
+      save.textContent = "Change for " + num(p.price) + " Ink";
+      save.disabled = false;
+    }
+    const r = changePrice(oldText, "", seg.version_count, seg.charged);
+    removeAll.textContent = "Remove the whole part instead (" + num(r.price) + " Ink; " + whose + " gets all " + num(r.refund) + " back)";
   };
   area.addEventListener("input", update);
   update();
-  const status = statusBox();
-  const save = h("button", { type: "submit", class: "btn btn-primary btn-small" }, ["Write over for " + times + "\u00d7 Ink"]);
-  return h("form", { class: "inline-panel card", onSubmit: async (event) => {
-    event.preventDefault();
+  const submit = async (text) => {
     save.disabled = true;
     try {
-      const text = normalizePasted(area.value).trim();
-      const check = checkStoryText(text, true);
-      if (!check.ok) throw new Error(check.reason);
-      if (text === seg.text) throw new Error("Change the text first.");
+      if (text) {
+        const check = checkStoryText(text, true);
+        if (!check.ok) throw new Error(check.reason);
+      }
+      if (text === oldText) throw new Error("Change the text first.");
       if (!rights.input.checked) throw new Error(RIGHTS_PROBLEM);
-      const quoted = Number(await quoteCost(text));
-      const cost = quoted * times;
+      const p = changePrice(oldText, text, seg.version_count, seg.charged);
       const pool = inviteOnly(story) ? Number(story.fund || 0) : 0;
-      if (pool < cost && state.account && Number(state.account.ink || 0) < cost) {
-        throw new Error("This costs " + num(cost) + " Ink and you have " + num(state.account.ink) + ".");
+      if (pool < p.price && state.account && Number(state.account.ink || 0) < p.price) {
+        throw new Error("This costs " + num(p.price) + " Ink and you have " + num(state.account.ink) + ".");
       }
       const op = await encode("stories", "revise_part", {
         writer: currentAddress(), story_id: String(storyId), seq: String(block.seq), text,
-        expected_ink: String(cost), rights_confirmed: true, terms_version: termsVersion(), citation: "", ai_assisted: false,
+        expected_ink: String(p.price), rights_confirmed: true, terms_version: termsVersion(), citation: "", ai_assisted: false,
       });
       if (await send([op], status)) {
         await refreshAccount();
@@ -1304,17 +1323,19 @@ function writeOverPanel(storyId, story, block) {
     } finally {
       save.disabled = false;
     }
-  } }, [
-    h("h3", { class: "h3" }, ["Write over this part"]),
+  };
+  removeAll.addEventListener("click", () => submit(""));
+  return h("form", { class: "inline-panel card", onSubmit: (event) => { event.preventDefault(); submit(current()); } }, [
+    h("h3", { class: "h3" }, ["Change this part"]),
     h("p", { class: "meta" }, [
-      "Your version replaces this part and is credited to you. The current version stays in the part's history, where anyone can read it. " +
-        "Each write-over of the same part costs twice the last one, so changes are worth thinking about.",
+      "The part stays " + shortAddress(seg.author) + "'s, and the current version stays readable in its history. " +
+        "Every change to someone else's words costs Ink, and each change to the same part costs twice the last.",
     ]),
     area,
     grammarTool(area, update),
     price,
     rights.node,
-    h("div", { class: "actions" }, [save]),
+    h("div", { class: "actions" }, [save, removeAll]),
     walletNote(),
     status,
   ]);
@@ -1338,7 +1359,7 @@ function versionsView(storyId, block) {
       const values = (res && res.values) || [];
       list.replaceChildren(...values.slice().reverse().map((v) => h("li", {}, [
         h("p", { class: "meta small" }, [
-          "Version " + v.version + " \u00b7 " + (Number(v.kind) === 1 ? "original by " : "written over by ") + shortAddress(v.author) +
+          "Version " + v.version + " \u00b7 " + (Number(v.kind) === 1 ? "original by " + shortAddress(v.author) : (Number(v.kind) === 3 ? "removed by " : "changed by ") + shortAddress(v.by)) +
             (formatUtc(v.at) ? " \u00b7 " + formatUtc(v.at).split(",")[0] : ""),
         ]),
         h("p", { class: "version-text" }, [v.text || ""]),
@@ -3185,8 +3206,8 @@ function writingHelp() {
     h("ul", { class: "how-list" }, [
       h("li", {}, [h("b", {}, ["Add at the end."]), " Use this box. Your part goes after everything written so far. Tick “Start a new chapter” to begin one."]),
       h("li", {}, [h("b", {}, ["Add in the middle."]), " Click “+ Add text here” under any part. Your text appears directly below that part, before what came next. Anyone who can write here can do this."]),
-      h("li", {}, [h("b", {}, ["Edit or remove your own part."]), " Lightly (a part can grow by about 10% at most). Shortening or removing returns Ink to you. In private stories the opener and editors can also edit or remove any part."]),
-      h("li", {}, [h("b", {}, ["Write over someone's part."]), " Replace it with your version. The first write-over costs 2\u00d7 the Ink, the next 4\u00d7, then 8\u00d7, and so on. The replaced writer gets their Ink back, and every earlier version stays readable under the part."]),
+      h("li", {}, [h("b", {}, ["Your own part."]), " Edit it lightly or remove it, for free. Shortening or removing returns Ink to you."]),
+      h("li", {}, [h("b", {}, ["Someone else's part."]), " Change it with \u201cChange\u201d: you pay for every letter you add or remove (at least 10), \u00d72. Each change to the same part doubles that: \u00d74, \u00d78\u2026 The writer gets Ink back for letters you remove, and every earlier version stays readable. The opener and editors pay too; only the final edit is free."]),
       h("li", {}, [h("b", {}, ["Spelling and grammar."]), " Press \u201cCheck spelling & grammar\u201d before you post. Anything missed can be fixed in the final edit."]),
       h("li", {}, [h("b", {}, ["Quoting someone?"]), " Open \u201cQuoting someone? Name the source\u201d and write the book or site. It shows under your part, and the copy checker leaves named quotes alone."]),
       h("li", {}, [h("b", {}, ["Ink."]), " 1 Ink per letter. In public stories every writer pays for their own words. In private stories the opener's writers' pool pays while it has enough. Long text is split into parts automatically."]),
