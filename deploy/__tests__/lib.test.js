@@ -476,3 +476,50 @@ test("link keys are 32 bytes from crypto.randomBytes", () => {
   assert.match(lib.newLinkKeyHex(), /^[0-9a-f]{64}$/);
   assert.notStrictEqual(lib.newLinkKeyHex(), lib.newLinkKeyHex());
 });
+
+test("takedown: a part nobody else changed needs no choice; a changed part does (AB-028, AB-029)", () => {
+  const ADDR_C = "1NRNShd6oHh1JCxfbnWj47PrgqvqeyK7w1";
+  // Never changed, or changed only by its writer's own free edit: automatic.
+  let who = lib.takedownStrike({ author: ADDR_A }, [], "", false);
+  assert.deepStrictEqual([who.writer, who.changed, who.needsChoice, who.changers], [ADDR_A, false, false, []]);
+  who = lib.takedownStrike({ author: ADDR_A, last_edited_by: ADDR_A }, [], "", false);
+  assert.strictEqual(who.needsChoice, false);
+  // An editor removed the hidden part: no words changed, still automatic.
+  who = lib.takedownStrike({ author: ADDR_A, last_edited_by: ADDR_B }, [], "", false);
+  assert.strictEqual(who.needsChoice, false);
+  // Two other wallets revised it: both are listed, and a choice is needed.
+  const versions = [
+    { version: 1, kind: 1, by: ADDR_A, text: "original", at: "1700000000" },
+    { version: 2, kind: 2, by: ADDR_B, text: "planted", at: "1700000100" },
+    { version: 3, kind: 2, by: ADDR_C, text: "planted!", at: "1700000200" },
+  ];
+  who = lib.takedownStrike({ author: ADDR_A, edited_by_others: true, version_count: 3, last_edited_by: ADDR_C }, versions, "", false);
+  assert.deepStrictEqual([who.changed, who.needsChoice, who.changers], [true, true, [ADDR_B, ADDR_C]]);
+  // The finalizer's edit keeps no version: last_edited_by shows who it was.
+  who = lib.takedownStrike({ author: ADDR_A, edited_by_others: true, last_edited_by: ADDR_B }, [], "", false);
+  assert.deepStrictEqual([who.needsChoice, who.changers], [true, [ADDR_B]]);
+  // Revised before edited_by_others existed: version_count still counts.
+  assert.strictEqual(lib.takedownStrike({ author: ADDR_A, version_count: 2 }, [], "", false).needsChoice, true);
+  // Once the admin chooses, it may go ahead; both choices at once are refused.
+  assert.strictEqual(lib.takedownStrike({ author: ADDR_A, edited_by_others: true }, [], ADDR_B, false).needsChoice, false);
+  assert.strictEqual(lib.takedownStrike({ author: ADDR_A, edited_by_others: true }, [], "", true).needsChoice, false);
+  assert.throws(() => lib.takedownStrike({ author: ADDR_A }, [], ADDR_B, true), /--strike or --no-strike, not both/);
+  // The history the admin compares, oldest first.
+  const lines = lib.versionHistory(versions);
+  assert.strictEqual(lines.length, 3);
+  assert.match(lines[0], /^ {2}v1 original by 1Dde.* at 2023-11-14T22:13:20Z: "original"$/);
+  assert.match(lines[2], /v3 changed by 1NRN.*"planted!"$/);
+  assert.match(lib.versionHistory([{ version: 2, kind: 2, by: ADDR_B, text: "x".repeat(200), at: "0" }])[0], /at \?: "x{160}…"$/);
+});
+
+test("takedown --no-strike reaches the operation through the built ABI", async () => {
+  const { Contract } = require("koilib");
+  const fs = require("fs");
+  const path = require("path");
+  const abi = lib.toKoilibAbi(JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "stories", "abi", "stories.abi"), "utf8")));
+  const c = new Contract({ id: "16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt", abi });
+  for (const noStrike of [true, false]) {
+    const op = await c.encodeOperation({ name: "takedown_segment", args: { story_id: "1", seq: "2", reason: 1, note: "n", strike: "", no_strike: noStrike } });
+    assert.strictEqual(!!(await c.decodeOperation(op)).args.no_strike, noStrike);
+  }
+});

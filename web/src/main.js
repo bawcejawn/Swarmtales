@@ -3336,6 +3336,13 @@ function renderTerms(page) {
     .catch((error) => replace(column, notice("bad", h("p", {}, [explainFailure(error)]))));
 }
 
+// The strike limit is an admin setting (1 to 20); 0 means the contract's default of 5.
+function strikeLimitText() {
+  const cfg = state.overview && state.overview.storiesCfg;
+  if (!cfg) return "After a set number of takedowns (5 by default)";
+  return "After " + plural(Number(cfg.strike_limit || 5), "takedown", "takedowns");
+}
+
 function renderReportPage(page) {
   setMeta("Report copied text", "How to report copied text on SwarmTales, and how rights holders send a copyright notice.");
   const email = SITE.copyrightEmail;
@@ -3376,7 +3383,7 @@ function renderReportPage(page) {
       h("ul", { class: "how-list" }, [
         h("li", {}, ["The part is hidden promptly."]),
         h("li", {}, ["The writer can send a counter-notice. If none arrives within 14 days, the part is taken down for good: its text is cleared from SwarmTales' contract storage, it's left out of future editions, and the writer isn't refunded."]),
-        h("li", {}, ["Each takedown counts against whoever wrote the text that was taken down. After five (the default limit), their wallet can no longer write on SwarmTales."]),
+        h("li", {}, ["A takedown counts against the part's writer. If someone else changed the part, its versions are compared and it counts against whoever made the text infringing, or against nobody (fixing a typo is never a reason). " + strikeLimitText() + ", a wallet can no longer write on SwarmTales."]),
         h("li", {}, ["The blockchain records that the part was hidden or taken down and why, with a reference number. Your personal details are never put on the blockchain."]),
       ]),
     ]),

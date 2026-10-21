@@ -377,7 +377,16 @@ async function main() {
       const [tieStory, tieSeq] = tie.key.split(":");
       const pct = Math.round(tie.ratio * 100);
       await sourceNote(storyId, seq, seg, "About " + pct + "% of this text also appears in story " + tieStory + ", part " + tieSeq + ", written at the same time.");
-      await sourceNote(Number(tieStory), Number(tieSeq), {}, "Much of this text also appears in story " + storyId + ", part " + seq + ", written at the same time.");
+      // Read the other part first: it may be gone by now, or already carry a
+      // note (from the web check, say) that must not be overwritten (AB-030).
+      try {
+        const partner = await read("get_segment", { story_id: tieStory, seq: tieSeq });
+        if (Number(partner.status) === 1) {
+          await sourceNote(Number(tieStory), Number(tieSeq), partner, "Much of this text also appears in story " + storyId + ", part " + seq + ", written at the same time.");
+        }
+      } catch (error) {
+        note("  could not read story " + tieStory + " part " + tieSeq + ": " + (error && error.message ? error.message : String(error)));
+      }
       return "flagged";
     }
     if (alsoWeb && String(seg.text).length >= WEB_MIN_CHARS && spendable.any()) {

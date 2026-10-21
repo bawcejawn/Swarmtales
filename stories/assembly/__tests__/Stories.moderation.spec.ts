@@ -679,7 +679,10 @@ describe("Moderation: strikes and blocking", () => {
   });
 });
 
-// ---------- AB-001: rewritten text is the rewriter's responsibility ----------
+// ---------- Who gets the strike (AB-001, AB-028, AB-029) ----------
+// A part nobody else changed strikes its writer automatically. Once anyone
+// else changed it (revise_part or the final edit), the admin names who gets
+// the strike after comparing the versions, or chooses no strike.
 
 function addEditor(id: u64, who: Uint8Array): void {
   directly(); authorize(ALICE);
@@ -687,9 +690,35 @@ function addEditor(id: u64, who: Uint8Array): void {
   checkpoint();
 }
 
-function rewrite(as: Uint8Array, id: u64, seq: u64, text: string): void {
+// The writer's own free edit.
+function ownEdit(as: Uint8Array, id: u64, seq: u64, text: string): void {
   directly(); authorize(as); allowCalls(1);
   c().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length));
+  checkpoint();
+}
+
+// What revise_part charges: everything between the common start and the
+// common end counts, at least 10, times 2, doubling with every change.
+function changePrice(oldText: string, newText: string, versionCount: u32): u64 {
+  let pre = 0;
+  const maxPre = min<i32>(oldText.length, newText.length);
+  while (pre < maxPre && oldText.charCodeAt(pre) == newText.charCodeAt(pre)) pre++;
+  let suf = 0;
+  const maxSuf = min<i32>(oldText.length, newText.length) - pre;
+  while (suf < maxSuf && oldText.charCodeAt(oldText.length - 1 - suf) == newText.charCodeAt(newText.length - 1 - suf)) suf++;
+  const changed = <u64>(oldText.length - pre - suf + newText.length - pre - suf);
+  const units: u64 = changed < 10 ? 10 : changed;
+  const changes: u32 = versionCount == 0 ? 0 : versionCount - 1;
+  return units * ((<u64>1) << (<u64>changes + 1));
+}
+
+// Someone else changes a part: the paid revise_part.
+function revise(as: Uint8Array, id: u64, seq: u64, text: string): void {
+  const s = seg(id, seq);
+  const price = changePrice(s.text != null ? s.text! : "", text, s.version_count);
+  directly(); authorize(as);
+  MockVM.setCallContractResults([writerAnswer(), okCall(), okCall()]);
+  c().revise_part(new stories.revise_part_arguments(as, id, seq, text, price, true, cfg().terms_version, "", false));
   checkpoint();
 }
 
@@ -697,40 +726,171 @@ function strikes(who: Uint8Array): u32 {
   return c().get_account_status(new stories.get_account_status_arguments(who)).strikes;
 }
 
-describe("Moderation: a takedown strikes whoever put the words there (AB-001)", () => {
+function takedownStriking(id: u64, seq: u64, who: Uint8Array): void {
+  directly(); authorize(STORIES);
+  c().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-002", who));
+  checkpoint();
+}
+
+function takedownNoStrike(id: u64, seq: u64): void {
+  directly(); authorize(STORIES);
+  c().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-003", new Uint8Array(0), true));
+  checkpoint();
+}
+
+// Closures cannot capture locals in AssemblyScript: tests pass values through these.
+let TD_SEQ: u64 = 0;
+let TD_WHO: Uint8Array = new Uint8Array(0);
+let TD_NO_STRIKE = false;
+function takedownAs(): void {
+  directly(); authorize(STORIES);
+  c().takedown_segment(new stories.takedown_segment_arguments(1, TD_SEQ, COPYRIGHT, "notice 2026-004", TD_WHO, TD_NO_STRIKE));
+}
+function aim(seq: u64, who: Uint8Array, noStrike: bool): void {
+  TD_SEQ = seq; TD_WHO = who; TD_NO_STRIKE = noStrike;
+}
+
+const NEEDS_CHOICE = "STORIES: someone other than the writer changed this part; name who gets the strike, or choose no strike";
+const NOT_A_CHANGER = "STORIES: strike the part's writer or a wallet that changed it";
+
+describe("Moderation: a part nobody else changed strikes its writer", () => {
   beforeEach(() => { reset(); });
 
-  it("strikes the editor, not the writer, when an editor rewrote the part", () => {
+  it("strikes the writer automatically", () => {
     open(OPENING);
-    writerWrites(BOB, 1, "Bob writes a quiet scene by the sea.");     // 2
-    addEditor(1, CAROL);
-    rewrite(CAROL, 1, 2, "Carol pastes a line from a famous book");   // different words, about the same length
+    writerWrites(BOB, 1, "Bob pastes a paragraph from a novel.");   // 2
     takedown(1, 2);
-    expect(strikes(BOB)).toBe(0);
-    expect(strikes(CAROL)).toBe(1);
+    expect(strikes(BOB)).toBe(1);
+    expect(lastModeration().struck!).toStrictEqual(BOB);
+    expect(seg(1, 2).edited_by_others).toBe(false);
   });
 
-  it("cannot be used to block a writer: five rewrites block the editor instead", () => {
+  it("still strikes the writer automatically after the writer's own edits", () => {
+    open(OPENING);
+    writerWrites(BOB, 1, "Bob pastes teh opening of a novel.");     // 2
+    ownEdit(BOB, 1, 2, "Bob pastes the opening of a novel.");
+    expect(seg(1, 2).edited_by_others).toBe(false);
+    takedown(1, 2);
+    expect(strikes(BOB)).toBe(1);
+  });
+
+  it("strikes the writer when an editor only removed the hidden part", () => {
+    open(OPENING);
+    writerWrites(BOB, 1, "Bob pastes a paragraph from a novel.");   // 2
+    addEditor(1, CAROL);
+    hide(STORIES, 1, 2, true);
+    directly(); authorize(CAROL); allowCalls(1);
+    c().remove_segment(new stories.remove_segment_arguments(CAROL, 1, 2));
+    checkpoint();
+    takedown(1, 2);
+    expect(strikes(BOB)).toBe(1);
+    expect(strikes(CAROL)).toBe(0);
+  });
+});
+
+describe("Moderation: once someone else changed a part, the admin decides", () => {
+  beforeEach(() => { reset(); });
+
+  it("refuses a takedown with no choice, and strikes nobody", () => {
+    open(OPENING);
+    writerWrites(BOB, 1, "Bob writes an honest paragraph.");        // 2
+    revise(CAROL, 1, 2, "Carol plants a copied paragraph");
+    expect(seg(1, 2).author!).toStrictEqual(BOB);
+    expect(seg(1, 2).edited_by_others).toBe(true);
+    aim(2, new Uint8Array(0), false);
+    fails(() => { takedownAs(); }, NEEDS_CHOICE);
+    expect(seg(1, 2).taken_down).toBe(false);
+    expect(strikes(BOB)).toBe(0);
+    expect(strikes(CAROL)).toBe(0);
+  });
+
+  it("strikes the wallet that planted the words when the admin names it (AB-001)", () => {
+    open(OPENING);
+    writerWrites(BOB, 1, "Bob writes an honest paragraph.");        // 2
+    revise(CAROL, 1, 2, "Carol plants a copied paragraph");
+    takedownStriking(1, 2, CAROL);
+    expect(strikes(BOB)).toBe(0);
+    expect(strikes(CAROL)).toBe(1);
+    const ev = lastModeration();
+    expect(ev.author!).toStrictEqual(BOB);
+    expect(ev.struck!).toStrictEqual(CAROL);
+  });
+
+  it("lets the admin strike the writer after someone else's typo fix (AB-029)", () => {
+    open(OPENING);
+    writerWrites(BOB, 1, "Bob pastes teh opening page of a novel.");   // 2
+    revise(ALICE, 1, 2, "Bob pastes the opening page of a novel.");
+    takedownStriking(1, 2, BOB);
+    expect(strikes(BOB)).toBe(1);
+    expect(strikes(ALICE)).toBe(0);
+    expect(lastModeration().struck!).toStrictEqual(BOB);
+  });
+
+  it("lets the admin strike a wallet whose change only cut words (AB-028)", () => {
+    open(OPENING);
+    writerWrites(BOB, 1, "My grandmother said: do not ever steal, and never lie.");   // 2
+    revise(CAROL, 1, 2, "My grandmother said: do steal, and lie.");
+    takedownStriking(1, 2, CAROL);
+    expect(strikes(CAROL)).toBe(1);
+    expect(strikes(BOB)).toBe(0);
+  });
+
+  it("remembers an earlier changer after someone else changes the part again (AB-028)", () => {
+    open(OPENING);
+    writerWrites(BOB, 1, "Bob writes an honest paragraph about his town.");   // 2
+    revise(DAVE, 1, 2, "Dave pastes teh first page of a novel here.");
+    revise(CAROL, 1, 2, "Dave pastes the first page of a novel here.");
+    takedownStriking(1, 2, DAVE);
+    expect(strikes(DAVE)).toBe(1);
+    expect(strikes(CAROL)).toBe(0);
+    expect(strikes(BOB)).toBe(0);
+  });
+
+  it("takes the part down with no strike when the admin chooses that", () => {
+    open(OPENING);
+    writerWrites(BOB, 1, "Bob writes an honest paragraph.");        // 2
+    revise(CAROL, 1, 2, "Bob writes an honest paragraph!");
+    takedownNoStrike(1, 2);
+    expect(seg(1, 2).taken_down).toBe(true);
+    expect(strikes(BOB)).toBe(0);
+    expect(strikes(CAROL)).toBe(0);
+    expect(lastModeration().struck!.length).toBe(0);
+  });
+
+  it("refuses a wallet that never changed the part, and a wallet named together with no strike", () => {
+    open(OPENING);
+    writerWrites(BOB, 1, "Bob pastes a paragraph from a novel.");   // 2
+    revise(CAROL, 1, 2, "Bob pastes a paragraph from a novel");
+    aim(2, DAVE, false);
+    fails(() => { takedownAs(); }, NOT_A_CHANGER);
+    aim(2, ALICE, false);
+    fails(() => { takedownAs(); }, NOT_A_CHANGER);
+    aim(2, CAROL, true);
+    fails(() => { takedownAs(); }, "STORIES: name a wallet to strike or choose no strike, not both");
+    expect(seg(1, 2).taken_down).toBe(false);
+    expect(strikes(BOB) + strikes(CAROL) + strikes(DAVE)).toBe(0);
+  });
+
+  it("cannot be used to block a writer: five planted parts block the planter, not the writer", () => {
     open(OPENING);
     writerWrites(BOB, 1, "Bob writes the first of five scenes.");    // 2
     writerWrites(BOB, 1, "Bob writes the second of five scenes.");   // 3
     writerWrites(BOB, 1, "Bob writes the third of five scenes.");    // 4
     writerWrites(BOB, 1, "Bob writes the fourth of five scenes.");   // 5
     writerWrites(BOB, 1, "Bob writes the fifth of five scenes.");    // 6
-    addEditor(1, CAROL);
-    rewrite(CAROL, 1, 2, "Carol pastes page one of a novel here.");
-    rewrite(CAROL, 1, 3, "Carol pastes page two of a novel here..");
-    rewrite(CAROL, 1, 4, "Carol pastes page three of a novel..");
-    rewrite(CAROL, 1, 5, "Carol pastes page four of a novel...");
-    rewrite(CAROL, 1, 6, "Carol pastes page five of a novel...");
-    for (let seq: u64 = 2; seq <= 6; seq++) takedown(1, seq);
+    revise(CAROL, 1, 2, "Carol pastes page one of a novel here.");
+    revise(CAROL, 1, 3, "Carol pastes page two of a novel here..");
+    revise(CAROL, 1, 4, "Carol pastes page three of a novel..");
+    revise(CAROL, 1, 5, "Carol pastes page four of a novel...");
+    revise(CAROL, 1, 6, "Carol pastes page five of a novel...");
+    for (let seq: u64 = 2; seq <= 6; seq++) takedownStriking(1, seq, CAROL);
     expect(c().get_account_status(new stories.get_account_status_arguments(BOB)).blocked).toBe(false);
     expect(c().get_account_status(new stories.get_account_status_arguments(CAROL)).blocked).toBe(true);
     writerWrites(BOB, 1, "Bob can still write after all of this.");
     expect(story(1).segment_count).toBe(7);
   });
 
-  it("strikes the opener who rewrote a writer's part in the final edit", () => {
+  it("needs a choice after the opener changed a writer's part in the final edit, and can strike the opener", () => {
     open(OPENING);                                                     // 1: 28
     const line = "Bob writes a scene for the final edit.";             // 2: 38
     writerWrites(BOB, 1, line);
@@ -739,125 +899,15 @@ describe("Moderation: a takedown strikes whoever put the words there (AB-001)", 
     closeStory(1);
     const swapped = "Alice swaps in a page from a novel....";
     batch(1, [keep(1), new stories.final_item(2, stories.final_mode.FINAL_EDITED, swapped, <u64>swapped.length)]);
-    takedown(1, 2);
+    expect(seg(1, 2).edited_by_others).toBe(true);
+    aim(2, new Uint8Array(0), false);
+    fails(() => { takedownAs(); }, NEEDS_CHOICE);
+    takedownStriking(1, 2, ALICE);
     expect(strikes(BOB)).toBe(0);
     expect(strikes(ALICE)).toBe(1);
   });
 
-  it("still strikes the editor after they rewrote the part and then removed it", () => {
-    open(OPENING);
-    writerWrites(BOB, 1, "Bob writes a quiet scene by the sea.");
-    addEditor(1, CAROL);
-    rewrite(CAROL, 1, 2, "Carol pastes a line from a famous book");
-    directly(); authorize(CAROL); allowCalls(1);
-    c().remove_segment(new stories.remove_segment_arguments(CAROL, 1, 2));
-    checkpoint();
-    takedown(1, 2);
-    expect(strikes(BOB)).toBe(0);
-    expect(strikes(CAROL)).toBe(1);
-  });
-
-  it("strikes the writer when nobody rewrote the part, even if an editor removed it", () => {
-    open(OPENING);
-    writerWrites(BOB, 1, "Bob pastes a paragraph from a novel.");
-    addEditor(1, CAROL);
-    directly(); authorize(CAROL); allowCalls(1);
-    c().remove_segment(new stories.remove_segment_arguments(CAROL, 1, 2));
-    checkpoint();
-    takedown(1, 2);
-    expect(strikes(BOB)).toBe(1);
-    expect(strikes(CAROL)).toBe(0);
-  });
-
-  it("records the rewriter on the part and the struck wallet in the event", () => {
-    open(OPENING);
-    writerWrites(BOB, 1, "Bob writes a quiet scene by the sea.");     // 2
-    openerWrites(1, "Alice writes a scene of her own here.");          // 3
-    addEditor(1, CAROL);
-    expect(seg(1, 2).text_by).toBeNull();
-    rewrite(CAROL, 1, 2, "Carol pastes a line from a famous book");
-    expect(seg(1, 2).author!).toStrictEqual(BOB);
-    expect(seg(1, 2).text_by!).toStrictEqual(CAROL);
-    rewrite(ALICE, 1, 3, "Alice fixes a typo in her own scene..");    // a writer editing their own part
-    expect(seg(1, 3).text_by).toBeNull();
-    takedown(1, 2);
-    const ev = lastModeration();
-    expect(ev.author!).toStrictEqual(BOB);
-    expect(ev.struck!).toStrictEqual(CAROL);
-    takedown(1, 3);
-    expect(lastModeration().struck!).toStrictEqual(ALICE);
-    expect(strikes(ALICE)).toBe(1);
-  });
-});
-
-// ---------- AB-023: only adding or replacing words moves the strike ----------
-
-function takedownStriking(id: u64, seq: u64, who: Uint8Array): void {
-  directly(); authorize(STORIES);
-  c().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-002", who));
-  checkpoint();
-}
-
-describe("Moderation: the strike goes to whoever wrote the live text (AB-023)", () => {
-  beforeEach(() => { reset(); });
-
-  it("keeps the writer as owner after an editor trims one character", () => {
-    open(OPENING);
-    writerWrites(BOB, 1, "Bob pastes a paragraph from a novel.");  // 2
-    addEditor(1, CAROL);
-    rewrite(CAROL, 1, 2, "Bob pastes a paragraph from a novel");   // the full stop removed
-    expect(seg(1, 2).text_by).toBeNull();
-    takedown(1, 2);
-    expect(strikes(BOB)).toBe(1);
-    expect(strikes(CAROL)).toBe(0);
-    expect(lastModeration().struck!).toStrictEqual(BOB);
-  });
-
-  it("moves ownership to an editor who swaps a word", () => {
-    open(OPENING);
-    writerWrites(BOB, 1, "Bob writes a quiet scene by the sea.");  // 2
-    addEditor(1, CAROL);
-    rewrite(CAROL, 1, 2, "Bob writes a quiet scene by the bay.");
-    expect(seg(1, 2).text_by!).toStrictEqual(CAROL);
-    takedown(1, 2);
-    expect(strikes(BOB)).toBe(0);
-    expect(strikes(CAROL)).toBe(1);
-  });
-
-  it("moves ownership to the opener who overwrites a writer's part in a public story", () => {
-    open(OPENING);
-    expect(story(1).visibility).toBe(PUBLIC);
-    writerWrites(BOB, 1, "Bob writes a quiet scene by the sea.");  // 2
-    rewrite(ALICE, 1, 2, "Alice puts in a page from a novel...");
-    expect(seg(1, 2).text_by!).toStrictEqual(ALICE);
-    takedown(1, 2);
-    expect(strikes(BOB)).toBe(0);
-    expect(strikes(ALICE)).toBe(1);
-  });
-
-  it("still strikes the editor who replaced the words (the AB-001 case)", () => {
-    open(OPENING);
-    writerWrites(BOB, 1, "Bob writes an honest paragraph.");       // 2
-    addEditor(1, CAROL);
-    rewrite(CAROL, 1, 2, "Cara plants a copied paragraph");
-    takedown(1, 2);
-    expect(strikes(BOB)).toBe(0);
-    expect(strikes(CAROL)).toBe(1);
-  });
-
-  it("keeps the rewriter as owner when someone else later only trims", () => {
-    open(OPENING);
-    writerWrites(BOB, 1, "Bob writes a quiet scene by the sea.");  // 2
-    addEditor(1, CAROL);
-    rewrite(CAROL, 1, 2, "Carol pastes a line from a famous book");
-    rewrite(ALICE, 1, 2, "Carol pastes a line from a famous");
-    expect(seg(1, 2).text_by!).toStrictEqual(CAROL);
-    takedown(1, 2);
-    expect(strikes(ALICE)).toBe(0);
-    expect(strikes(CAROL)).toBe(1);
-  });
-
-  it("keeps the writer as owner after a trim in the final edit", () => {
+  it("can strike a finalizer whose final edit only cut words (AB-028)", () => {
     open(OPENING);                                                     // 1: 28
     const line = "Bob writes a scene for the final edit.";             // 2: 38
     writerWrites(BOB, 1, line);
@@ -866,40 +916,9 @@ describe("Moderation: the strike goes to whoever wrote the live text (AB-023)", 
     closeStory(1);
     const trimmed = "Bob writes a scene for the final edit";
     batch(1, [keep(1), new stories.final_item(2, stories.final_mode.FINAL_EDITED, trimmed, <u64>trimmed.length)]);
-    expect(seg(1, 2).text_by).toBeNull();
-    takedown(1, 2);
-    expect(strikes(BOB)).toBe(1);
-    expect(strikes(ALICE)).toBe(0);
-  });
-
-  it("lets the admin strike the writer instead of the current owner", () => {
-    open(OPENING);
-    writerWrites(BOB, 1, "Bob writes a quiet scene by the sea.");  // 2
-    addEditor(1, CAROL);
-    rewrite(CAROL, 1, 2, "Bob writes a quiet scene by the bay.");
-    takedownStriking(1, 2, BOB);
-    expect(strikes(BOB)).toBe(1);
-    expect(strikes(CAROL)).toBe(0);
-    expect(lastModeration().struck!).toStrictEqual(BOB);
-  });
-
-  it("refuses an admin strike on anyone but the writer or the current owner", () => {
-    open(OPENING);
-    writerWrites(BOB, 1, "Bob pastes a paragraph from a novel.");  // 2
-    addEditor(1, CAROL);
-    rewrite(CAROL, 1, 2, "Bob pastes a paragraph from a novel");   // a trim: Bob still owns it
-    fails(() => {
-      directly(); authorize(STORIES);
-      c().takedown_segment(new stories.takedown_segment_arguments(1, 2, COPYRIGHT, "", CAROL));
-    }, "STORIES: strike the part's writer or the wallet whose words are live");
-    fails(() => {
-      directly(); authorize(STORIES);
-      c().takedown_segment(new stories.takedown_segment_arguments(1, 2, COPYRIGHT, "", DAVE));
-    }, "STORIES: strike the part's writer or the wallet whose words are live");
-    expect(seg(1, 2).taken_down).toBe(false);
-    takedownStriking(1, 2, BOB);
-    expect(strikes(BOB)).toBe(1);
-    expect(strikes(CAROL)).toBe(0);
+    takedownStriking(1, 2, ALICE);
+    expect(strikes(ALICE)).toBe(1);
+    expect(strikes(BOB)).toBe(0);
   });
 });
 

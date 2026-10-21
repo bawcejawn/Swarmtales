@@ -78,10 +78,11 @@
  *   node deploy/deploy.js set-moderation --admin <addr> --stories <addr> --moderator <addr|off> [--threshold 3] [--strikes 5]
  *       (--strikes: takedowns before a wallet is blocked, 1 to 20 (default 5). Change it at any time)
  *   node deploy/deploy.js hide --actor <admin or moderator addr> --stories <addr> --story <id> --seq <n> --reason copyright|duplicate|spam|illegal|other [--note "..."] [--unhide]
- *   node deploy/deploy.js takedown --admin <addr> --stories <addr> --story <id> --seq <n> --reason copyright|duplicate|spam|illegal|other --note "notice reference" [--strike <addr>]
- *       (permanent: clears the part's text from contract storage. No Ink refund. One strike for whoever wrote the
- *        live text: the writer, or the opener or editor who last added or replaced words. --strike names the
- *        other one instead; the contract accepts only the part's writer or that current owner)
+ *   node deploy/deploy.js takedown --admin <addr> --stories <addr> --story <id> --seq <n> --reason copyright|duplicate|spam|illegal|other --note "notice reference" [--strike <addr> | --no-strike]
+ *       (permanent: clears the part's text and its kept versions from contract storage. No Ink refund. It first
+ *        prints the writer, who else changed the part and every kept version. A part nobody else changed is one
+ *        strike for its writer. Once someone else changed it, it stops until you choose: --strike the writer or
+ *        a wallet that changed it, or --no-strike)
  *   node deploy/deploy.js block --admin <addr> --stories <addr> --account <addr> [--note "..."] [--unblock]
  * Common flags: --network testnet|mainnet  --rpc <https url>
  */
@@ -1118,17 +1119,47 @@ async function cmdTakedown(args) {
   const note = f.note === undefined || f.note === true ? "" : String(f.note);
   if (note.length > 200) lib.fail("--note must be at most 200 characters.");
   const strike = f.strike === undefined ? "" : lib.requireAddress(f.strike, "strike");
+  const noStrike = f["no-strike"] === true;
   const { net, provider } = await connect(f);
-  const signer = await getSigner(provider, admin, "the admin wallet");
   const { Contract } = koilib();
   const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+
+  // Show who could get the strike before any key is asked for (AB-029). The
+  // takedown wipes the kept versions, so this is the last easy look at them.
+  const { result: seg } = await storiesC.functions.get_segment({ story_id: storyId, seq });
+  if (!seg || !seg.author) lib.fail("Story " + storyId + " has no part " + seq + ".");
+  const { result: kept } = await storiesC.functions.get_versions({ story_id: storyId, seq });
+  const versions = (kept && kept.values) || [];
+  const who = lib.takedownStrike(seg, versions, strike, noStrike);
+  console.log("Writer:            " + who.writer);
+  console.log("Changed by others: " + (who.changed ? (who.changers.join(", ") || "yes") : "no"));
+  if (versions.length) {
+    console.log("Versions, oldest first:");
+    for (const line of lib.versionHistory(versions)) console.log(line);
+  }
+  if (who.needsChoice) {
+    lib.fail(
+      "Someone other than the writer changed this part, so the contract will not pick who gets the strike.\n" +
+      "Nothing was sent. Compare the versions above: strike the wallet whose change made the text infringing.\n" +
+      "A cut can change the meaning as much as new words, and a typo fix alone is no reason for a strike.\n" +
+      "The same history is public on a block explorer: each stories.revise_event for this part (\"by\" is who\n" +
+      "changed it), and for a change in the final edit, this part's item in the finalizer's submit_final_batch.\n" +
+      "Then run this command again with one of:\n" +
+      [who.writer, ...who.changers].map((a) => "  --strike " + a).join("\n") + "\n" +
+      "  --no-strike   (take the part down without striking anyone)");
+  }
+  if (strike && strike !== who.writer && !who.changers.includes(strike)) {
+    console.log("--strike " + strike + " is not the writer or a wallet seen above. The contract accepts it only if that wallet changed this part; the dry run checks this before anything is sent.");
+  }
+
+  const signer = await getSigner(provider, admin, "the admin wallet");
   const op = await storiesC.encodeOperation({
     name: "takedown_segment",
-    args: { story_id: storyId, seq, reason, note, strike },
+    args: { story_id: storyId, seq, reason, note, strike, no_strike: noStrike },
   });
   const txId = await dryRunThenSend(signer, provider, net, [op],
-    "PERMANENT TAKEDOWN of story " + storyId + " part " + seq + ": its text is cleared and no Ink is refunded" + (note ? " (" + note + ")" : "") +
-    "; strike for " + (strike || "whoever wrote the live text"));
+    "PERMANENT TAKEDOWN of story " + storyId + " part " + seq + ": its text is cleared, its versions are wiped and no Ink is refunded" +
+    (note ? " (" + note + ")" : "") + "; " + (noStrike ? "no strike" : "strike for " + (strike || who.writer)));
   console.log("Send back: the transaction id (" + txId + ").");
 }
 

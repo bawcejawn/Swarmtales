@@ -133,10 +133,27 @@ function addEditor(id: u64, who: Uint8Array): void {
   new Stories().set_editor(new stories.set_editor_arguments(ALICE, id, who, true));
   checkpoint();
 }
-function edit(as: Uint8Array, id: u64, seq: u64, text: string): void {
+// What revise_part charges: everything between the common start and the
+// common end counts, at least 10, times 2, doubling with every change.
+function changePrice(oldText: string, newText: string, versionCount: u32): u64 {
+  let pre = 0;
+  const maxPre = min<i32>(oldText.length, newText.length);
+  while (pre < maxPre && oldText.charCodeAt(pre) == newText.charCodeAt(pre)) pre++;
+  let suf = 0;
+  const maxSuf = min<i32>(oldText.length, newText.length) - pre;
+  while (suf < maxSuf && oldText.charCodeAt(oldText.length - 1 - suf) == newText.charCodeAt(newText.length - 1 - suf)) suf++;
+  const changed = <u64>(oldText.length - pre - suf + newText.length - pre - suf);
+  const units: u64 = changed < 10 ? 10 : changed;
+  const changes: u32 = versionCount == 0 ? 0 : versionCount - 1;
+  return units * ((<u64>1) << (<u64>changes + 1));
+}
+// Someone else changes a part: the paid revise_part.
+function revise(as: Uint8Array, id: u64, seq: u64, text: string): void {
+  const s = segment(id, seq);
+  const price = changePrice(s.text != null ? s.text! : "", text, s.version_count);
   authorize(as);
-  allowCalls(1);
-  new Stories().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length));
+  results([writer(), okCall(), okCall()]);
+  new Stories().revise_part(new stories.revise_part_arguments(as, id, seq, text, price, true, 0, "", false));
   checkpoint();
 }
 function setAllowed(actor: Uint8Array, id: u64, who: Uint8Array, allowed: bool): void {
@@ -149,6 +166,18 @@ function takedown(id: u64, seq: u64): void {
   new Stories().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-001"));
   checkpoint();
 }
+function takedownStriking(id: u64, seq: u64, who: Uint8Array): void {
+  authorize(STORIES);
+  new Stories().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-001", who));
+  checkpoint();
+}
+let TD_ID: u64 = 0;   // closures cannot capture locals in AssemblyScript
+let TD_SEQ: u64 = 0;
+function takedownNoChoice(): void {
+  authorize(STORIES);
+  new Stories().takedown_segment(new stories.takedown_segment_arguments(TD_ID, TD_SEQ, COPYRIGHT, "notice 2026-001"));
+}
+const NEEDS_CHOICE = "STORIES: someone other than the writer changed this part; name who gets the strike, or choose no strike";
 function fails(fn: () => void, message: string): void {
   expect(fn).toThrow();
   const got = MockVM.getErrorMessage();
@@ -175,46 +204,48 @@ describe("AUDIT AB-022 [NEW FINDING]: the AB-011 pool rule locks invite-only sto
   });
 });
 
-// Rule (owner's decision): the strike goes to whoever wrote the live text.
-// Ownership moves to an editor only when they add or replace words; an
-// edit that only deletes characters leaves the owner unchanged.
-describe("AUDIT AB-023 [NEW FINDING]: a one-character edit moves the takedown strike off the writer", () => {
+// Rule (owner's decision, after AB-028 and AB-029): a part nobody else
+// changed strikes its writer. Once someone else changed it (revise_part),
+// even by one character, the admin compares the versions and names who
+// gets the strike. A trim or a typo fix never moves a strike by itself.
+describe("AUDIT AB-023: a one-character change by someone else", () => {
   beforeEach(() => { reset(); configure(); });
 
-  it("still strikes the writer whose words were taken down when an editor only trimmed them", () => {
+  it("does not take the strike off the writer by itself; the admin decides", () => {
     const id = openShort();
-    addEditor(id, CARA);
     const seq = writeAsWriter(BOB, id, "Bob pastes a paragraph from a novel.");
-    // Cara, an editor (any wallet the opener names), removes the final full stop.
-    edit(CARA, id, seq, "Bob pastes a paragraph from a novel");
-    expect(segment(id, seq).text_by).toBeNull("AB-023: a trim made the editor the owner of the writer's words");
-    takedown(id, seq);
-    expect(strikes(BOB)).toBe(1, "AB-023: the writer of the infringing words got no strike; an editor's one-character trim took it");
-    expect(strikes(CARA)).toBe(0, "AB-023: the editor who only trimmed was struck");
+    // Cara, another writer, pays to remove the final full stop.
+    revise(CARA, id, seq, "Bob pastes a paragraph from a novel");
+    TD_ID = id; TD_SEQ = seq;
+    fails(() => { takedownNoChoice(); }, NEEDS_CHOICE);
+    takedownStriking(id, seq, BOB);
+    expect(strikes(BOB)).toBe(1, "AB-023: the writer of the infringing words could not be struck");
+    expect(strikes(CARA)).toBe(0, "AB-023: the wallet that only trimmed was struck");
   });
 
-  it("moves the strike to an editor who swaps in a word", () => {
+  it("lets the admin strike someone who swapped in a word", () => {
     const id = openShort();
-    addEditor(id, CARA);
     const seq = writeAsWriter(BOB, id, "Bob writes a quiet scene by the sea.");
-    edit(CARA, id, seq, "Bob writes a quiet scene by the bay.");
-    takedown(id, seq);
-    expect(strikes(BOB)).toBe(0, "AB-023: the writer was struck for words an editor put there");
-    expect(strikes(CARA)).toBe(1, "AB-023: the editor who replaced words was not struck");
+    revise(CARA, id, seq, "Bob writes a quiet scene by the bay.");
+    takedownStriking(id, seq, CARA);
+    expect(strikes(BOB)).toBe(0, "AB-023: the writer was struck for words someone else put there");
+    expect(strikes(CARA)).toBe(1, "AB-023: the wallet that replaced words could not be struck");
   });
 });
 
-describe("AUDIT: the fixed strike rule still blocks framing (AB-001 regression)", () => {
+describe("AUDIT: the strike rule still blocks framing (AB-001 regression)", () => {
   beforeEach(() => { reset(); configure(); });
 
-  it("strikes the editor who replaced the words, not the writer", () => {
+  it("never strikes the writer by default for words someone else planted", () => {
     const id = openShort();
-    addEditor(id, CARA);
     const seq = writeAsWriter(BOB, id, "Bob writes an honest paragraph.");
-    edit(CARA, id, seq, "Cara plants a copied paragraph");
-    takedown(id, seq);
+    revise(CARA, id, seq, "Cara plants a copied paragraph");
+    TD_ID = id; TD_SEQ = seq;
+    fails(() => { takedownNoChoice(); }, NEEDS_CHOICE);
     expect(strikes(BOB)).toBe(0, "AB-001: the original writer was struck");
-    expect(strikes(CARA)).toBe(1, "AB-001: the editor who planted the text was not struck");
+    takedownStriking(id, seq, CARA);
+    expect(strikes(BOB)).toBe(0, "AB-001: the original writer was struck");
+    expect(strikes(CARA)).toBe(1, "AB-001: the wallet that planted the text was not struck");
   });
 });
 

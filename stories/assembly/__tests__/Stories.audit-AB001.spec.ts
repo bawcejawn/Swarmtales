@@ -216,30 +216,69 @@ const OPENING = "A lantern swung in the dark.";   // 28 characters
 
 // ---------- rights confirmation and Terms of Use ----------
 
+// What revise_part charges: everything between the common start and the
+// common end counts, at least 10, times 2, doubling with every change.
+function changePrice(oldText: string, newText: string, versionCount: u32): u64 {
+  let pre = 0;
+  const maxPre = min<i32>(oldText.length, newText.length);
+  while (pre < maxPre && oldText.charCodeAt(pre) == newText.charCodeAt(pre)) pre++;
+  let suf = 0;
+  const maxSuf = min<i32>(oldText.length, newText.length) - pre;
+  while (suf < maxSuf && oldText.charCodeAt(oldText.length - 1 - suf) == newText.charCodeAt(newText.length - 1 - suf)) suf++;
+  const changed = <u64>(oldText.length - pre - suf + newText.length - pre - suf);
+  const units: u64 = changed < 10 ? 10 : changed;
+  const changes: u32 = versionCount == 0 ? 0 : versionCount - 1;
+  return units * ((<u64>1) << (<u64>changes + 1));
+}
+function revise(who: Uint8Array, id: u64, seq: u64, text: string): void {
+  const s = seg(id, seq);
+  const price = changePrice(s.text != null ? s.text! : "", text, s.version_count);
+  directly(); authorize(who);
+  MockVM.setCallContractResults([writerAnswer(), okCall(), okCall()]);
+  c().revise_part(new stories.revise_part_arguments(who, id, seq, text, price, true, cfg().terms_version, "", false));
+  checkpoint();
+}
+let FAIL_ID: u64 = 0;
+function takedownDefault(): void {
+  directly(); authorize(STORIES);
+  c().takedown_segment(new stories.takedown_segment_arguments(FAIL_ID, 2, COPYRIGHT, "notice 2026-001"));
+}
+function takedownStriking(id: u64, seq: u64, who: Uint8Array): void {
+  directly(); authorize(STORIES);
+  c().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-001", who));
+  checkpoint();
+}
+
 describe("AUDIT AB-001: rewriting someone else's part must not frame them", () => {
   beforeEach(() => { reset(); setModerator(); });
 
-  it("gives the takedown strike to the editor who wrote the text, not the original writer", () => {
+  // Since the revise-and-book change, other wallets change a part with the
+  // paid revise_part, and the part stays its writer's. The contract no
+  // longer guesses who made the text: once someone else changed a part, a
+  // takedown waits for the admin to name who gets the strike.
+  it("never strikes the writer by default for text someone else planted, and the planter can be struck", () => {
     open(OPENING);
     const original = "Bob writes an honest, original paragraph.";
     writerWrites(BOB, 1, original);
     expect(seg(1, 2).author!).toStrictEqual(BOB);
 
-    // Alice (the opener) replaces Bob's words with different text of the SAME length.
+    // Alice (the opener) pays to replace Bob's words with different text of the SAME length.
     const planted = "Alice swaps in copied text of equal size.";
     expect(planted.length).toBe(original.length);
-    directly(); authorize(ALICE); allowCalls(2);
-    c().edit_segment(new stories.edit_segment_arguments(ALICE, 1, 2, planted, <u64>planted.length));
-    checkpoint();
+    revise(ALICE, 1, 2, planted);
     expect(seg(1, 2).text).toBe(planted);
+    expect(seg(1, 2).edited_by_others).toBe(true);
 
-    // The admin takes the part down for copyright.
-    takedown(1, 2);
+    // A takedown with no choice is refused, so Bob is not struck by default.
+    FAIL_ID = 1;
+    fails(() => { takedownDefault(); }, "STORIES: someone other than the writer changed this part; name who gets the strike, or choose no strike");
+    expect(seg(1, 2).taken_down).toBe(false);
 
+    // The admin compares the versions and strikes Alice.
+    takedownStriking(1, 2, ALICE);
     const bob = c().get_account_status(new stories.get_account_status_arguments(BOB));
     const alice = c().get_account_status(new stories.get_account_status_arguments(ALICE));
-    // SAFE behaviour: Bob did not write the infringing text.
     expect(bob.strikes).toBe(0, "AB-001: the original writer was struck for text the opener planted");
-    expect(alice.strikes).toBe(1, "AB-001: the editor who planted the text was not struck");
+    expect(alice.strikes).toBe(1, "AB-001: the wallet that planted the text could not be struck");
   });
 });

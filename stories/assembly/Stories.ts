@@ -8,12 +8,11 @@
 //     starter Ink, then Stories burns Ink for the opening text. One
 //     transaction: if any part fails, nothing happens.
 //   - Writing burns the writer's own Ink (Ink checks their signature).
-//   - Editors may rewrite (within the light-edit allowance), shorten or
-//     remove text while a story is OPEN. The ORIGINAL author is
-//     re-credited through Ink mint, reason REFUND, the only mint reason
-//     Stories is allowed. When anyone but the writer adds or replaces
-//     words, they are recorded on the part as the text's owner (text_by);
-//     an edit that only deletes text leaves the owner unchanged.
+//   - While a story is OPEN, a part's own writer may edit it (light
+//     edits) or remove it for free. Anyone else who can write in the story
+//     changes it with revise_part, which costs Ink and keeps every
+//     version. The ORIGINAL author is re-credited through Ink mint, reason
+//     REFUND, the only mint reason Stories is allowed.
 //   - Closing (opener pays the close fee through Shop), the final edit
 //     in ordered batches, surviving characters, and finalize.
 //   - The 3-open-projects limit, the promo trial, private allow-lists
@@ -35,11 +34,14 @@
 //     cannot rejoin with an invite; only they can add it back.
 //   - The admin alone may take a part down for good, at any stage. Its
 //     text is cleared from contract storage and no Ink is refunded.
-//   - Every takedown is a strike against the owner of the live words: the
-//     writer, or the opener, editor or finalizer who last added or replaced
-//     words in the part (so nobody can rewrite a rival's part to get them
-//     blocked, and a trim cannot move a writer's strike onto an editor).
-//     The admin may name the writer or the owner instead. At the strike
+//   - A takedown of a part nobody else changed is a strike against its
+//     writer. Once anyone else changed it (revise_part or the final edit,
+//     even a typo fix or a cut), the contract does not guess: the admin
+//     compares the versions and names who gets the strike (the writer or
+//     any wallet that changed the part), or chooses no strike. So nobody
+//     can plant text in a rival's part to get them blocked, whoever made
+//     the text can always be struck, and a typo fix never costs a strike
+//     by itself (AB-001, AB-028, AB-029). At the strike
 //     limit (default 5, the admin can set 1 to 20) the wallet is blocked
 //     from opening, writing and reporting (the repeat-infringer policy).
 //     The admin can also block or unblock by hand.
@@ -65,8 +67,8 @@
 //   - The admin cannot move or burn Ink, refund outside the rules, or
 //     finalize except under the admin rule. It edits text only as the
 //     finalizer after admin_take_over, under the same light-edit limits
-//     (recorded in text_by); otherwise it can only remove text through a
-//     recorded takedown.
+//     (recorded as a change to the part); otherwise it can only remove text
+//     through a recorded takedown.
 //   - The moderator can only hide and unhide. It cannot remove text,
 //     touch Ink, or change any setting.
 //
@@ -130,6 +132,7 @@ const READING_COUNT_SPACE_ID: u32 = 24;
 const READING_LIST_SPACE_ID: u32 = 25;
 const VERSIONS_SPACE_ID: u32 = 26;
 const REMOVED_SPACE_ID: u32 = 27;
+const PART_EDITORS_SPACE_ID: u32 = 28;
 const MAX_SUMMARY: i32 = 1500;
 const VERSION_ORIGINAL: u32 = 1;
 const VERSION_CHANGED: u32 = 2;
@@ -245,6 +248,9 @@ export class Stories {
   // (story, wallet) the opener or an editor took off the allow-list: an
   // invite cannot bring it back, only set_allowed (AB-010).
   removed: Storage.Map<Uint8Array, stories.boole>;
+  // (story, part, wallet) that changed someone else's part, cuts included:
+  // the admin may strike any of them on a takedown (AB-028).
+  partEditors: Storage.Map<Uint8Array, stories.boole>;
   // How many removed segments this call may still fold in (fix M2).
   skipBudget: u32 = MAX_SKIP_PER_CALL;
 
@@ -286,6 +292,7 @@ export class Stories {
     this.readingList = new Storage.Map(id, READING_LIST_SPACE_ID, stories.uint64.decode, stories.uint64.encode, null);
     this.versions = new Storage.Map(id, VERSIONS_SPACE_ID, stories.segment_version.decode, stories.segment_version.encode, null);
     this.removed = new Storage.Map(id, REMOVED_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
+    this.partEditors = new Storage.Map(id, PART_EDITORS_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
   }
 
   // ===================================================================
@@ -796,7 +803,6 @@ export class Stories {
 
     const refund = seg.charged > newCost ? seg.charged - newCost : 0;
     const now = this.now();
-    seg.text_by = this.rewriter(seg, this.text(seg.text), text, editor);
     seg.text = text;
     seg.text_hash = this.sha256(StringBytes.stringToBytes(text));
     seg.current_cost = newCost;
@@ -989,7 +995,7 @@ export class Stories {
         units = SafeMath.add(units, newCost);
         System.require(units <= MAX_BATCH_UNITS, "STORIES: batch text is over 20,000 Ink units");
         refund = seg.charged > newCost ? seg.charged - newCost : 0;
-        seg.text_by = this.rewriter(seg, this.text(seg.text), text, finalizer);
+        this.recordChanger(key, seg, finalizer);
         seg.text = text;
         seg.text_hash = this.sha256(StringBytes.stringToBytes(text));
         seg.current_cost = newCost;
@@ -1178,6 +1184,7 @@ export class Stories {
       seg.version_count = 1;
     }
     const version = seg.version_count + 1;
+    this.recordChanger(key, seg, writer);
     const owner = seg.author!;
 
     // Removed letters go back to whoever paid for them.
@@ -1371,15 +1378,25 @@ export class Stories {
     const note = this.requireNote(args.note);
     const fingerprint = seg.text_hash != null ? seg.text_hash! : new Uint8Array(0);
     const now = this.now();
-    // The strike goes to whoever wrote the live words: the current owner
-    // (text_by, else the writer), AB-001 and AB-023. The admin may name
-    // the other one instead, but only the writer or the current owner.
-    const owner = seg.text_by != null && seg.text_by!.length == ADDRESS_LENGTH ? seg.text_by! : seg.author!;
-    let struck = owner;
-    if (args.strike != null && args.strike!.length > 0) {
+    // Who gets the strike (AB-001, AB-028, AB-029). A part nobody else
+    // changed strikes its writer. Once anyone else changed it, even with a
+    // one-letter fix or a cut, no rule can tell who made it infringing, so
+    // the admin compares the versions and names the writer or a wallet that
+    // changed the part, or chooses no strike. Removing a part is not a
+    // change of its words. version_count also catches parts revised before
+    // edited_by_others existed (it is also set when the writer revises their own).
+    const changed = seg.edited_by_others || seg.version_count > 0;
+    const named = args.strike != null && args.strike!.length > 0;
+    System.require(!(named && args.no_strike), "STORIES: name a wallet to strike or choose no strike, not both");
+    let struck: Uint8Array = new Uint8Array(0);
+    if (named) {
       struck = args.strike!;
-      System.require(Arrays.equal(struck, seg.author!) || Arrays.equal(struck, owner),
-        "STORIES: strike the part's writer or the wallet whose words are live");
+      const changer = this.partEditors.get(this.join(key, struck))!.value;
+      System.require(Arrays.equal(struck, seg.author!) || changer,
+        "STORIES: strike the part's writer or a wallet that changed it");
+    } else if (!args.no_strike) {
+      System.require(!changed, "STORIES: someone other than the writer changed this part; name who gets the strike, or choose no strike");
+      struck = seg.author!;
     }
 
     if (seg.status == stories.segment_status.SEGMENT_ACTIVE) {
@@ -1417,11 +1434,11 @@ export class Stories {
     seg.moderation_reason = args.reason;
     this.segments.put(key, seg);
     this.putStory(args.story_id, st);
-    this.addStrike(struck, admin);
+    if (struck.length > 0) this.addStrike(struck, admin);
 
     const ev = new stories.moderation_event(args.story_id, args.seq, stories.moderation_action.ACTION_TAKEDOWN,
       args.reason, admin, seg.author, note, fingerprint, struck);
-    const impacted = Arrays.equal(struck, seg.author!) ? [seg.author!] : [seg.author!, struck];
+    const impacted = struck.length == 0 || Arrays.equal(struck, seg.author!) ? [seg.author!] : [seg.author!, struck];
     System.event("stories.moderation_event", Protobuf.encode(ev, stories.moderation_event.encode), impacted);
     this.leave();
     return new stories.empty_object();
@@ -1856,23 +1873,14 @@ export class Stories {
     this.callOut(ink, INK_MINT_ENTRY, Protobuf.encode(mint, stories.ink_mint_call.encode), [author], "STORIES: Ink refund failed");
   }
 
-  // Who the part's words belong to after `by` changed `oldText` to
-  // `newText` (AB-023). An edit that only deletes text leaves the owner as
-  // it was. One that adds or replaces words makes `by` the owner: nobody
-  // extra when that is the writer, otherwise `by`.
-  private rewriter(seg: stories.segment, oldText: string, newText: string, by: Uint8Array): Uint8Array | null {
-    if (this.onlyDeletes(oldText, newText)) return seg.text_by;
-    return Arrays.equal(by, seg.author!) ? null : by;
-  }
-
-  // True when `newText` can be made by removing characters from `oldText`.
-  private onlyDeletes(oldText: string, newText: string): bool {
-    if (newText.length > oldText.length) return false;
-    let j = 0;
-    for (let i = 0; i < oldText.length && j < newText.length; i++) {
-      if (oldText.charCodeAt(i) == newText.charCodeAt(j)) j++;
-    }
-    return j == newText.length;
+  // Remembers that `by` changed someone else's part, even only by cutting
+  // words, so the admin can strike them on a takedown (AB-028). One entry
+  // per part and wallet: nothing grows and nothing is looped over. The
+  // writer can always be struck, so their own changes are not recorded.
+  private recordChanger(key: Uint8Array, seg: stories.segment, by: Uint8Array): void {
+    if (Arrays.equal(by, seg.author!)) return;
+    this.partEditors.put(this.join(key, by), new stories.boole(true));
+    seg.edited_by_others = true;
   }
 
   // Removing a part refunds it unless the admin or the moderator hid it.

@@ -201,12 +201,12 @@ message segment {
   string source_note = 24;       // added by the copy checker: where parts of this text also appear (does not hide it)
   bool restored = 25;            // brought back by the story's opener or an editor after being hidden
   uint32 version_count = 26;     // 0: never revised. Otherwise versions 1..version_count are kept (get_versions)
-  // Who supplied the current words when an opener, editor or finalizer
-  // added or replaced words in the part (empty while the text is the
-  // writer's own). An edit that only deletes text leaves it unchanged. Kept
-  // when the part is removed. A takedown strikes this wallet instead of the writer.
-  bytes text_by = 28 [(koinos.btype) = ADDRESS];
   bool hidden_by_reports = 27;   // hidden by writer reports alone, not the admin or the checker: refunded if removed (AB-012)
+  reserved 28;                   // was text_by on the audit-fixes branch (never deployed)
+  // Someone other than the writer changed the text (revise_part or the final
+  // edit), even only by cutting words. A takedown then needs the admin to
+  // name who gets the strike, or to choose no strike.
+  bool edited_by_others = 29;
 }
 
 // One version of a part. Version 1 is the original text.
@@ -732,9 +732,11 @@ message takedown_segment_arguments {
   uint64 seq = 2 [jstype = JS_STRING];
   moderation_reason reason = 3;
   string note = 4;               // up to 200 characters, e.g. a notice reference
-  // Optional: the wallet to strike. Empty strikes the current owner of the
-  // text (text_by, else the writer). Otherwise it must be the writer or text_by.
+  // The wallet to strike: the writer or any wallet that changed the part.
+  // Empty strikes the writer of a part nobody else changed; a part someone
+  // else changed needs a wallet here or no_strike.
   bytes strike = 5 [(koinos.btype) = ADDRESS];
+  bool no_strike = 6;            // take the part down without striking anyone (leave strike empty)
 }
 
 // @description Any wallet reports a part, once per part. Reports from wallets that have written on
@@ -1084,7 +1086,7 @@ message moderation_event {
   bytes author = 6 [(koinos.btype) = ADDRESS];
   string note = 7;
   bytes text_hash = 8;           // fingerprint of the text at the time
-  bytes struck = 9 [(koinos.btype) = ADDRESS];   // takedowns: the wallet that got the strike (the writer, or whoever rewrote the part)
+  bytes struck = 9 [(koinos.btype) = ADDRESS];   // takedowns: the wallet that got the strike; empty when the admin chose no strike
 }
 
 message citation_event {
