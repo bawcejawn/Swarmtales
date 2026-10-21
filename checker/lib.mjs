@@ -91,26 +91,40 @@ export class Index {
    * parts by `author` (a writer may reuse their own words). With `at`, only
    * parts written earlier count (AB-005): the later of two matching parts is
    * the copy, so the original is never flagged for a copy made after it.
+   * Parts with the same `at` do not count either (AB-024): see tieMatch.
    * Entries saved before `at` was kept count as earlier.
    */
   bestMatch(hashes, author, exceptKey, at) {
+    return this.match(hashes, author, exceptKey, (entry) => !at || !entry.at || entry.at < Number(at));
+  }
+
+  /**
+   * The best match among parts written at the same time as this one (same
+   * block or second, AB-024). Nobody can tell which came first, so such a
+   * match only ever gets a source note on both parts, never a hide.
+   */
+  tieMatch(hashes, author, exceptKey, at) {
+    if (!at) return null;
+    return this.match(hashes, author, exceptKey, (entry) => entry.at === Number(at));
+  }
+
+  match(hashes, author, exceptKey, include) {
     const counts = new Map();
-    const order = at ? partOrder(exceptKey, at) : null;
     for (const h of hashes) {
       const keys = this.byHash.get(h);
       if (!keys) continue;
       for (const key of keys) {
         if (key === exceptKey) continue;
         const entry = this.parts.get(key);
-        if (!entry || entry.author === author) continue;
-        if (order && entry.at && compareOrder(partOrder(key, entry.at), order) > 0) continue;
+        if (!entry || entry.author === author || !include(entry)) continue;
         counts.set(key, (counts.get(key) || 0) + 1);
       }
     }
     let best = null;
     for (const [key, shared] of counts) if (!best || shared > best.shared) best = { key, shared };
     if (!best) return null;
-    return { key: best.key, shared: best.shared, ratio: hashes.length ? best.shared / hashes.length : 0 };
+    const at = this.parts.get(best.key).at;
+    return { key: best.key, shared: best.shared, ratio: hashes.length ? best.shared / hashes.length : 0, at };
   }
 }
 

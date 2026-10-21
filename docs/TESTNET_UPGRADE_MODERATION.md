@@ -112,8 +112,16 @@ Then tell Stories who the moderator is (admin key):
 
 ```powershell
 $MODERATOR = "PASTE-MODERATOR-ADDRESS"
-node deploy/deploy.js set-moderation --admin $ADMIN --stories $STORIES --moderator $MODERATOR --threshold 3 --strikes 3
+node deploy/deploy.js set-moderation --admin $ADMIN --stories $STORIES --moderator $MODERATOR --threshold 3 --strikes 5
 ```
+
+`--strikes` is the strike limit: how many takedowns block a wallet. It starts at 5. The admin
+can change it from 1 to 20 at any time with `set-moderation`.
+
+> **Testnet contract already set up with 3?** This guide used to say `--strikes 3`, and the
+> contract keeps the value it was given, so a new default in the code doesn't change it. After
+> the next Stories upgrade, run `set-moderation` again with `--strikes 5` (same `--moderator`
+> and `--threshold` as before) and check `"strike_limit":5` in `status`.
 
 ## Step 7. Check
 
@@ -122,7 +130,7 @@ node deploy/deploy.js status --ink $INK --shop $SHOP --admin $ADMIN --stories $S
 ```
 
 **Expect** in `stories.get_config`: `"contribution_cap":10000`, `"terms_version":1`,
-`"moderator":"<your moderator address>"`, `"report_threshold":3`, `"strike_limit":3`.
+`"moderator":"<your moderator address>"`, `"report_threshold":3`, `"strike_limit":5`.
 **Expect** `ink burner flag for Stories (want true): {"value":true}` and
 `shop points at Stories (want <new>)` showing the new address.
 

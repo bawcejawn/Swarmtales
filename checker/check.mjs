@@ -17,6 +17,9 @@
  *          writer's part on SwarmTales;
  *        - a partial match is NOT hidden: it gets a public source note under
  *          the part ("Parts of this text also appear in …");
+ *        - a match with a part written at the same time (same block or
+ *          second) is NOT hidden: both parts get a source note, since
+ *          nobody can tell which came first;
  *        - a match with a source the writer cited is left alone;
  *        - a part the story's opener restored is never hidden again by the
  *          checker (it can still get a note).
@@ -365,6 +368,16 @@ async function main() {
         return "flagged";
       }
       await sourceNote(storyId, seq, seg, "About " + pct + "% of this text also appears in story " + srcStory + ", part " + srcSeq + ".");
+      return "flagged";
+    }
+    // Written at the same time as a matching part: nobody can tell which is
+    // the original, so both get a source note and neither is hidden (AB-024).
+    const tie = index.tieMatch(hashes, seg.author, key, Number(seg.created_at || 0));
+    if (tie && (isDuplicate(hashes, tie) || isPartialDuplicate(hashes, tie))) {
+      const [tieStory, tieSeq] = tie.key.split(":");
+      const pct = Math.round(tie.ratio * 100);
+      await sourceNote(storyId, seq, seg, "About " + pct + "% of this text also appears in story " + tieStory + ", part " + tieSeq + ", written at the same time.");
+      await sourceNote(Number(tieStory), Number(tieSeq), {}, "Much of this text also appears in story " + storyId + ", part " + seq + ", written at the same time.");
       return "flagged";
     }
     if (alsoWeb && String(seg.text).length >= WEB_MIN_CHARS && spendable.any()) {

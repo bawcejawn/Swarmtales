@@ -75,10 +75,13 @@
  *       (publishes a Terms of Use version: its sha256 and link go on chain. Every new part must then carry this version)
  *   node deploy/deploy.js new-moderator-key
  *       (makes a fresh key for the automated copy checker and prints it ONCE. Put it in a GitHub secret. Nothing is saved)
- *   node deploy/deploy.js set-moderation --admin <addr> --stories <addr> --moderator <addr|off> [--threshold 3] [--strikes 3]
+ *   node deploy/deploy.js set-moderation --admin <addr> --stories <addr> --moderator <addr|off> [--threshold 3] [--strikes 5]
+ *       (--strikes: takedowns before a wallet is blocked, 1 to 20 (default 5). Change it at any time)
  *   node deploy/deploy.js hide --actor <admin or moderator addr> --stories <addr> --story <id> --seq <n> --reason copyright|duplicate|spam|illegal|other [--note "..."] [--unhide]
- *   node deploy/deploy.js takedown --admin <addr> --stories <addr> --story <id> --seq <n> --reason copyright|duplicate|spam|illegal|other --note "notice reference"
- *       (permanent: clears the part's text from contract storage. No Ink refund. One strike for the writer)
+ *   node deploy/deploy.js takedown --admin <addr> --stories <addr> --story <id> --seq <n> --reason copyright|duplicate|spam|illegal|other --note "notice reference" [--strike <addr>]
+ *       (permanent: clears the part's text from contract storage. No Ink refund. One strike for whoever wrote the
+ *        live text: the writer, or the opener or editor who last added or replaced words. --strike names the
+ *        other one instead; the contract accepts only the part's writer or that current owner)
  *   node deploy/deploy.js block --admin <addr> --stories <addr> --account <addr> [--note "..."] [--unblock]
  * Common flags: --network testnet|mainnet  --rpc <https url>
  */
@@ -1070,7 +1073,7 @@ async function cmdSetModeration(args) {
   const moderator = off ? "" : lib.requireAddress(f.moderator, "moderator (or the word off)");
   const threshold = f.threshold === undefined ? 3 : Number(f.threshold);
   if (!Number.isInteger(threshold) || threshold < 1 || threshold > 20) lib.fail("--threshold must be 1 to 20.");
-  const strikes = f.strikes === undefined ? 3 : Number(f.strikes);
+  const strikes = f.strikes === undefined ? 5 : Number(f.strikes);
   if (!Number.isInteger(strikes) || strikes < 1 || strikes > 20) lib.fail("--strikes must be 1 to 20.");
   const { net, provider } = await connect(f);
   const signer = await getSigner(provider, admin, "the admin wallet");
@@ -1114,16 +1117,18 @@ async function cmdTakedown(args) {
   const reason = lib.requireReason(f.reason);
   const note = f.note === undefined || f.note === true ? "" : String(f.note);
   if (note.length > 200) lib.fail("--note must be at most 200 characters.");
+  const strike = f.strike === undefined ? "" : lib.requireAddress(f.strike, "strike");
   const { net, provider } = await connect(f);
   const signer = await getSigner(provider, admin, "the admin wallet");
   const { Contract } = koilib();
   const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
   const op = await storiesC.encodeOperation({
     name: "takedown_segment",
-    args: { story_id: storyId, seq, reason, note },
+    args: { story_id: storyId, seq, reason, note, strike },
   });
   const txId = await dryRunThenSend(signer, provider, net, [op],
-    "PERMANENT TAKEDOWN of story " + storyId + " part " + seq + ": its text is cleared and no Ink is refunded" + (note ? " (" + note + ")" : ""));
+    "PERMANENT TAKEDOWN of story " + storyId + " part " + seq + ": its text is cleared and no Ink is refunded" + (note ? " (" + note + ")" : "") +
+    "; strike for " + (strike || "whoever wrote the live text"));
   console.log("Send back: the transaction id (" + txId + ").");
 }
 

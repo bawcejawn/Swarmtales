@@ -26,7 +26,7 @@ These keys can replace a contract's code, so they are the most valuable keys.
 ## 3. Admin
 
 - [ ] Admin is handed over in **two steps**: the current admin runs `set-admin` (proposes), then the new admin runs `accept-admin` with its own key. Check `status` shows the new admin before putting the old key away.
-- [ ] Prefer a **multisig wallet** as the admin (for example 2 of 3 hardware keys held by different people). Admin checks ask the admin address to authorize, so a multisig smart-contract wallet works. Rehearse a full admin action with it on testnet before mainnet.
+- [ ] Make the admin a **multisig wallet, 2 of 3**, set up before mainnet: two hardware keys held by different people, and **one spare key kept offline** (on paper or a hardware wallet in a separate place, never used day to day). Losing any one key then loses nothing. Admin checks ask the admin address to authorize, so a multisig smart-contract wallet works. Rehearse it on testnet first: a full admin action, the two-step handover to the multisig, and replacing one lost signer with the spare.
 - [ ] The admin key is not the treasury or founder key.
 - [ ] Admin actions are signed only through the deploy script, which checks the chain id and only talks to listed mainnet nodes.
 
@@ -46,7 +46,7 @@ These keys can replace a contract's code, so they are the most valuable keys.
 
 | Key | Do this |
 |---|---|
-| Admin | The contract key proposes a new admin; the new admin accepts. If the contract key is also gone, admin cannot be recovered |
+| Admin | Once a handover has been accepted, the contract key is no longer admin and cannot propose a new one: every admin check, `set-admin` included, needs the current admin's signature. The only way back is a **code re-upload with the contract key**: upload a reviewed recovery build that lets a new admin be set, have the new admin accept, then upload the normal release build again with its recorded sha256. If the contract key is also gone, admin cannot be recovered. This is why the admin should be a 2-of-3 multisig with a spare key offline (section 3): a lost signer is replaced by the other two, with no upload |
 | Contract key | Nobody else can upload, so the code stays as it is. Plan a migration to a new contract address if an upgrade is ever needed |
 | Contract key leaked | Treat as critical: the holder can replace the code. Pause the contract (admin), warn users publicly, and stop sending payments to it |
 | Treasury or founder | The Shop admin points payments at new addresses with `set_addresses` |

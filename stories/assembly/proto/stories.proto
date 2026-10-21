@@ -122,7 +122,7 @@ message config {
   bytes terms_hash = 15;         // sha256 of the published Terms of Use text
   string terms_uri = 16;         // where the Terms of Use are published
   uint32 report_threshold = 17;  // writer reports that hide a part automatically (default 3)
-  uint32 strike_limit = 18;      // takedowns after which a wallet is blocked automatically (default 3)
+  uint32 strike_limit = 18;      // takedowns after which a wallet is blocked automatically (default 5)
   uint32 full_price_projects = 19; // open projects at the normal price; each one beyond doubles it (default 3)
   uint32 max_price_multiplier = 20; // the doubling stops here (default 4)
   bytes pending_admin = 21 [(koinos.btype) = ADDRESS]; // proposed by set_admin, waiting for accept_admin
@@ -197,8 +197,9 @@ message segment {
   string source_note = 24;       // added by the copy checker: where parts of this text also appear (does not hide it)
   bool restored = 25;            // brought back by the story's opener or an editor after being hidden
   // Who supplied the current words when an opener, editor or finalizer
-  // rewrote the part (empty while the text is the writer's own). Kept when
-  // the part is removed. A takedown strikes this wallet instead of the writer.
+  // added or replaced words in the part (empty while the text is the
+  // writer's own). An edit that only deletes text leaves it unchanged. Kept
+  // when the part is removed. A takedown strikes this wallet instead of the writer.
   bytes text_by = 26 [(koinos.btype) = ADDRESS];
   bool hidden_by_reports = 27;   // hidden by writer reports alone, not the admin or the checker: refunded if removed (AB-012)
 }
@@ -677,6 +678,9 @@ message takedown_segment_arguments {
   uint64 seq = 2 [jstype = JS_STRING];
   moderation_reason reason = 3;
   string note = 4;               // up to 200 characters, e.g. a notice reference
+  // Optional: the wallet to strike. Empty strikes the current owner of the
+  // text (text_by, else the writer). Otherwise it must be the writer or text_by.
+  bytes strike = 5 [(koinos.btype) = ADDRESS];
 }
 
 // @description Any wallet reports a part, once per part. Reports from wallets that have written on

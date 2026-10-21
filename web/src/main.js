@@ -2510,6 +2510,7 @@ function sharePanel(id, story, me, flags) {
       }
     } }, [
       h("p", { class: "meta small" }, ["Each person who opens the link joins with one confirmation. Their parts are paid from the writers' pool while it has enough Ink. They also need a Writer month (see below)."]),
+      h("p", { class: "meta small" }, ["When you remove a writer, revoke the invite link they used and send a new one to everyone else."]),
       h("div", { class: "form-grid" }, [field("People", uses), field("Days it works", days)]),
       h("div", { class: "actions" }, [make]),
       status,
@@ -3100,7 +3101,7 @@ function renderReportPage(page) {
       h("ul", { class: "how-list" }, [
         h("li", {}, ["The part is hidden promptly."]),
         h("li", {}, ["The writer can send a counter-notice. If none arrives within 14 days, the part is taken down for good: its text is cleared from SwarmTales' contract storage, it's left out of future editions, and the writer isn't refunded."]),
-        h("li", {}, ["Each takedown counts against the writer. After three, their wallet can no longer write on SwarmTales."]),
+        h("li", {}, ["Each takedown counts against whoever wrote the text that was taken down. After five (the default limit), their wallet can no longer write on SwarmTales."]),
         h("li", {}, ["The blockchain records that the part was hidden or taken down and why, with a reference number. Your personal details are never put on the blockchain."]),
       ]),
     ]),

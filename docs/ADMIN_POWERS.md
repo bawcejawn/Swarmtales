@@ -50,9 +50,9 @@ The Shop admin **cannot** take back a payment that has already been split, or se
 
 - **Moderation:**
   - Hide or unhide any part, at any stage.
-  - **Take a part down for good:** its text is cleared from contract storage and no Ink is refunded. Each takedown is a strike against whoever put those words there (the writer, or whoever last rewrote the part); at the strike limit the wallet is blocked.
+  - **Take a part down for good:** its text is cleared from contract storage and no Ink is refunded. Each takedown is a strike against whoever wrote the live text: the writer, or the opener, editor or finalizer who last added or replaced words in the part. An edit that only deletes text does not move the strike. The admin may name the other wallet instead, but only the part's writer or that current owner. At the strike limit the wallet is blocked.
   - Block or unblock a wallet from opening, writing and reporting.
-  - Set the moderator key, how many writer reports hide a part (1 to 20) and the strike limit (1 to 20).
+  - Set the moderator key, how many writer reports hide a part (1 to 20) and the strike limit. The strike limit starts at 5; the admin can change it from 1 to 20 at any time with `set-moderation`. The testnet contract has 3 saved, so after its next upgrade run `set-moderation` with `--strikes 5`.
 - **Terms of Use:** publish a new version. Every new part must then accept it.
 - **Finishing a book:** take over the final edit when the opener asked, or has been inactive for the set number of days. In that final edit the admin can lightly edit text (within the same small allowance any finalizer has; the change is recorded on the part) and remove parts. After a takedown in a finished book, publish a replacement PDF.
 - **Settings:** categories, the per-part size cap, the open-project limit and price doubling, the shortest new text, archive and inactivity days. Each has fixed bounds in the code.
@@ -61,6 +61,8 @@ The Shop admin **cannot** take back a payment that has already been split, or se
 - **Propose a new admin** (two steps, as above).
 
 The Stories admin **cannot** mint or burn Ink, refund outside the rules, or finalize a story outside the admin-finalize rule.
+
+**For openers and editors:** When you remove a writer, revoke the invite link they used and send a new one to everyone else.
 
 ## The moderator (copy checker)
 

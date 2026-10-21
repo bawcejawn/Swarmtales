@@ -11,8 +11,9 @@
 //   - Editors may rewrite (within the light-edit allowance), shorten or
 //     remove text while a story is OPEN. The ORIGINAL author is
 //     re-credited through Ink mint, reason REFUND, the only mint reason
-//     Stories is allowed. A rewrite by anyone but the writer is recorded
-//     on the part (text_by).
+//     Stories is allowed. When anyone but the writer adds or replaces
+//     words, they are recorded on the part as the text's owner (text_by);
+//     an edit that only deletes text leaves the owner unchanged.
 //   - Closing (opener pays the close fee through Shop), the final edit
 //     in ordered batches, surviving characters, and finalize.
 //   - The 3-open-projects limit, the promo trial, private allow-lists
@@ -34,12 +35,14 @@
 //     cannot rejoin with an invite; only they can add it back.
 //   - The admin alone may take a part down for good, at any stage. Its
 //     text is cleared from contract storage and no Ink is refunded.
-//   - Every takedown is a strike against whoever put the words there: the
-//     writer, or the opener, editor or finalizer who last rewrote the part
-//     (so nobody can rewrite a rival's part to get them blocked). At the strike limit
-//     (default 3) the wallet is blocked from opening, writing and
-//     reporting (the repeat-infringer policy). The admin can also block
-//     or unblock by hand.
+//   - Every takedown is a strike against the owner of the live words: the
+//     writer, or the opener, editor or finalizer who last added or replaced
+//     words in the part (so nobody can rewrite a rival's part to get them
+//     blocked, and a trim cannot move a writer's strike onto an editor).
+//     The admin may name the writer or the owner instead. At the strike
+//     limit (default 5, the admin can set 1 to 20) the wallet is blocked
+//     from opening, writing and reporting (the repeat-infringer policy).
+//     The admin can also block or unblock by hand.
 //   - Every report, hide, unhide, takedown and block is a public event.
 //
 // INVITE-ONLY STORIES AND STORY FUNDS (October 2026)
@@ -171,7 +174,7 @@ const MAX_TERMS_URI: i32 = 200;
 const TERMS_HASH_LENGTH: i32 = 32;
 const DEFAULT_REPORT_THRESHOLD: u32 = 3;
 const REPORT_THRESHOLD_MAX: u32 = 20;
-const DEFAULT_STRIKE_LIMIT: u32 = 3;
+const DEFAULT_STRIKE_LIMIT: u32 = 5;
 const STRIKE_LIMIT_MAX: u32 = 20;
 
 // ---------- adjustable limits: start value and hard bounds ----------
@@ -536,9 +539,10 @@ export class Stories {
     System.require(args.free_chapters <= MAX_FREE_CHAPTERS, "STORIES: free chapters must be 0 to 5");
     st.category_1 = args.category_1;
     st.category_2 = args.category_2;
-    if (args.visibility != stories.visibility.VISIBILITY_PUBLIC) {
+    if (st.visibility == stories.visibility.VISIBILITY_PUBLIC && args.visibility != stories.visibility.VISIBILITY_PUBLIC) {
       // Invite-only stories pay their writers from the pool, so switching
-      // needs the same pool as opening one (AB-011).
+      // from public needs the same pool as opening one (AB-011). A story
+      // that is already invite-only keeps its pool as writers use it (AB-022).
       const isBook = st.kind == stories.story_kind.KIND_BOOK;
       System.require(st.fund >= (isBook ? BOOK_MIN : SHORT_MIN), isBook
         ? "STORIES: an unlisted or private Book needs a writers' pool of at least 100,000 Ink"
@@ -788,13 +792,13 @@ export class Stories {
 
     const refund = seg.charged > newCost ? seg.charged - newCost : 0;
     const now = this.now();
+    seg.text_by = this.rewriter(seg, this.text(seg.text), text, editor);
     seg.text = text;
     seg.text_hash = this.sha256(StringBytes.stringToBytes(text));
     seg.current_cost = newCost;
     seg.charged = seg.charged - refund;
     seg.last_edited_by = editor;
     seg.last_edited_at = now;
-    seg.text_by = this.rewriter(seg, editor);
     this.segments.put(key, seg);
 
     st.used_chars = nextUsed;
@@ -978,13 +982,13 @@ export class Stories {
         units = SafeMath.add(units, newCost);
         System.require(units <= MAX_BATCH_UNITS, "STORIES: batch text is over 20,000 Ink units");
         refund = seg.charged > newCost ? seg.charged - newCost : 0;
+        seg.text_by = this.rewriter(seg, this.text(seg.text), text, finalizer);
         seg.text = text;
         seg.text_hash = this.sha256(StringBytes.stringToBytes(text));
         seg.current_cost = newCost;
         seg.charged = seg.charged - refund;
         seg.last_edited_by = finalizer;
         seg.last_edited_at = now;
-        seg.text_by = this.rewriter(seg, finalizer);
         seg.surviving = newCost < seg.charged ? newCost : seg.charged;
         // The final pass may grow text a little past max_chars (grammar
         // fixes in a full book). Growth stays inside the light-edit allowance.
@@ -1207,6 +1211,16 @@ export class Stories {
     const note = this.requireNote(args.note);
     const fingerprint = seg.text_hash != null ? seg.text_hash! : new Uint8Array(0);
     const now = this.now();
+    // The strike goes to whoever wrote the live words: the current owner
+    // (text_by, else the writer), AB-001 and AB-023. The admin may name
+    // the other one instead, but only the writer or the current owner.
+    const owner = seg.text_by != null && seg.text_by!.length == ADDRESS_LENGTH ? seg.text_by! : seg.author!;
+    let struck = owner;
+    if (args.strike != null && args.strike!.length > 0) {
+      struck = args.strike!;
+      System.require(Arrays.equal(struck, seg.author!) || Arrays.equal(struck, owner),
+        "STORIES: strike the part's writer or the wallet whose words are live");
+    }
 
     if (seg.status == stories.segment_status.SEGMENT_ACTIVE) {
       const author = seg.author!;
@@ -1240,9 +1254,6 @@ export class Stories {
     seg.moderation_reason = args.reason;
     this.segments.put(key, seg);
     this.putStory(args.story_id, st);
-    // The strike goes to whoever put these words there: the writer, or the
-    // opener, editor or finalizer who last rewrote the part (AB-001).
-    const struck = seg.text_by != null && seg.text_by!.length == ADDRESS_LENGTH ? seg.text_by! : seg.author!;
     this.addStrike(struck, admin);
 
     const ev = new stories.moderation_event(args.story_id, args.seq, stories.moderation_action.ACTION_TAKEDOWN,
@@ -1650,10 +1661,23 @@ export class Stories {
     this.callOut(ink, INK_MINT_ENTRY, Protobuf.encode(mint, stories.ink_mint_call.encode), [author], "STORIES: Ink refund failed");
   }
 
-  // Who the part's words now belong to after `by` rewrote them: nobody
-  // extra when the writer edits their own part, otherwise `by`.
-  private rewriter(seg: stories.segment, by: Uint8Array): Uint8Array | null {
+  // Who the part's words belong to after `by` changed `oldText` to
+  // `newText` (AB-023). An edit that only deletes text leaves the owner as
+  // it was. One that adds or replaces words makes `by` the owner: nobody
+  // extra when that is the writer, otherwise `by`.
+  private rewriter(seg: stories.segment, oldText: string, newText: string, by: Uint8Array): Uint8Array | null {
+    if (this.onlyDeletes(oldText, newText)) return seg.text_by;
     return Arrays.equal(by, seg.author!) ? null : by;
+  }
+
+  // True when `newText` can be made by removing characters from `oldText`.
+  private onlyDeletes(oldText: string, newText: string): bool {
+    if (newText.length > oldText.length) return false;
+    let j = 0;
+    for (let i = 0; i < oldText.length && j < newText.length; i++) {
+      if (oldText.charCodeAt(i) == newText.charCodeAt(j)) j++;
+    }
+    return j == newText.length;
   }
 
   // Removing a part refunds it unless the admin or the moderator hid it.

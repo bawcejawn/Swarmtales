@@ -78,6 +78,26 @@ test("an invite signature recovers to the link key and is bound to one wallet", 
   assert.notEqual(recoverAddress(inviteMsg(STORIES, "12", "5", ALICE), sig), key.address);
 });
 
+// A fixed known-answer vector (AB-026). The recovery above uses the same
+// secp256k1 library koilib signs with, so on its own it is not an
+// independent check. These bytes are pinned: test link key 0 from
+// scripts/gen-link-fixtures.mjs (sha256("swarmtales-test-link-0"), a public,
+// worthless key) signing story 1, invite 1, for BOB. The same signature is
+// inviteSig(0, 1, 1) in stories/assembly/__tests__/linkFixtures.ts, which the
+// Stories contract tests accept through the Koinos mock VM.
+const KAT_SECRET = "L26euVCoKXxVKqZeDasczL9x1BvLQ96xKLTexv1specUvvvD3km4";
+const KAT_ADDRESS = "13da3M8X4nTyxAVMGYmxFdqGqtmmdy8H8B";
+const KAT_DIGEST = "3e48710bf75d77a87124272827285063664b0991f6f914a039bd27331c99050e";
+const KAT_SIGNATURE = "20a28f83a35497b258225415d8deb51caa5c0d0a08314d3633c3fafef17f621495463153250a3b6076bce9e77507e50bc1aa5a4813f643050b988f9682a6d90f7a";
+
+test("an invite signature matches a fixed known-answer vector", async () => {
+  assert.equal(linkKeyAddress(KAT_SECRET), KAT_ADDRESS);
+  assert.equal(utils.toHexString(sha256(inviteMsg(STORIES, "1", "1", BOB))), KAT_DIGEST);
+  const sig = await signInviteJoin(KAT_SECRET, STORIES, "1", "1", BOB);
+  assert.equal(utils.toHexString(sig), KAT_SIGNATURE);
+  assert.equal(recoverAddress(inviteMsg(STORIES, "1", "1", BOB), utils.toUint8Array(KAT_SIGNATURE)), KAT_ADDRESS);
+});
+
 test("link secrets ride in the # fragment, not a server query", () => {
   const promo = buildPromoLink("https://swarmtales.example/", "3", "WIFSECRET");
   assert.equal(promo.includes("#/promo/3?k=WIFSECRET"), true);

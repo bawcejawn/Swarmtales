@@ -200,6 +200,24 @@ test("when each part was written survives a save and load; older saved entries c
   assert.equal(legacy.bestMatch(fingerprint(COPY), "mallory", "5:2", 2000).key, "10:3");
 });
 
+// ---------- AB-024: parts written at the same time are never hidden ----------
+
+test("a match written at the same time is never a hide match, only a tie for a note on both", () => {
+  const idx = new Index();
+  idx.add("5:9", "mallory", fingerprint(COPY), 1000);   // same block, lower story id
+  assert.equal(idx.bestMatch(fingerprint(ORIGINAL), "wren", "10:4", 1000), null);
+  const tie = idx.tieMatch(fingerprint(ORIGINAL), "wren", "10:4", 1000);
+  assert.equal(tie.key, "5:9");
+  assert.equal(tie.at, 1000);
+  assert.ok(isDuplicate(fingerprint(ORIGINAL), tie));
+  assert.equal(idx.tieMatch(fingerprint(ORIGINAL), "wren", "10:4", 1001), null);   // not a tie: a later part
+  assert.equal(idx.bestMatch(fingerprint(ORIGINAL), "wren", "10:4", 1001).key, "5:9");
+  assert.deepEqual(runLocal([
+    { id: 10, parts: [{ seq: 4, author: "wren", text: ORIGINAL, at: 1000 }] },
+    { id: 5, parts: [{ seq: 9, author: "mallory", text: COPY, at: 1000 }] },
+  ]), []);
+});
+
 // ---------- AB-015: the checker signs only for the chain it expects ----------
 
 import { createRequire } from "node:module";
