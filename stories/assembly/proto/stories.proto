@@ -122,9 +122,10 @@ message config {
   bytes terms_hash = 15;         // sha256 of the published Terms of Use text
   string terms_uri = 16;         // where the Terms of Use are published
   uint32 report_threshold = 17;  // writer reports that hide a part automatically (default 3)
-  uint32 strike_limit = 18;      // takedowns after which a wallet is blocked automatically (default 3)
+  uint32 strike_limit = 18;      // takedowns after which a wallet is blocked automatically (default 5)
   uint32 full_price_projects = 19; // open projects at the normal price; each one beyond doubles it (default 3)
   uint32 max_price_multiplier = 20; // the doubling stops here (default 4)
+  bytes pending_admin = 21 [(koinos.btype) = ADDRESS]; // proposed by set_admin, waiting for accept_admin
 }
 
 message story {
@@ -200,6 +201,12 @@ message segment {
   string source_note = 24;       // added by the copy checker: where parts of this text also appear (does not hide it)
   bool restored = 25;            // brought back by the story's opener or an editor after being hidden
   uint32 version_count = 26;     // 0: never revised. Otherwise versions 1..version_count are kept (get_versions)
+  bool hidden_by_reports = 27;   // hidden by writer reports alone, not the admin or the checker: refunded if removed (AB-012)
+  reserved 28;                   // was text_by on the audit-fixes branch (never deployed)
+  // Someone other than the writer changed the text (revise_part or the final
+  // edit), even only by cutting words. A takedown then needs the admin to
+  // name who gets the strike, or to choose no strike.
+  bool edited_by_others = 29;
 }
 
 // One version of a part. Version 1 is the original text.
@@ -283,6 +290,7 @@ message shop_fee_call {
   uint32 kind = 2;
   bytes token = 3 [(koinos.btype) = ADDRESS];
   uint32 price_multiplier = 4;   // open fee only: 1, 2, 4, 8...
+  uint64 max_price = 5 [jstype = JS_STRING]; // the most the payer agreed to pay (AB-017)
 }
 
 // Wire-compatible with shop.get_membership_arguments / get_promo_claimed_arguments.
@@ -478,6 +486,7 @@ message open_story_arguments {
   uint32 terms_version = 15;     // must equal the current Terms of Use version
   uint64 fund = 16 [jstype = JS_STRING]; // unlisted/private only: extra Ink set aside for everyone's writing
   string citation = 17;          // optional: what the opening part quotes (up to 200 characters)
+  uint64 max_price = 18 [jstype = JS_STRING]; // the most the opener agreed to pay for opening (passed to Shop, AB-017)
 }
 
 // @description Opener changes title, categories, visibility and free chapters (send all of them)
@@ -723,6 +732,11 @@ message takedown_segment_arguments {
   uint64 seq = 2 [jstype = JS_STRING];
   moderation_reason reason = 3;
   string note = 4;               // up to 200 characters, e.g. a notice reference
+  // The wallet to strike: the writer or any wallet that changed the part.
+  // Empty strikes the writer of a part nobody else changed; a part someone
+  // else changed needs a wallet here or no_strike.
+  bytes strike = 5 [(koinos.btype) = ADDRESS];
+  bool no_strike = 6;            // take the part down without striking anyone (leave strike empty)
 }
 
 // @description Any wallet reports a part, once per part. Reports from wallets that have written on
@@ -889,12 +903,17 @@ message set_terms_arguments {
   string terms_uri = 3;          // where to read them, up to 200 plain characters
 }
 
-// @description Hand admin to a new address
+// @description Propose a new admin. Nothing changes until that address calls accept_admin (two steps, so a typo cannot strand admin). Proposing the current admin cancels.
 // @read-only false
 // @result empty_object
 message set_admin_arguments {
   bytes new_admin = 1 [(koinos.btype) = ADDRESS];
 }
+
+// @description The proposed admin takes over. Must be signed by the proposed address and called directly.
+// @read-only false
+// @result empty_object
+message accept_admin_arguments {}
 
 // ---------- Events ----------
 
@@ -1052,6 +1071,11 @@ message admin_changed_event {
   bytes new_admin = 2 [(koinos.btype) = ADDRESS];
 }
 
+message admin_proposed_event {
+  bytes admin = 1 [(koinos.btype) = ADDRESS];
+  bytes proposed = 2 [(koinos.btype) = ADDRESS];   // empty when a pending handover is cancelled
+}
+
 // Every hide, unhide, takedown and automatic hide, on the public record.
 message moderation_event {
   uint64 story_id = 1 [jstype = JS_STRING];
@@ -1062,6 +1086,7 @@ message moderation_event {
   bytes author = 6 [(koinos.btype) = ADDRESS];
   string note = 7;
   bytes text_hash = 8;           // fingerprint of the text at the time
+  bytes struck = 9 [(koinos.btype) = ADDRESS];   // takedowns: the wallet that got the strike; empty when the admin chose no strike
 }
 
 message citation_event {

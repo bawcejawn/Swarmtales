@@ -404,6 +404,9 @@ describe("Stories: admin and settings", () => {
     authorize(STORIES);
     new Stories().set_admin(new stories.set_admin_arguments(ADMIN));
     checkpoint();
+    authorize(ADMIN);
+    new Stories().accept_admin(new stories.accept_admin_arguments());
+    checkpoint();
     expect(same(config().admin, ADMIN)).toBe(true);
     fails(() => { authorize(STORIES); new Stories().set_paused(new stories.set_paused_arguments(true)); }, "STORIES: admin authority required");
     authorize(ADMIN);
@@ -618,14 +621,14 @@ describe("Stories: opening", () => {
   it("lets only the opener update settings, without duplicating category lists", () => {
     const id = openShort();
     authorize(ALICE);
-    new Stories().update_story(new stories.update_story_arguments(ALICE, id, "New title", 2, 1, PRIVATE, 3));
+    new Stories().update_story(new stories.update_story_arguments(ALICE, id, "New title", 2, 1, PUBLIC, 3));
     checkpoint();
     authorize(ALICE);
-    new Stories().update_story(new stories.update_story_arguments(ALICE, id, "New title", 1, 2, PRIVATE, 3));
+    new Stories().update_story(new stories.update_story_arguments(ALICE, id, "New title", 1, 2, PUBLIC, 3));
     checkpoint();
     const st = story(id);
     expect(st.title).toBe("New title");
-    expect(st.visibility).toBe(PRIVATE);
+    expect(st.visibility).toBe(PUBLIC);
     expect(st.free_chapters).toBe(3);
     expect(new Stories().get_category_stories(new stories.get_category_stories_arguments(1, 0, 10)).values.length).toBe(1);
     expect(new Stories().get_category_stories(new stories.get_category_stories_arguments(2, 0, 10)).values.length).toBe(1);
@@ -1210,6 +1213,9 @@ describe("Stories: admin take-over", () => {
     authorize(STORIES);
     new Stories().set_admin(new stories.set_admin_arguments(ADMIN));
     checkpoint();
+    authorize(ADMIN);
+    new Stories().accept_admin(new stories.accept_admin_arguments());
+    checkpoint();
     fails(() => { authorize(STORIES); allowCalls(1); new Stories().submit_final_batch(new stories.submit_final_batch_arguments(STORIES, 1, [keep(1)])); }, "STORIES: only the admin may finalize this story");
     batch(ADMIN, 1, [keep(1), keep(2), keep(4), keep(5), keep(6), keep(7)]);
     finalizeAs(ADMIN, 1);
@@ -1269,5 +1275,44 @@ describe("Stories: archive and revive", () => {
     fillShort(1);
     setTime(START + 90 * DAY);
     fails(() => { new Stories().archive_if_stale(new stories.archive_if_stale_arguments(1)); }, "STORIES: only an open story can be archived");
+  });
+});
+
+describe("Stories: two-step admin handover (AB-016)", () => {
+  beforeEach(() => { reset(); });
+
+  it("set_admin alone does not move admin: a typo cannot strand it", () => {
+    authorize(STORIES);
+    new Stories().set_admin(new stories.set_admin_arguments(ADMIN));
+    checkpoint();
+    expect(same(config().admin, ADMIN)).toBe(false);
+    authorize(STORIES);
+    new Stories().set_paused(new stories.set_paused_arguments(true));
+    checkpoint();
+    expect(config().paused).toBe(true);
+  });
+
+  it("only the proposed address can accept, directly; proposing the admin again cancels", () => {
+    authorize(STORIES);
+    new Stories().set_admin(new stories.set_admin_arguments(ADMIN));
+    checkpoint();
+    expect(same(config().pending_admin, ADMIN)).toBe(true);
+    fails(() => { authorize(MALLORY); new Stories().accept_admin(new stories.accept_admin_arguments()); }, "STORIES: only the proposed admin can accept");
+    fails(() => { MockVM.setCaller(new chain.caller_data(MALLORY, chain.privilege.user_mode)); authorize(ADMIN); new Stories().accept_admin(new stories.accept_admin_arguments()); },
+      "STORIES: call SwarmTales directly from your wallet, not through another contract");
+    MockVM.setCaller(new chain.caller_data(new Uint8Array(0), chain.privilege.user_mode));
+    authorize(STORIES);
+    new Stories().set_admin(new stories.set_admin_arguments(STORIES));   // cancel
+    checkpoint();
+    expect(config().pending_admin).toBeNull();
+    fails(() => { authorize(ADMIN); new Stories().accept_admin(new stories.accept_admin_arguments()); }, "STORIES: no admin handover is pending");
+    authorize(STORIES);
+    new Stories().set_admin(new stories.set_admin_arguments(ADMIN));
+    checkpoint();
+    authorize(ADMIN);
+    new Stories().accept_admin(new stories.accept_admin_arguments());
+    checkpoint();
+    expect(same(config().admin, ADMIN)).toBe(true);
+    expect(config().pending_admin).toBeNull();
   });
 });

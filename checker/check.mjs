@@ -3,7 +3,9 @@
  * SwarmTales copy checker. Runs on a schedule in GitHub Actions (free for
  * public repositories). Each run:
  *   1. reads every story part added since the last run;
- *   2. compares it with all other writers' text on SwarmTales (fingerprints);
+ *   2. compares it with other writers' text on SwarmTales written before it
+ *      (fingerprints), oldest parts first, so the later of two matching
+ *      parts is the one treated as the copy;
  *   3. optionally, searches for three exact phrases from longer parts, using
  *      whichever free search keys are set (all optional, all free, no card):
  *        GOOGLE_BOOKS_KEY  Google Books: searches inside millions of books
@@ -15,6 +17,9 @@
  *          writer's part on SwarmTales;
  *        - a partial match is NOT hidden: it gets a public source note under
  *          the part ("Parts of this text also appear in …");
+ *        - a match with a part written at the same time (same block or
+ *          second) is NOT hidden: both parts get a source note, since
+ *          nobody can tell which came first;
  *        - a match with a source the writer cited is left alone;
  *        - a part the story's opener restored is never hidden again by the
  *          checker (it can still get a note).
@@ -26,6 +31,8 @@
  * Environment:
  *   STORIES_ADDRESS   Stories contract (required)
  *   RPC               node URL (default: the Foundation testnet)
+ *   EXPECTED_CHAIN_ID the chain id the node must serve; needed for any node other than
+ *                     the Foundation testnet or api.koinos.io (checked before signing)
  *   MODERATOR_WIF     the moderator's private key (secret). Without it the
  *                     checker only reports what it would hide.
  *   GOOGLE_BOOKS_KEY  optional, book phrase check (stays under BOOKS_MONTHLY, default 25000;
@@ -42,7 +49,7 @@
 import fs from "fs";
 import { createRequire } from "module";
 import {
-  HIDE_FOUND, Index, REASON, WEB_MIN_CHARS, budget, citationCovers, decide, fingerprint, isDuplicate, isPartialDuplicate,
+  HIDE_FOUND, Index, REASON, WEB_MIN_CHARS, budget, checkChainId, checkOrder, citationCovers, decide, expectedChainId, fingerprint, isDuplicate, isPartialDuplicate,
   normalizeResults, pickPhrases, resultMatches, worthAsking,
 } from "./lib.mjs";
 
@@ -261,6 +268,9 @@ async function main() {
   }
   if (!STORIES) throw new Error("Set STORIES_ADDRESS.");
   const provider = new Provider([RPC]);
+  // Sign only for the chain we expect, checked against the node (AB-015).
+  const chainId = expectedChainId(RPC, env.EXPECTED_CHAIN_ID);
+  checkChainId(chainId, await provider.getChainId());
   const stories = new Contract({ id: STORIES, abi: abis.stories, provider });
   const read = async (name, args) => (await stories.functions[name](args || {})).result || {};
 
@@ -310,7 +320,7 @@ async function main() {
       return false;
     }
     const limit = mana < 50000000n ? mana : 50000000n;
-    const tx = new Transaction({ signer, provider, options: { payer: signer.getAddress(), rcLimit: limit.toString() } });
+    const tx = new Transaction({ signer, provider, options: { payer: signer.getAddress(), rcLimit: limit.toString(), chainId } });
     await tx.pushOperation(await stories.encodeOperation({ name, args: { actor: signer.getAddress(), ...args } }));
     await tx.prepare();
     await tx.sign();
@@ -347,7 +357,9 @@ async function main() {
   async function checkPart(storyId, seq, seg, alsoWeb) {
     const key = storyId + ":" + seq;
     const hashes = fingerprint(seg.text);
-    const match = index.bestMatch(hashes, seg.author, key);
+    // Only text written before this part counts, so an original is never
+    // flagged for a copy made after it (AB-005).
+    const match = index.bestMatch(hashes, seg.author, key, Number(seg.created_at || 0));
     if (match && (isDuplicate(hashes, match) || isPartialDuplicate(hashes, match))) {
       const [srcStory, srcSeq] = match.key.split(":");
       const pct = Math.round(match.ratio * 100);
@@ -356,6 +368,25 @@ async function main() {
         return "flagged";
       }
       await sourceNote(storyId, seq, seg, "About " + pct + "% of this text also appears in story " + srcStory + ", part " + srcSeq + ".");
+      return "flagged";
+    }
+    // Written at the same time as a matching part: nobody can tell which is
+    // the original, so both get a source note and neither is hidden (AB-024).
+    const tie = index.tieMatch(hashes, seg.author, key, Number(seg.created_at || 0));
+    if (tie && (isDuplicate(hashes, tie) || isPartialDuplicate(hashes, tie))) {
+      const [tieStory, tieSeq] = tie.key.split(":");
+      const pct = Math.round(tie.ratio * 100);
+      await sourceNote(storyId, seq, seg, "About " + pct + "% of this text also appears in story " + tieStory + ", part " + tieSeq + ", written at the same time.");
+      // Read the other part first: it may be gone by now, or already carry a
+      // note (from the web check, say) that must not be overwritten (AB-030).
+      try {
+        const partner = await read("get_segment", { story_id: tieStory, seq: tieSeq });
+        if (Number(partner.status) === 1) {
+          await sourceNote(Number(tieStory), Number(tieSeq), partner, "Much of this text also appears in story " + storyId + ", part " + seq + ", written at the same time.");
+        }
+      } catch (error) {
+        note("  could not read story " + tieStory + " part " + tieSeq + ": " + (error && error.message ? error.message : String(error)));
+      }
       return "flagged";
     }
     if (alsoWeb && String(seg.text).length >= WEB_MIN_CHARS && spendable.any()) {
@@ -400,50 +431,66 @@ async function main() {
     }
   }
 
-  let outOfSearches = false;
+  // 1. Read every story's new parts.
   const next = Number(cfg.next_story_id || 1);
+  const fresh = [];
+  const full = [];
   for (let id = 1; id < next; id++) {
     try {
       const st = await read("get_story", { story_id: String(id) });
       const status = Number(st.status || 0);
       if (!status) continue;
       const count = Number(st.segment_count || 0);
-      const done = Number(state.checked[id] || 0);
-      let deferred = false;
-      for (let start = done + 1; start <= count && !deferred && !outOfSearches; start += 10) {
+      const parts = [];
+      for (let start = Number(state.checked[id] || 0) + 1; start <= count; start += 10) {
         const page = await read("get_segments", { story_id: String(id), start: String(start), limit: 10 });
-        const values = page.values || [];
-        for (let i = 0; i < values.length; i++) {
-          const seq = start + i;
-          const seg = values[i];
-          if (Number(seg.status) !== 1 || seg.hidden || !seg.text) {
-            state.checked[id] = seq;
-            continue;
-          }
-          const result = await checkPart(id, seq, seg, true);
-          if (result === "defer") {
-            // Out of free searches for this run: this part waits for the next run.
-            deferred = true;
-            outOfSearches = true;
-            break;
-          }
-          if (result === "clean" || seg.restored) index.add(id + ":" + seq, seg.author, fingerprint(seg.text));
-          state.checked[id] = seq;
+        (page.values || []).forEach((seg, i) => parts.push({ seq: start + i, at: Number(seg.created_at || 0), seg }));
+      }
+      fresh.push({ id, parts });
+      if ((status === 2 || status === 3) && !state.swept[id]) full.push({ id, count });
+    } catch (error) {
+      note("Story " + id + ": " + (error && error.message ? error.message : String(error)) + " (will retry next run)");
+    }
+  }
+
+  // 2. Check them oldest first across all stories, so a copy is always
+  // checked after the text it copied, whatever the story numbers (AB-005).
+  // A story's parts stay in part order, so state.checked stays a safe
+  // "done up to" mark when the run stops early.
+  const stopped = new Set();
+  for (const { story: id, seq, seg } of checkOrder(fresh)) {
+    if (stopped.has(id)) continue;
+    try {
+      if (Number(seg.status) !== 1 || seg.hidden || !seg.text) {
+        state.checked[id] = seq;
+        continue;
+      }
+      const result = await checkPart(id, seq, seg, true);
+      if (result === "defer") {
+        // Out of free searches for this run: this part and everything after it waits for the next run.
+        break;
+      }
+      if (result === "clean" || seg.restored) index.add(id + ":" + seq, seg.author, fingerprint(seg.text), seg.created_at);
+      state.checked[id] = seq;
+    } catch (error) {
+      stopped.add(id);
+      note("Story " + id + ": " + (error && error.message ? error.message : String(error)) + " (will retry next run)");
+    }
+  }
+
+  // 3. Before a story can be finished: one more full comparison, once.
+  for (const { id, count } of full) {
+    try {
+      note("Story " + id + " is full: checking all of it once more before it can be finished.");
+      for (let start = 1; start <= count; start += 10) {
+        const page = await read("get_segments", { story_id: String(id), start: String(start), limit: 10 });
+        (page.values || []).forEach((seg, i) => { seg._seq = start + i; });
+        for (const seg of page.values || []) {
+          if (Number(seg.status) !== 1 || seg.hidden || !seg.text) continue;
+          await checkPart(id, seg._seq, seg, false);
         }
       }
-      // Before a story can be finished: one more full comparison, once.
-      if ((status === 2 || status === 3) && !state.swept[id]) {
-        note("Story " + id + " is full: checking all of it once more before it can be finished.");
-        for (let start = 1; start <= count; start += 10) {
-          const page = await read("get_segments", { story_id: String(id), start: String(start), limit: 10 });
-          (page.values || []).forEach((seg, i) => { seg._seq = start + i; });
-          for (const seg of page.values || []) {
-            if (Number(seg.status) !== 1 || seg.hidden || !seg.text) continue;
-            await checkPart(id, seg._seq, seg, false);
-          }
-        }
-        state.swept[id] = true;
-      }
+      state.swept[id] = true;
     } catch (error) {
       note("Story " + id + ": " + (error && error.message ? error.message : String(error)) + " (will retry next run)");
     }

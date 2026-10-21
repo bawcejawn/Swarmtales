@@ -133,6 +133,9 @@ function applyTransfers(): void {
 
 // ---------- call setup ----------
 
+// A buyer who accepts the current price (AB-017 tests set real limits).
+const ANY_PRICE: u64 = u64.MAX_VALUE;
+
 function checkpoint(): void {
   MockVM.commitTransaction();
 }
@@ -324,12 +327,12 @@ function configure(): void {
 
 function buyReader(months: u32, asset: Uint8Array): void {
   authorize(ALICE);
-  new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_READER, months, asset));
+  new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_READER, months, asset, null, ANY_PRICE));
 }
 
 function buyWriter(months: u32): void {
   authorize(ALICE);
-  new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_WRITER, months, USDT));
+  new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_WRITER, months, USDT, null, ANY_PRICE));
 }
 
 function membershipOf(account: Uint8Array): shop.membership {
@@ -433,6 +436,9 @@ describe("Shop: starting state", () => {
     const c = new Shop();
     c.set_fee_bps(new shop.set_fee_bps_arguments(500));
     c.set_admin(new shop.set_admin_arguments(ADMIN));
+    checkpoint();
+    authorize(ADMIN);
+    new Shop().accept_admin(new shop.accept_admin_arguments());
     checkpoint();
     expect(new Shop().get_config(new shop.get_config_arguments()).fee_bps).toBe(500);
     expect(same(new Shop().get_config(new shop.get_config_arguments()).admin, ADMIN)).toBe(true);
@@ -624,7 +630,7 @@ describe("Shop: stablecoin payments", () => {
     fund(USDT, ALICE, ONE_6);
     authorize(MALLORY);
     expect(() => {
-      new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_READER, 1, USDT));
+      new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_READER, 1, USDT, null, ANY_PRICE));
     }).toThrow();
     expect(membershipOf(ALICE).tier).toBe(shop.tier.TIER_NONE);
     expect(getBal(USDT, ALICE)).toBe(ONE_6);
@@ -805,7 +811,7 @@ describe("Shop: writer ink and packs", () => {
   it("sells packs only to active Writers and mints the pack amount", () => {
     authorize(ALICE);
     expect(() => {
-      new Shop().buy_pack(new shop.buy_pack_arguments(ALICE, shop.item.ITEM_PACK_S, USDT));
+      new Shop().buy_pack(new shop.buy_pack_arguments(ALICE, shop.item.ITEM_PACK_S, USDT, ANY_PRICE));
     }).toThrow();
 
     allowPay(USDT, ONE_6 * 5, 1);
@@ -813,7 +819,7 @@ describe("Shop: writer ink and packs", () => {
     checkpoint();
     allowPay(USDT, ONE_6 * 2, 1);
     authorize(ALICE);
-    new Shop().buy_pack(new shop.buy_pack_arguments(ALICE, shop.item.ITEM_PACK_S, USDT));
+    new Shop().buy_pack(new shop.buy_pack_arguments(ALICE, shop.item.ITEM_PACK_S, USDT, ANY_PRICE));
     let minted = decodeMint(mints()[mints().length - 1]);
     expect(minted.value).toBe(5000);
     expect(minted.reason).toBe(1);
@@ -823,14 +829,14 @@ describe("Shop: writer ink and packs", () => {
 
     checkpoint();
     allowPay(USDT, ONE_6 * 5, 1);
-    new Shop().buy_pack(new shop.buy_pack_arguments(ALICE, shop.item.ITEM_PACK_M, USDT));
+    new Shop().buy_pack(new shop.buy_pack_arguments(ALICE, shop.item.ITEM_PACK_M, USDT, ANY_PRICE));
     minted = decodeMint(mints()[mints().length - 1]);
     expect(minted.value).toBe(15000);
     expect(minted.memo).toBe("pack:M");
 
     checkpoint();
     allowPay(USDT, ONE_6 * 12, 1);
-    new Shop().buy_pack(new shop.buy_pack_arguments(ALICE, shop.item.ITEM_PACK_L, USDT));
+    new Shop().buy_pack(new shop.buy_pack_arguments(ALICE, shop.item.ITEM_PACK_L, USDT, ANY_PRICE));
     minted = decodeMint(mints()[mints().length - 1]);
     expect(minted.value).toBe(45000);
     expect(minted.memo).toBe("pack:L");
@@ -861,13 +867,13 @@ describe("Shop: story fees", () => {
   it("collects a book open fee only when Stories calls, and mints starter Ink", () => {
     authorize(ALICE);
     expect(() => {
-      new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_BOOK, USDT));
+      new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_BOOK, USDT, 0, ANY_PRICE));
     }).toThrow();
 
     callAs(STORIES);
     fund(USDT, ALICE, ONE_6 * 20);
     allowPay(USDT, ONE_6 * 20, 1);
-    new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_BOOK, USDT));
+    new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_BOOK, USDT, 0, ANY_PRICE));
     applyTransfers();
 
     const pay = lastPayment();
@@ -909,7 +915,7 @@ describe("Shop: story fees", () => {
     authorize(ALICE);
     callAs(STORIES);
     allowPay(USDT, ONE_6 * 10, 1);
-    new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_SHORT, USDT));
+    new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_SHORT, USDT, 0, ANY_PRICE));
     expect(decodeMint(mints()[0]).memo).toBe("open:short");
     expect(decodeMint(mints()[0]).value).toBe(10000);
     expect(lastPayment().price).toBe(ONE_6 * 10);
@@ -1352,14 +1358,14 @@ describe("Shop: reads, splits, and exact times", () => {
   it("refuses an unknown asset and a purchase signed by someone else", () => {
     authorize(ALICE);
     expect(() => {
-      new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_READER, 1, MALLORY));
+      new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_READER, 1, MALLORY, null, ANY_PRICE));
     }).toThrow();
     expect(membershipOf(ALICE).tier).toBe(shop.tier.TIER_NONE);
 
     fund(USDT, ALICE, ONE_6);
     authorize(BOB);
     expect(() => {
-      new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_READER, 1, USDT));
+      new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_READER, 1, USDT, null, ANY_PRICE));
     }).toThrow();
     expect(membershipOf(ALICE).paid_until).toBe(0);
     expect(getBal(USDT, ALICE)).toBe(ONE_6);
@@ -1537,7 +1543,7 @@ describe("Shop: only direct calls (fix H1)", () => {
     viaOtherContract();
     authorize(ALICE);
     expect(() => {
-      new Shop().buy_pack(new shop.buy_pack_arguments(ALICE, shop.item.ITEM_PACK_S, USDT));
+      new Shop().buy_pack(new shop.buy_pack_arguments(ALICE, shop.item.ITEM_PACK_S, USDT, ANY_PRICE));
     }).toThrow();
     setTime(START + PERIOD);
     expect(() => {
@@ -1649,7 +1655,7 @@ describe("Shop: gifted memberships and the open-price multiplier", () => {
   it("lets Alice pay a Writer month for Bob: Bob gets the membership and the Ink", () => {
     allowPay(USDT, ONE_6 * 5, 1);
     authorize(ALICE);
-    new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_WRITER, 1, USDT, BOB));
+    new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_WRITER, 1, USDT, BOB, ANY_PRICE));
     expect(membershipOf(BOB).tier).toBe(shop.tier.TIER_WRITER);
     expect(membershipOf(ALICE).tier).toBe(0);
     expect(same(decodeMint(mints()[0]).to, BOB)).toBe(true);
@@ -1662,7 +1668,7 @@ describe("Shop: gifted memberships and the open-price multiplier", () => {
     allowPay(USDT, ONE_6 * 5, 1);
     authorize(BOB);
     expect(() => {
-      new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_WRITER, 1, USDT, BOB));
+      new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_WRITER, 1, USDT, BOB, ANY_PRICE));
     }).toThrow();
     expect(membershipOf(BOB).tier).toBe(0);
   });
@@ -1671,7 +1677,7 @@ describe("Shop: gifted memberships and the open-price multiplier", () => {
     authorize(ALICE);
     callAs(STORIES);
     allowPay(USDT, ONE_6 * 10 * 4, 1);
-    new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_SHORT, USDT, 4));
+    new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_SHORT, USDT, 4, ANY_PRICE));
     expect(lastPayment().price).toBe(ONE_6 * 40);
     expect(decodeMint(mints()[0]).value).toBe(10000);
   });
@@ -1680,14 +1686,128 @@ describe("Shop: gifted memberships and the open-price multiplier", () => {
     authorize(ALICE);
     callAs(STORIES);
     allowPay(USDT, ONE_6 * 10, 1);
-    new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_SHORT, USDT, 0));
+    new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_SHORT, USDT, 0, ANY_PRICE));
     expect(lastPayment().price).toBe(ONE_6 * 10);
     checkpoint();
     expect(() => {
       authorize(ALICE);
       callAs(STORIES);
       allowPay(USDT, ONE_6 * 10 * 2048, 1);
-      new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_SHORT, USDT, 2048));
+      new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_SHORT, USDT, 2048, ANY_PRICE));
     }).toThrow();
+  });
+});
+
+describe("Shop: two-step admin handover (AB-016)", () => {
+  beforeEach(() => {
+    MockVM.reset();
+    MockVM.setContractId(SHOP);
+    setTime(START);
+    callAs(new Uint8Array(0));
+    resetLedger();
+    checkpoint();
+  });
+
+  it("set_admin alone does not move admin: a typo cannot strand it", () => {
+    configure();
+    authorize(SHOP);
+    new Shop().set_admin(new shop.set_admin_arguments(ADMIN));
+    checkpoint();
+    expect(same(new Shop().get_config(new shop.get_config_arguments()).admin, ADMIN)).toBe(false);
+    authorize(SHOP);
+    new Shop().set_paused(new shop.set_paused_arguments(true));
+    checkpoint();
+    expect(new Shop().get_config(new shop.get_config_arguments()).paused).toBe(true);
+  });
+
+  it("only the proposed address can accept, directly; proposing the admin again cancels", () => {
+    configure();
+    authorize(SHOP);
+    new Shop().set_admin(new shop.set_admin_arguments(ADMIN));
+    checkpoint();
+    expect(same(new Shop().get_config(new shop.get_config_arguments()).pending_admin, ADMIN)).toBe(true);
+    expect(() => { authorize(MALLORY); new Shop().accept_admin(new shop.accept_admin_arguments()); }).toThrow();
+    MockVM.rollbackTransaction(); MockVM.commitTransaction();
+    expect(() => { authorize(ADMIN); callAs(MALLORY); new Shop().accept_admin(new shop.accept_admin_arguments()); }).toThrow();
+    MockVM.rollbackTransaction(); MockVM.commitTransaction();
+    callAs(new Uint8Array(0));
+    authorize(SHOP);
+    new Shop().set_admin(new shop.set_admin_arguments(SHOP));   // cancel
+    checkpoint();
+    expect(new Shop().get_config(new shop.get_config_arguments()).pending_admin).toBeNull();
+    expect(() => { authorize(ADMIN); new Shop().accept_admin(new shop.accept_admin_arguments()); }).toThrow();
+    MockVM.rollbackTransaction(); MockVM.commitTransaction();
+    authorize(SHOP);
+    new Shop().set_admin(new shop.set_admin_arguments(ADMIN));
+    checkpoint();
+    authorize(ADMIN);
+    new Shop().accept_admin(new shop.accept_admin_arguments());
+    checkpoint();
+    expect(same(new Shop().get_config(new shop.get_config_arguments()).admin, ADMIN)).toBe(true);
+  });
+});
+
+describe("Shop: purchases carry the buyer's price limit (AB-017)", () => {
+  beforeEach(() => {
+    MockVM.reset();
+    MockVM.setContractId(SHOP);
+    setTime(START);
+    callAs(new Uint8Array(0));
+    resetLedger();
+    checkpoint();
+  });
+
+  it("refuses a purchase that does not say the most the buyer will pay", () => {
+    configure();
+    checkpoint();
+    authorize(ALICE);
+    MockVM.setCallContractResults(payResults(USDT, ONE_6 * 5));
+    expect(() => {
+      // No max_price: the buyer never said what they agreed to pay.
+      const noLimit = new shop.buy_membership_arguments(ALICE, shop.tier.TIER_WRITER, 1, USDT);
+      new Shop().buy_membership(noLimit);
+    }).toThrow();
+  });
+
+  it("charges the price the buyer saw, and refuses once the admin raises it above that", () => {
+    configure();
+    checkpoint();
+    // Alice sees 5 USDT for a Writer month and signs with that limit.
+    authorize(ALICE);
+    MockVM.setCallContractResults(payResults(USDT, ONE_6 * 5));
+    new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_WRITER, 1, USDT, null, ONE_6 * 5));
+    checkpoint();
+    expect(membershipOf(ALICE).tier).toBe(shop.tier.TIER_WRITER);
+
+    // The admin raises the price before her next purchase lands.
+    authorize(SHOP);
+    new Shop().set_price(new shop.set_price_arguments(shop.item.ITEM_WRITER_MONTH, USDT, ONE_6 * 9));
+    checkpoint();
+    authorize(ALICE);
+    MockVM.setCallContractResults(payResults(USDT, ONE_6 * 9));
+    expect(() => {
+      new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_WRITER, 1, USDT, null, ONE_6 * 5));
+    }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: the price is 9000000, more than the most you agreed to pay. Nothing was charged.");
+  });
+
+  it("applies the limit to packs and to the open fee, after the price multiplier", () => {
+    configure();
+    authorize(ALICE);
+    MockVM.setCallContractResults(payResults(USDT, ONE_6 * 5));
+    new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_WRITER, 1, USDT, null, ANY_PRICE));
+    checkpoint();
+    authorize(ALICE);
+    expect(() => {
+      new Shop().buy_pack(new shop.buy_pack_arguments(ALICE, shop.item.ITEM_PACK_S, USDT, ONE_6 * 2 - 1));
+    }).toThrow();
+    MockVM.rollbackTransaction(); MockVM.commitTransaction();
+    // The open fee is 10 USDT; with a multiplier of 2 it is 20.
+    authorize(ALICE);
+    callAs(STORIES);
+    expect(() => {
+      new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_SHORT, USDT, 2, ONE_6 * 10));
+    }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: the price is 20000000, more than the most you agreed to pay. Nothing was charged.");
   });
 });

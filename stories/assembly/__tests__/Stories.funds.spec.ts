@@ -616,3 +616,127 @@ describe("Stories: story funds", () => {
     expect(mint.memo).toBe("fund-back:" + id.toString());
   });
 });
+
+// ---------- audit Lows: AB-010, AB-011, AB-012 ----------
+
+function isAllowed(id: u64, who: Uint8Array): bool {
+  return new Stories().is_allowed(new stories.is_allowed_arguments(id, who)).value;
+}
+
+function setAllowed(id: u64, who: Uint8Array, allowed: bool): void {
+  authorize(ALICE);
+  new Stories().set_allowed(new stories.set_allowed_arguments(ALICE, id, [who], allowed));
+  checkpoint();
+}
+
+describe("Stories: a removed writer cannot rejoin with the same invite (AB-010)", () => {
+  beforeEach(() => { reset(); configure(); });
+
+  it("refuses the invite after the opener removes the writer, until the opener adds them back", () => {
+    const id = openFunded(PRIVATE, 20000, "Private start.", 10000);   // story 1: the link fixtures' story
+    authorize(ALICE);
+    new Stories().create_invite(new stories.create_invite_arguments(ALICE, id, Base58.decode(LINK_ADDRESSES[0]), 5, START + DAY));
+    checkpoint();
+    authorize(BOB);
+    new Stories().join_with_invite(new stories.join_with_invite_arguments(BOB, id, 1, inviteSig(0, 1, 1)));
+    checkpoint();
+    expect(isAllowed(id, BOB)).toBe(true);
+
+    setAllowed(id, BOB, false);
+    fails(() => {
+      authorize(BOB);
+      new Stories().join_with_invite(new stories.join_with_invite_arguments(BOB, 1, 1, inviteSig(0, 1, 1)));
+    }, "STORIES: the opener or an editor removed this wallet from the story; only they can add it back");
+    expect(isAllowed(id, BOB)).toBe(false);
+
+    setAllowed(id, BOB, true);    // the opener changes their mind
+    expect(isAllowed(id, BOB)).toBe(true);
+  });
+
+  it("still lets other people join with the same invite", () => {
+    const id = openFunded(PRIVATE, 20000, "Private start.", 10000);
+    authorize(ALICE);
+    new Stories().create_invite(new stories.create_invite_arguments(ALICE, id, Base58.decode(LINK_ADDRESSES[0]), 5, START + DAY));
+    checkpoint();
+    setAllowed(id, BOB, true);
+    setAllowed(id, BOB, false);
+    authorize(CARA);
+    new Stories().join_with_invite(new stories.join_with_invite_arguments(CARA, id, 1, inviteSig(0, 1, 2)));
+    checkpoint();
+    expect(isAllowed(id, CARA)).toBe(true);
+  });
+});
+
+describe("Stories: switching to invite-only needs a writers' pool (AB-011)", () => {
+  beforeEach(() => { reset(); configure(); });
+
+  it("refuses making a public story unlisted or private without a pool", () => {
+    openShort();   // story 1, public, no pool
+    fails(() => {
+      authorize(ALICE);
+      new Stories().update_story(new stories.update_story_arguments(ALICE, 1, "My Tale", 1, 0, PRIVATE, 0));
+    }, "STORIES: an unlisted or private Short Story needs a writers' pool of at least 10,000 Ink");
+    fails(() => {
+      authorize(ALICE);
+      new Stories().update_story(new stories.update_story_arguments(ALICE, 1, "My Tale", 1, 0, UNLISTED, 0));
+    }, "STORIES: an unlisted or private Short Story needs a writers' pool of at least 10,000 Ink");
+    expect(story(1).visibility).toBe(PUBLIC);
+  });
+
+  it("lets a story with a pool switch between unlisted, private and public", () => {
+    const id = openFunded(UNLISTED, 20000, "Quiet start.", 10000);
+    authorize(ALICE);
+    new Stories().update_story(new stories.update_story_arguments(ALICE, id, "Funded", 1, 0, PRIVATE, 0));
+    checkpoint();
+    expect(story(id).visibility).toBe(PRIVATE);
+    authorize(ALICE);
+    new Stories().update_story(new stories.update_story_arguments(ALICE, id, "Funded", 1, 0, PUBLIC, 0));
+    checkpoint();
+    authorize(ALICE);
+    new Stories().update_story(new stories.update_story_arguments(ALICE, id, "Funded", 1, 0, UNLISTED, 0));
+    checkpoint();
+    expect(story(id).visibility).toBe(UNLISTED);
+  });
+});
+
+describe("Stories: a part hidden by reports is refunded when the opener removes it (AB-012)", () => {
+  beforeEach(() => { reset(); configure(); });
+
+  it("refunds the writer, so reports plus a removal cannot take their Ink", () => {
+    const id = openShort();                                          // Alice has written
+    const seq = writeAsWriter(BOB, id, "Bob writes an honest scene.");
+    writeAsWriter(CARA, id, "Cara writes a line.");
+    writeAsWriter(MALLORY, id, "Mallory writes a line.");
+    const reporters: Uint8Array[] = [ALICE, CARA, MALLORY];
+    for (let i = 0; i < reporters.length; i++) {
+      authorize(reporters[i]);
+      new Stories().report_segment(new stories.report_segment_arguments(reporters[i], id, seq, stories.moderation_reason.REASON_COPYRIGHT, ""));
+      checkpoint();
+    }
+    expect(segment(id, seq).hidden).toBe(true);
+
+    const before = callsTo(MINT_ENTRY).length;
+    authorize(ALICE);
+    allowCalls(1);
+    new Stories().remove_segment(new stories.remove_segment_arguments(ALICE, id, seq));
+    checkpoint();
+    expect(callsTo(MINT_ENTRY).length).toBe(before + 1);
+    const mint = lastMint();
+    expect(same(mint.to, BOB)).toBe(true);
+    expect(mint.value).toBe(27);
+  });
+});
+
+describe("Stories: the opener's price limit reaches Shop (AB-017)", () => {
+  beforeEach(() => { reset(); configure(); });
+
+  it("passes max_price on to Shop's open fee, where the price is checked", () => {
+    authorize(ALICE);
+    allowCalls(2);
+    new Stories().open_story(new stories.open_story_arguments(
+      ALICE, SHORT, "My Tale", 10000, 1, 0, PUBLIC, 0, 0, "Once upon a time.", false, 17, USDT, true, 0, 0, "", 10000000
+    ));
+    checkpoint();
+    expect(lastOpenFee().max_price).toBe(10000000);
+  });
+});

@@ -8,9 +8,11 @@
 //     starter Ink, then Stories burns Ink for the opening text. One
 //     transaction: if any part fails, nothing happens.
 //   - Writing burns the writer's own Ink (Ink checks their signature).
-//   - Editors may shorten or remove text while a story is OPEN. The
-//     ORIGINAL author is re-credited through Ink mint, reason REFUND,
-//     the only mint reason Stories is allowed.
+//   - While a story is OPEN, a part's own writer may edit it (light
+//     edits) or remove it for free. Anyone else who can write in the story
+//     changes it with revise_part, which costs Ink and keeps every
+//     version. The ORIGINAL author is re-credited through Ink mint, reason
+//     REFUND, the only mint reason Stories is allowed.
 //   - Closing (opener pays the close fee through Shop), the final edit
 //     in ordered batches, surviving characters, and finalize.
 //   - The 3-open-projects limit, the promo trial, private allow-lists
@@ -25,19 +27,31 @@
 //     written on SwarmTales count; enough of them hide the part.
 //   - The admin, or a narrow "moderator" key used by the automated copy
 //     checker, may hide and unhide parts at any stage. Hidden parts stay
-//     on the record but block finalizing until unhidden or removed.
+//     on the record but block finalizing until unhidden or removed. A part
+//     the admin or moderator hid is not refunded when removed; one hidden
+//     by writer reports alone is.
+//   - A wallet the opener or an editor takes off a story's allow-list
+//     cannot rejoin with an invite; only they can add it back.
 //   - The admin alone may take a part down for good, at any stage. Its
 //     text is cleared from contract storage and no Ink is refunded.
-//   - Every takedown is a strike against the writer. At the strike limit
-//     (default 3) the wallet is blocked from opening, writing and
-//     reporting (the repeat-infringer policy). The admin can also block
-//     or unblock by hand.
+//   - A takedown of a part nobody else changed is a strike against its
+//     writer. Once anyone else changed it (revise_part or the final edit,
+//     even a typo fix or a cut), the contract does not guess: the admin
+//     compares the versions and names who gets the strike (the writer or
+//     any wallet that changed the part), or chooses no strike. So nobody
+//     can plant text in a rival's part to get them blocked, whoever made
+//     the text can always be struck, and a typo fix never costs a strike
+//     by itself (AB-001, AB-028, AB-029). At the strike
+//     limit (default 5, the admin can set 1 to 20) the wallet is blocked
+//     from opening, writing and reporting (the repeat-infringer policy).
+//     The admin can also block or unblock by hand.
 //   - Every report, hide, unhide, takedown and block is a public event.
 //
 // INVITE-ONLY STORIES AND STORY FUNDS (October 2026)
 //   - Unlisted and private stories are invite-only for writing: the
 //     opener, editors and invited wallets. Everyone except the opener
-//     needs an active Writer month there (no promo trial).
+//     needs an active Writer month there (no promo trial). A story can
+//     only switch to unlisted or private while its pool holds the minimum.
 //   - The opener must set Ink aside in the story's fund (the writers'
 //     pool) when opening: at least the kind's minimum length (10,000 for a
 //     Short Story, 100,000 for a Book). It can be topped up later. Parts are paid from the fund while it has enough; otherwise
@@ -50,9 +64,11 @@
 //
 // WHAT THIS CONTRACT DOES NOT DO
 //   - It never moves stablecoins and holds no money.
-//   - The admin cannot edit text, move or burn Ink, refund outside the
-//     rules, or finalize except under the admin rule. It can only remove
-//     text through a recorded takedown.
+//   - The admin cannot move or burn Ink, refund outside the rules, or
+//     finalize except under the admin rule. It edits text only as the
+//     finalizer after admin_take_over, under the same light-edit limits
+//     (recorded as a change to the part); otherwise it can only remove text
+//     through a recorded takedown.
 //   - The moderator can only hide and unhide. It cannot remove text,
 //     touch Ink, or change any setting.
 //
@@ -115,12 +131,13 @@ const READING_PLACE_SPACE_ID: u32 = 23;
 const READING_COUNT_SPACE_ID: u32 = 24;
 const READING_LIST_SPACE_ID: u32 = 25;
 const VERSIONS_SPACE_ID: u32 = 26;
+const REMOVED_SPACE_ID: u32 = 27;
+const PART_EDITORS_SPACE_ID: u32 = 28;
 const MAX_SUMMARY: i32 = 1500;
 const VERSION_ORIGINAL: u32 = 1;
 const VERSION_CHANGED: u32 = 2;
 const VERSION_REMOVED: u32 = 3;
 const MIN_CHANGE_UNITS: u64 = 10;
-
 
 const ADDRESS_LENGTH: i32 = 25;
 const DAY_SECONDS: u64 = 86400;
@@ -166,7 +183,7 @@ const MAX_TERMS_URI: i32 = 200;
 const TERMS_HASH_LENGTH: i32 = 32;
 const DEFAULT_REPORT_THRESHOLD: u32 = 3;
 const REPORT_THRESHOLD_MAX: u32 = 20;
-const DEFAULT_STRIKE_LIMIT: u32 = 3;
+const DEFAULT_STRIKE_LIMIT: u32 = 5;
 const STRIKE_LIMIT_MAX: u32 = 20;
 
 // ---------- adjustable limits: start value and hard bounds ----------
@@ -228,6 +245,12 @@ export class Stories {
   readingCount: Storage.Map<Uint8Array, stories.uint64>;
   readingList: Storage.Map<Uint8Array, stories.uint64>;
   versions: Storage.Map<Uint8Array, stories.segment_version>;
+  // (story, wallet) the opener or an editor took off the allow-list: an
+  // invite cannot bring it back, only set_allowed (AB-010).
+  removed: Storage.Map<Uint8Array, stories.boole>;
+  // (story, part, wallet) that changed someone else's part, cuts included:
+  // the admin may strike any of them on a takedown (AB-028).
+  partEditors: Storage.Map<Uint8Array, stories.boole>;
   // How many removed segments this call may still fold in (fix M2).
   skipBudget: u32 = MAX_SKIP_PER_CALL;
 
@@ -268,6 +291,8 @@ export class Stories {
     this.readingCount = new Storage.Map(id, READING_COUNT_SPACE_ID, stories.uint64.decode, stories.uint64.encode, () => new stories.uint64(0));
     this.readingList = new Storage.Map(id, READING_LIST_SPACE_ID, stories.uint64.decode, stories.uint64.encode, null);
     this.versions = new Storage.Map(id, VERSIONS_SPACE_ID, stories.segment_version.decode, stories.segment_version.encode, null);
+    this.removed = new Storage.Map(id, REMOVED_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
+    this.partEditors = new Storage.Map(id, PART_EDITORS_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
   }
 
   // ===================================================================
@@ -515,7 +540,7 @@ export class Stories {
     System.event("stories.story_opened_event", Protobuf.encode(ev, stories.story_opened_event.encode), [opener]);
 
     // 1) Shop takes the fee and mints the starter Ink to the opener.
-    const fee = new stories.shop_fee_call(opener, <u32>kind, token, multiplier);
+    const fee = new stories.shop_fee_call(opener, <u32>kind, token, multiplier, args.max_price);
     this.callOut(shopId, SHOP_OPEN_FEE_ENTRY, Protobuf.encode(fee, stories.shop_fee_call.encode), [opener], "STORIES: open fee payment failed");
 
     // 2) The opening text is segment 1, paid in Ink like any other text.
@@ -540,6 +565,15 @@ export class Stories {
     System.require(args.free_chapters <= MAX_FREE_CHAPTERS, "STORIES: free chapters must be 0 to 5");
     st.category_1 = args.category_1;
     st.category_2 = args.category_2;
+    if (st.visibility == stories.visibility.VISIBILITY_PUBLIC && args.visibility != stories.visibility.VISIBILITY_PUBLIC) {
+      // Invite-only stories pay their writers from the pool, so switching
+      // from public needs the same pool as opening one (AB-011). A story
+      // that is already invite-only keeps its pool as writers use it (AB-022).
+      const isBook = st.kind == stories.story_kind.KIND_BOOK;
+      System.require(st.fund >= (isBook ? BOOK_MIN : SHORT_MIN), isBook
+        ? "STORIES: an unlisted or private Book needs a writers' pool of at least 100,000 Ink"
+        : "STORIES: an unlisted or private Short Story needs a writers' pool of at least 10,000 Ink");
+    }
     st.visibility = args.visibility;
     st.free_chapters = args.free_chapters;
     st.opener_last_active = this.now();
@@ -595,8 +629,13 @@ export class Stories {
     for (let i = 0; i < list.length; i++) {
       const account = this.requireAddress(list[i], "STORIES: invalid wallet address");
       const key = this.idAddrKey(args.story_id, account);
-      if (args.allowed) this.allowed.put(key, new stories.boole(true));
-      else this.allowed.remove(key);
+      if (args.allowed) {
+        this.allowed.put(key, new stories.boole(true));
+        this.removed.remove(key);
+      } else {
+        this.allowed.remove(key);
+        this.removed.put(key, new stories.boole(true));
+      }
       const ev = new stories.allowed_event(args.story_id, account, args.allowed, 0);
       System.event("stories.allowed_event", Protobuf.encode(ev, stories.allowed_event.encode), [account]);
     }
@@ -674,6 +713,7 @@ export class Stories {
     );
     const allowKey = this.idAddrKey(args.story_id, account);
     System.require(!this.allowed.get(allowKey)!.value, "STORIES: already on the allow-list");
+    System.require(!this.removed.get(allowKey)!.value, "STORIES: the opener or an editor removed this wallet from the story; only they can add it back");
     this.allowed.put(allowKey, new stories.boole(true));
     row.uses = row.uses + 1;
     this.invites.put(key, row);
@@ -799,8 +839,9 @@ export class Stories {
     System.require(Arrays.equal(editor, seg.author!) || (seg.hidden && this.isPrivileged(args.story_id, st, editor)),
       "STORIES: only the part's writer may remove it for free; others can remove it for Ink");
 
-    // A part hidden for a suspected copy or abuse is not refunded.
-    const refund = seg.hidden ? 0 : seg.charged;
+    // A part the admin or the copy checker hid is not refunded; one hidden
+    // only by writer reports is (AB-012).
+    const refund = this.refundable(seg) ? seg.charged : 0;
     if (seg.hidden) this.unhideCount(st);
     const oldCost = seg.current_cost;
     const now = this.now();
@@ -954,6 +995,7 @@ export class Stories {
         units = SafeMath.add(units, newCost);
         System.require(units <= MAX_BATCH_UNITS, "STORIES: batch text is over 20,000 Ink units");
         refund = seg.charged > newCost ? seg.charged - newCost : 0;
+        this.recordChanger(key, seg, finalizer);
         seg.text = text;
         seg.text_hash = this.sha256(StringBytes.stringToBytes(text));
         seg.current_cost = newCost;
@@ -965,7 +1007,7 @@ export class Stories {
         // fixes in a full book). Growth stays inside the light-edit allowance.
         st.used_chars = SafeMath.add(SafeMath.sub(st.used_chars, oldCost), newCost);
       } else if (item.mode == stories.final_mode.FINAL_REMOVED) {
-        refund = seg.hidden ? 0 : seg.charged;
+        refund = this.refundable(seg) ? seg.charged : 0;
         if (seg.hidden) this.unhideCount(st);
         this.clearSegment(seg, finalizer, now);
         st.used_chars = SafeMath.sub(st.used_chars, oldCost);
@@ -1065,6 +1107,7 @@ export class Stories {
     } else {
       System.require(seg.hidden, "STORIES: part is not hidden");
       seg.hidden = false;
+      seg.hidden_by_reports = false;
       seg.moderation_reason = stories.moderation_reason.REASON_UNSPECIFIED;
       // Old reports do not hide it again; it takes new ones.
       seg.report_count = 0;
@@ -1141,6 +1184,7 @@ export class Stories {
       seg.version_count = 1;
     }
     const version = seg.version_count + 1;
+    this.recordChanger(key, seg, writer);
     const owner = seg.author!;
 
     // Removed letters go back to whoever paid for them.
@@ -1306,6 +1350,7 @@ export class Stories {
     System.require(seg.hidden, "STORIES: part is not hidden");
     const note = this.requireNote(args.note);
     seg.hidden = false;
+    seg.hidden_by_reports = false;
     seg.restored = true;
     seg.moderation_reason = stories.moderation_reason.REASON_UNSPECIFIED;
     seg.report_count = 0;
@@ -1333,6 +1378,26 @@ export class Stories {
     const note = this.requireNote(args.note);
     const fingerprint = seg.text_hash != null ? seg.text_hash! : new Uint8Array(0);
     const now = this.now();
+    // Who gets the strike (AB-001, AB-028, AB-029). A part nobody else
+    // changed strikes its writer. Once anyone else changed it, even with a
+    // one-letter fix or a cut, no rule can tell who made it infringing, so
+    // the admin compares the versions and names the writer or a wallet that
+    // changed the part, or chooses no strike. Removing a part is not a
+    // change of its words. version_count also catches parts revised before
+    // edited_by_others existed (it is also set when the writer revises their own).
+    const changed = seg.edited_by_others || seg.version_count > 0;
+    const named = args.strike != null && args.strike!.length > 0;
+    System.require(!(named && args.no_strike), "STORIES: name a wallet to strike or choose no strike, not both");
+    let struck: Uint8Array = new Uint8Array(0);
+    if (named) {
+      struck = args.strike!;
+      const changer = this.partEditors.get(this.join(key, struck))!.value;
+      System.require(Arrays.equal(struck, seg.author!) || changer,
+        "STORIES: strike the part's writer or a wallet that changed it");
+    } else if (!args.no_strike) {
+      System.require(!changed, "STORIES: someone other than the writer changed this part; name who gets the strike, or choose no strike");
+      struck = seg.author!;
+    }
 
     if (seg.status == stories.segment_status.SEGMENT_ACTIVE) {
       const author = seg.author!;
@@ -1369,11 +1434,12 @@ export class Stories {
     seg.moderation_reason = args.reason;
     this.segments.put(key, seg);
     this.putStory(args.story_id, st);
-    this.addStrike(seg.author!, admin);
+    if (struck.length > 0) this.addStrike(struck, admin);
 
     const ev = new stories.moderation_event(args.story_id, args.seq, stories.moderation_action.ACTION_TAKEDOWN,
-      args.reason, admin, seg.author, note, fingerprint);
-    System.event("stories.moderation_event", Protobuf.encode(ev, stories.moderation_event.encode), [seg.author!]);
+      args.reason, admin, seg.author, note, fingerprint, struck);
+    const impacted = struck.length == 0 || Arrays.equal(struck, seg.author!) ? [seg.author!] : [seg.author!, struck];
+    System.event("stories.moderation_event", Protobuf.encode(ev, stories.moderation_event.encode), impacted);
     this.leave();
     return new stories.empty_object();
   }
@@ -1404,6 +1470,7 @@ export class Stories {
 
     if (counted && seg.report_count >= this.reportThreshold(this.config.get()!)) {
       seg.hidden = true;
+      seg.hidden_by_reports = true;
       seg.moderation_reason = args.reason;
       st.hidden_count = st.hidden_count + 1;
       this.putStory(args.story_id, st);
@@ -1644,16 +1711,36 @@ export class Stories {
     return new stories.empty_object();
   }
 
+  // Step 1 of 2 (AB-016): propose. Admin moves only when the proposed
+  // address accepts, so a typo cannot strand it.
   set_admin(args: stories.set_admin_arguments): stories.empty_object {
     this.enter();
     this.requireAdmin();
-    const newAdmin = this.requireAddress(args.new_admin, "STORIES: invalid admin address");
-    const oldAdmin = this.getAdmin();
+    const proposed = this.requireAddress(args.new_admin, "STORIES: invalid admin address");
+    const admin = this.getAdmin();
     const cfg = this.config.get()!;
-    cfg.admin = newAdmin;
+    // Proposing the current admin cancels a pending handover.
+    cfg.pending_admin = Arrays.equal(proposed, admin) ? null : proposed;
     this.config.put(cfg);
-    const ev = new stories.admin_changed_event(oldAdmin, newAdmin);
-    System.event("stories.admin_changed_event", Protobuf.encode(ev, stories.admin_changed_event.encode), [newAdmin]);
+    const ev = new stories.admin_proposed_event(admin, cfg.pending_admin);
+    System.event("stories.admin_proposed_event", Protobuf.encode(ev, stories.admin_proposed_event.encode), [proposed]);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  // Step 2 of 2: the proposed admin signs to take over.
+  accept_admin(args: stories.accept_admin_arguments): stories.empty_object {
+    this.enter();
+    const cfg = this.config.get()!;
+    const pending = cfg.pending_admin;
+    System.require(pending != null && pending.length == ADDRESS_LENGTH, "STORIES: no admin handover is pending");
+    this.requireSigner(pending!, "STORIES: only the proposed admin can accept");
+    const oldAdmin = this.getAdmin();
+    cfg.admin = pending;
+    cfg.pending_admin = null;
+    this.config.put(cfg);
+    const ev = new stories.admin_changed_event(oldAdmin, pending);
+    System.event("stories.admin_changed_event", Protobuf.encode(ev, stories.admin_changed_event.encode), [pending!]);
     this.leave();
     return new stories.empty_object();
   }
@@ -1784,6 +1871,22 @@ export class Stories {
   private refundInk(ink: Uint8Array, author: Uint8Array, amount: u64, storyId: u64, seq: u64): void {
     const mint = new stories.ink_mint_call(author, amount, MINT_REFUND, "r:" + storyId.toString() + ":" + seq.toString());
     this.callOut(ink, INK_MINT_ENTRY, Protobuf.encode(mint, stories.ink_mint_call.encode), [author], "STORIES: Ink refund failed");
+  }
+
+  // Remembers that `by` changed someone else's part, even only by cutting
+  // words, so the admin can strike them on a takedown (AB-028). One entry
+  // per part and wallet: nothing grows and nothing is looped over. The
+  // writer can always be struck, so their own changes are not recorded.
+  private recordChanger(key: Uint8Array, seg: stories.segment, by: Uint8Array): void {
+    if (Arrays.equal(by, seg.author!)) return;
+    this.partEditors.put(this.join(key, by), new stories.boole(true));
+    seg.edited_by_others = true;
+  }
+
+  // Removing a part refunds it unless the admin or the moderator hid it.
+  // Writer reports alone never cost the writer their Ink (AB-012).
+  private refundable(seg: stories.segment): bool {
+    return !seg.hidden || seg.hidden_by_reports;
   }
 
   private clearSegment(seg: stories.segment, by: Uint8Array, now: u64): void {

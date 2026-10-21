@@ -44,6 +44,7 @@ const NETWORKS = {
   mainnet: {
     name: "Koinos MAINNET (real KOIN)",
     rpc: "https://api.koinos.io",
+    trustedRpcs: ["https://api.koinos.io"],   // the only nodes --rpc may name on mainnet
     chainId: "EiBZK_GGVP0H_fXVAM3j6EAuz3-B-l3ejxRSewi7qIBfSA==",
     koin: "15DJN4a8SgrbGhhGksSBASiSYjGnMU8dGL",
     mainnet: true,
@@ -247,6 +248,10 @@ function shopAddressesForStories(onChain, wanted) {
   const ink = cfg.ink || "";
   const current = cfg.stories || "";
   if (!isAddress(treasury) || !isAddress(founder)) fail("Shop has no treasury or founder set yet. Run wire first.");
+  // On mainnet the payout addresses are never taken from the node alone (AB-009).
+  if (wanted.mainnet && (!wanted.treasury || !wanted.founder)) {
+    fail("On mainnet, give --treasury and --founder: they are checked against the Shop on chain instead of trusting the node. Nothing was changed.");
+  }
   if (ink !== wanted.ink) fail("Shop points at Ink " + (ink || "(none)") + " but you gave --ink " + wanted.ink + ". Nothing was changed.");
   if (wanted.treasury && wanted.treasury !== treasury) fail("Shop treasury on chain is " + treasury + " but you gave --treasury " + wanted.treasury + ". Nothing was changed.");
   if (wanted.founder && wanted.founder !== founder) fail("Shop founder on chain is " + founder + " but you gave --founder " + wanted.founder + ". Nothing was changed.");
@@ -348,6 +353,38 @@ function requireReason(value) {
   return MODERATION_REASONS[key];
 }
 
+const VERSION_KINDS = { 1: "original", 2: "changed", 3: "removed" };
+
+/**
+ * Who a takedown may strike, from get_segment and get_versions (AB-028,
+ * AB-029). A part nobody else changed strikes its writer automatically.
+ * Once anyone else changed it, the contract refuses until the admin names
+ * the writer or a wallet that changed it, or chooses no strike. `changers`
+ * lists the wallets this tool can see; the contract also remembers ones
+ * whose versions are gone (a finalizer's edit keeps no version).
+ */
+function takedownStrike(seg, versions, strike, noStrike) {
+  if (strike && noStrike) fail("Use --strike or --no-strike, not both.");
+  const writer = (seg && seg.author) || "";
+  const changed = !!(seg && seg.edited_by_others) || Number((seg && seg.version_count) || 0) > 0;
+  const changers = [];
+  const add = (who) => { if (who && who !== writer && !changers.includes(who)) changers.push(who); };
+  for (const v of versions || []) if (Number(v.kind) !== 1) add(v.by);
+  if (seg && seg.edited_by_others) add(seg.last_edited_by);
+  return { writer, changed, changers, needsChoice: changed && !strike && !noStrike };
+}
+
+/** One line per kept version of a part, oldest first, for the admin to compare. */
+function versionHistory(versions) {
+  return (versions || []).map((v) => {
+    const at = Number(v.at || 0) ? new Date(Number(v.at) * 1000).toISOString().replace(".000Z", "Z") : "?";
+    const text = String(v.text || "");
+    const shown = text.length > 160 ? text.slice(0, 160) + "…" : text;
+    return "  v" + v.version + " " + (VERSION_KINDS[Number(v.kind)] || "kind " + v.kind) + " by " + (v.by || v.author || "?") +
+      " at " + at + ": " + JSON.stringify(shown);
+  });
+}
+
 function parseArgs(argv) {
   const positional = [];
   const flags = {};
@@ -398,6 +435,11 @@ function resolveNetwork(flags) {
   }
   const rpc = typeof flags.rpc === "string" ? flags.rpc : net.rpc;
   if (!/^https:\/\//.test(rpc)) fail("RPC URL must start with https:// : " + rpc);
+  // The dry run hands a fully signed transaction to this node, and some
+  // commands read addresses from it, so mainnet only uses listed nodes (AB-009).
+  if (net.mainnet && !net.trustedRpcs.includes(rpc)) {
+    fail("On mainnet, --rpc must be one of: " + net.trustedRpcs.join(", ") + ". A node you don't trust could send the signed dry run. Nothing was signed.");
+  }
   return Object.assign({}, net, { key: name, rpc });
 }
 
@@ -483,6 +525,45 @@ function toKoilibAbi(generated) {
   return { methods, types: generated.types };
 }
 
+/**
+ * sha256 (hex) of the wasm about to be uploaded (AB-006). With an expected
+ * hash, any mismatch stops the upload: a stale, debug or tampered build is
+ * never uploaded by mistake. Mainnet uploads must give one.
+ */
+function checkWasmHash(wasm, expected, mainnet) {
+  const actual = crypto.createHash("sha256").update(Buffer.from(wasm)).digest("hex");
+  if (expected === undefined) {
+    if (mainnet) fail("Mainnet uploads need --expect-sha256 <hex>: the sha256 of the release build you reviewed. This build's is " + actual + ". Nothing was sent.");
+    return actual;
+  }
+  if (typeof expected !== "string" || !/^[0-9a-fA-F]{64}$/.test(expected)) fail("--expect-sha256 must be 64 hex characters.");
+  if (expected.toLowerCase() !== actual) {
+    fail("The wasm's sha256 is " + actual + " but --expect-sha256 says " + expected.toLowerCase() + ". It does not match: rebuild or check you have the right file. Nothing was sent.");
+  }
+  return actual;
+}
+
+/**
+ * Link keys (invite and promo secrets) are never taken from the command
+ * line, where they would stay in shell history: they are pasted at the
+ * hidden prompt instead (AB-013).
+ */
+function refuseSecretFlag(flags, name) {
+  if (flags[name] !== undefined) {
+    fail("Don't put the link key on the command line (it stays in your shell history). Leave out --" + name + " and paste it at the hidden prompt.");
+  }
+}
+
+/** Stop a testnet-only command on mainnet. */
+function requireTestnet(net, command) {
+  if (net.mainnet) fail(command + " is for testnet only.");
+}
+
+/** A new link key: 32 bytes from the operating system's secure random source (AB-013). */
+function newLinkKeyHex() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
 /** Read the user's single-line answer and decide if it confirms. */
 function isConfirmation(answer) {
   return String(answer || "").trim() === "SEND";
@@ -519,6 +600,8 @@ module.exports = {
   parseArgs,
   MODERATION_REASONS,
   requireReason,
+  takedownStrike,
+  versionHistory,
   resolveNetwork,
   checkChainId,
   classifySecret,
@@ -526,6 +609,10 @@ module.exports = {
   formatMana,
   rcLimitFor,
   isConfirmation,
+  checkWasmHash,
+  refuseSecretFlag,
+  requireTestnet,
+  newLinkKeyHex,
   toKoilibAbi,
   PROMO_DOMAIN,
   INVITE_DOMAIN,

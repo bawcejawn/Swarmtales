@@ -403,3 +403,123 @@ test("moderation reasons map to the contract's numbers", () => {
   assert.throws(() => lib.requireReason("rude"), /--reason must be one of/);
   assert.throws(() => lib.requireReason(undefined), /--reason must be one of/);
 });
+
+// ---------- AB-006: the wasm is checked against a known sha256 ----------
+
+const WASM = Buffer.from("pretend this is contract.wasm");
+const WASM_SHA = crypto.createHash("sha256").update(WASM).digest("hex");
+
+test("the upload reports the wasm's sha256", () => {
+  assert.strictEqual(lib.checkWasmHash(WASM, undefined, false), WASM_SHA);
+});
+
+test("a wasm that does not match --expect-sha256 is refused, on any network", () => {
+  const other = crypto.createHash("sha256").update("a different build").digest("hex");
+  assert.throws(() => lib.checkWasmHash(WASM, other, false), /does not match/);
+  assert.throws(() => lib.checkWasmHash(WASM, other, true), /does not match/);
+  assert.strictEqual(lib.checkWasmHash(WASM, WASM_SHA.toUpperCase(), true), WASM_SHA);
+});
+
+test("mainnet uploads need --expect-sha256; a malformed hash is refused", () => {
+  assert.throws(() => lib.checkWasmHash(WASM, undefined, true), /--expect-sha256/);
+  assert.throws(() => lib.checkWasmHash(WASM, "abc123", false), /64 hex/);
+  assert.throws(() => lib.checkWasmHash(WASM, true, false), /64 hex/);
+});
+
+// ---------- AB-009: on mainnet, trust only the listed node ----------
+
+const MAINNET = { network: "mainnet", "i-understand-this-is-mainnet": true };
+
+test("mainnet refuses a --rpc override that is not a listed node", () => {
+  assert.throws(() => lib.resolveNetwork(Object.assign({ rpc: "https://evil.example.com" }, MAINNET)), /--rpc/);
+  assert.strictEqual(lib.resolveNetwork(Object.assign({ rpc: "https://api.koinos.io" }, MAINNET)).rpc, "https://api.koinos.io");
+  // Testnet still takes any https node.
+  assert.strictEqual(lib.resolveNetwork({ rpc: "https://my-node.example.com" }).rpc, "https://my-node.example.com");
+});
+
+test("on mainnet, wire-stories needs --treasury and --founder instead of trusting the node", () => {
+  const onChain = {
+    treasury: "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6",
+    founder: "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6",
+    ink: "195trftAvPnqeoPmHeGmxtwNYVUVdghm5x",
+  };
+  const stories = "12SVw65QpMjFo9fnc651V7LhXKqVLg15Ww";
+  assert.throws(() => lib.shopAddressesForStories(onChain, { ink: onChain.ink, stories, mainnet: true }), /--treasury and --founder/);
+  assert.throws(() => lib.shopAddressesForStories(onChain, { ink: onChain.ink, stories, treasury: onChain.treasury, mainnet: true }), /--treasury and --founder/);
+  const args = lib.shopAddressesForStories(onChain, { ink: onChain.ink, stories, treasury: onChain.treasury, founder: onChain.founder, mainnet: true });
+  assert.strictEqual(args.treasury, onChain.treasury);
+  // Testnet keeps reading them from the chain.
+  assert.strictEqual(lib.shopAddressesForStories(onChain, { ink: onChain.ink, stories }).founder, onChain.founder);
+});
+
+// ---------- AB-013: link keys stay out of shell history; strong randomness ----------
+
+test("a link key on the command line is refused: it would land in shell history", () => {
+  assert.throws(() => lib.refuseSecretFlag({ "link-key": "5KwdXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" }, "link-key"), /hidden prompt/);
+  assert.throws(() => lib.refuseSecretFlag({ "link-key": true }, "link-key"), /hidden prompt/);
+  lib.refuseSecretFlag({}, "link-key"); // no flag: fine, the prompt asks for it
+});
+
+test("claim-promo and the other test commands refuse mainnet", () => {
+  assert.throws(() => lib.requireTestnet({ mainnet: true }, "claim-promo"), /claim-promo is for testnet only/);
+  lib.requireTestnet({ mainnet: false }, "claim-promo");
+});
+
+test("link keys are 32 bytes from crypto.randomBytes", () => {
+  const real = crypto.randomBytes;
+  crypto.randomBytes = (n) => Buffer.alloc(n, 7);
+  try {
+    assert.strictEqual(lib.newLinkKeyHex(), "07".repeat(32));
+  } finally {
+    crypto.randomBytes = real;
+  }
+  assert.match(lib.newLinkKeyHex(), /^[0-9a-f]{64}$/);
+  assert.notStrictEqual(lib.newLinkKeyHex(), lib.newLinkKeyHex());
+});
+
+test("takedown: a part nobody else changed needs no choice; a changed part does (AB-028, AB-029)", () => {
+  const ADDR_C = "1NRNShd6oHh1JCxfbnWj47PrgqvqeyK7w1";
+  // Never changed, or changed only by its writer's own free edit: automatic.
+  let who = lib.takedownStrike({ author: ADDR_A }, [], "", false);
+  assert.deepStrictEqual([who.writer, who.changed, who.needsChoice, who.changers], [ADDR_A, false, false, []]);
+  who = lib.takedownStrike({ author: ADDR_A, last_edited_by: ADDR_A }, [], "", false);
+  assert.strictEqual(who.needsChoice, false);
+  // An editor removed the hidden part: no words changed, still automatic.
+  who = lib.takedownStrike({ author: ADDR_A, last_edited_by: ADDR_B }, [], "", false);
+  assert.strictEqual(who.needsChoice, false);
+  // Two other wallets revised it: both are listed, and a choice is needed.
+  const versions = [
+    { version: 1, kind: 1, by: ADDR_A, text: "original", at: "1700000000" },
+    { version: 2, kind: 2, by: ADDR_B, text: "planted", at: "1700000100" },
+    { version: 3, kind: 2, by: ADDR_C, text: "planted!", at: "1700000200" },
+  ];
+  who = lib.takedownStrike({ author: ADDR_A, edited_by_others: true, version_count: 3, last_edited_by: ADDR_C }, versions, "", false);
+  assert.deepStrictEqual([who.changed, who.needsChoice, who.changers], [true, true, [ADDR_B, ADDR_C]]);
+  // The finalizer's edit keeps no version: last_edited_by shows who it was.
+  who = lib.takedownStrike({ author: ADDR_A, edited_by_others: true, last_edited_by: ADDR_B }, [], "", false);
+  assert.deepStrictEqual([who.needsChoice, who.changers], [true, [ADDR_B]]);
+  // Revised before edited_by_others existed: version_count still counts.
+  assert.strictEqual(lib.takedownStrike({ author: ADDR_A, version_count: 2 }, [], "", false).needsChoice, true);
+  // Once the admin chooses, it may go ahead; both choices at once are refused.
+  assert.strictEqual(lib.takedownStrike({ author: ADDR_A, edited_by_others: true }, [], ADDR_B, false).needsChoice, false);
+  assert.strictEqual(lib.takedownStrike({ author: ADDR_A, edited_by_others: true }, [], "", true).needsChoice, false);
+  assert.throws(() => lib.takedownStrike({ author: ADDR_A }, [], ADDR_B, true), /--strike or --no-strike, not both/);
+  // The history the admin compares, oldest first.
+  const lines = lib.versionHistory(versions);
+  assert.strictEqual(lines.length, 3);
+  assert.match(lines[0], /^ {2}v1 original by 1Dde.* at 2023-11-14T22:13:20Z: "original"$/);
+  assert.match(lines[2], /v3 changed by 1NRN.*"planted!"$/);
+  assert.match(lib.versionHistory([{ version: 2, kind: 2, by: ADDR_B, text: "x".repeat(200), at: "0" }])[0], /at \?: "x{160}…"$/);
+});
+
+test("takedown --no-strike reaches the operation through the built ABI", async () => {
+  const { Contract } = require("koilib");
+  const fs = require("fs");
+  const path = require("path");
+  const abi = lib.toKoilibAbi(JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "stories", "abi", "stories.abi"), "utf8")));
+  const c = new Contract({ id: "16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt", abi });
+  for (const noStrike of [true, false]) {
+    const op = await c.encodeOperation({ name: "takedown_segment", args: { story_id: "1", seq: "2", reason: 1, note: "n", strike: "", no_strike: noStrike } });
+    assert.strictEqual(!!(await c.decodeOperation(op)).args.no_strike, noStrike);
+  }
+});

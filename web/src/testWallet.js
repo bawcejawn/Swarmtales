@@ -111,3 +111,17 @@ export function createTestWallet(network) {
     },
   };
 }
+
+/**
+ * On a mainnet build, delete any test-wallet key this browser kept from the
+ * testnet (AB-014). The same key is a valid mainnet key, and it sits in plain
+ * localStorage, so it should not outlive the test version.
+ */
+export function forgetTestWalletOnMainnet(network, storage) {
+  if (!network || !network.mainnet) return;
+  try {
+    storage.removeItem(KEY_STORE);
+  } catch {
+    /* storage blocked: nothing to remove */
+  }
+}
