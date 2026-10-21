@@ -25,7 +25,8 @@
  *   node deploy/deploy.js status   --ink <addr> --shop <addr> --admin <addr> [--user <addr>] [--stories <addr>] [--story <id>]
  *   node deploy/deploy.js upload   ink|shop|stories --expect <contract wallet address> [--expect-sha256 <hex>] [--upgrade]
  *       (--expect-sha256: required on mainnet; the upload stops unless the wasm matches it)
- *       (--upgrade, testnet only: replace the code of a contract that is already there; its stored data is kept)
+ *       (--upgrade: replace the code of a contract that is already there; its stored data is kept. On mainnet
+ *        also add --i-understand-this-replaces-mainnet-code, and follow docs/KEY_CUSTODY.md section 6)
  *   node deploy/deploy.js set-admin ink|shop|stories --contract <addr> --admin <addr>
  *       [--from <current admin>]
  *       (step 1: PROPOSES the new admin, signed by the current admin: the contract wallet the
@@ -40,6 +41,15 @@
  *   node deploy/deploy.js test-promo --admin <addr> --shop <addr>
  *   node deploy/deploy.js claim-promo --account <addr> --shop <addr> --campaign <id> [--sign-for <addr>]
  *       (testnet only. Asks for the promo link key, the part after k=, at a hidden prompt)
+ *
+ * Promos (testnet and mainnet; on mainnet add --network mainnet --i-understand-this-is-mainnet):
+ *   node deploy/deploy.js promo-new --admin <addr> --shop <addr> --budget <total Ink> --end <day> [--start <day|now>] [--amount 100] [--daily-cap <Ink>] [--site <https url>]
+ *       (creates a shared campaign with a fresh link key: each wallet may claim it once. Days are UTC, like 2026-12-31
+ *        or 2026-12-31T18:00. Prints the share link ONCE, only to a terminal: it holds the campaign's secret key)
+ *   node deploy/deploy.js promo-on  --admin <addr> --shop <addr>      (the global switch: every enabled campaign)
+ *   node deploy/deploy.js promo-off --admin <addr> --shop <addr>      (stops every campaign at once)
+ *   node deploy/deploy.js promo-end <campaign id> --admin <addr> --shop <addr>   (turns one campaign off)
+ *
  *   node deploy/deploy.js user-checks --user <addr> --ink <addr> --shop <addr> --admin <addr>
  *       (dry runs only: each call must be REJECTED; nothing is sent for real, though each dry run is signed)
  *
@@ -80,9 +90,9 @@
  *   node deploy/deploy.js hide --actor <admin or moderator addr> --stories <addr> --story <id> --seq <n> --reason copyright|duplicate|spam|illegal|other [--note "..."] [--unhide]
  *   node deploy/deploy.js takedown --admin <addr> --stories <addr> --story <id> --seq <n> --reason copyright|duplicate|spam|illegal|other --note "notice reference" [--strike <addr> | --no-strike]
  *       (permanent: clears the part's text and its kept versions from contract storage. No Ink refund. It first
- *        prints the writer, who else changed the part and every kept version. A part nobody else changed is one
- *        strike for its writer. Once someone else changed it, it stops until you choose: --strike the writer or
- *        a wallet that changed it, or --no-strike)
+ *        prints the writer, who last edited it, who else changed it, the live text and every kept version in full.
+ *        A part nobody else changed is one strike for its writer. Once someone else changed it, it stops until you
+ *        choose: --strike the writer or a wallet that changed it, or --no-strike)
  *   node deploy/deploy.js block --admin <addr> --stories <addr> --account <addr> [--note "..."] [--unblock]
  * Common flags: --network testnet|mainnet  --rpc <https url>
  */
@@ -347,14 +357,11 @@ async function cmdUpload(args) {
   console.log("wasm sha256: " + sha + (args.flags["expect-sha256"] === undefined ? "" : "  (matches --expect-sha256)"));
 
   const meta = await provider.call("contract_meta_store.get_contract_meta", { contract_id: expected }).catch(() => ({}));
-  if (meta && meta.meta) {
-    // Testnet only: --upgrade replaces the code and keeps the contract's stored data
-    // (stories, memberships, settings). Mainnet contracts are never overwritten by this script.
-    if (args.flags.upgrade !== true || net.mainnet) {
-      lib.fail(expected + " already has a contract on this network. This script does not overwrite contracts" +
-        (net.mainnet ? "." : " unless you add --upgrade (testnet only: new code, same address, stored data kept)."));
-    }
-    console.log("UPGRADE (testnet): the code at " + expected + " will be replaced. Its stored data is kept.");
+  // --upgrade replaces the code and keeps the contract's stored data (stories,
+  // memberships, settings). On mainnet it also needs a second explicit flag; the
+  // sha256 check above already ran (AB-041, docs/KEY_CUSTODY.md section 6).
+  if (lib.checkUpgrade(!!(meta && meta.meta), args.flags, net.mainnet, expected)) {
+    console.log("UPGRADE (" + net.name + "): the code at " + expected + " will be replaced by the build above. Its stored data is kept.");
   }
 
   const signer = await getSigner(provider, expected, "the " + target + " contract wallet");
@@ -543,6 +550,88 @@ async function cmdTestPromo(args) {
   console.log("Share link (replace the host with your site): https://YOUR-SITE/#/promo/" + nextId + "?k=" + linkKey.getPrivateKey("wif"));
   console.log("To claim from the CLI: node deploy/deploy.js claim-promo --account <addr> --shop " + shop + " --campaign " + nextId);
   console.log("  (it asks for the link key at a hidden prompt: paste the part after k=)");
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
+// ---------- promo admin (testnet and mainnet) ----------
+
+/**
+ * promo-new: one shared campaign with a fresh link key. Only the key's PUBLIC
+ * address goes on chain. The share link (which holds the private key) is
+ * printed once, to a terminal only, after the campaign is created; it never
+ * appears in the dry-run summary, an error or a log file.
+ */
+async function cmdPromoNew(args) {
+  const f = args.flags;
+  const admin = lib.requireAddress(f.admin, "admin");
+  const shop = lib.requireAddress(f.shop, "shop");
+  const plan = lib.planPromoCampaign(f, Math.floor(Date.now() / 1000));
+  const site = f.site === undefined ? lib.DEFAULT_SITE : String(f.site);
+  lib.promoShareLink(site, "1", "check"); // stop on a bad --site before anything is signed
+  if (!process.stdout.isTTY) {
+    lib.fail("promo-new prints a share link that contains the campaign's secret link key, so it only runs in a terminal.\n" +
+      "Run it again without redirecting or piping its output (no > file, no | tee).");
+  }
+  const { net, provider } = await connect(f);
+  const signer = await getSigner(provider, admin, "the admin wallet");
+  const { Contract, Signer } = koilib();
+  const shopC = new Contract({ id: shop, abi: loadAbiJson("shop"), provider });
+  const { result: cfg } = await shopC.functions.get_config();
+  const nextId = cfg && cfg.next_campaign_id && cfg.next_campaign_id !== "0" ? String(cfg.next_campaign_id) : "1";
+  const linkKey = new Signer({ privateKey: lib.newLinkKeyHex() });
+  const op = await shopC.encodeOperation({
+    name: "create_campaign",
+    args: { ...plan, link_signer: linkKey.getAddress() },
+  });
+  const day = (sec) => new Date(Number(sec) * 1000).toISOString().replace(".000Z", "Z");
+  const txId = await dryRunThenSend(signer, provider, net, [op],
+    "create promo campaign " + nextId + ": " + plan.amount + " Ink per wallet (each wallet may claim it once), budget " +
+    plan.budget_total + " Ink" + (plan.daily_cap !== "0" ? ", at most " + plan.daily_cap + " Ink a day" : "") +
+    ", from " + day(plan.starts_at) + " to " + day(plan.ends_at));
+  // Make sure the id printed in the link is the campaign this transaction made.
+  const { result: made } = await shopC.functions.get_campaign({ campaign_id: nextId });
+  if (!made || made.link_signer !== linkKey.getAddress()) {
+    lib.fail("The campaign was created (transaction " + txId + "), but campaign " + nextId + " is not the one it made\n" +
+      "(another campaign was created at the same time). Turn it off with promo-end and run promo-new again.");
+  }
+  console.log("");
+  console.log("Campaign id: " + nextId);
+  console.log("Share link (shown once; it holds the campaign's secret key. Copy it now and do not paste it into a log or issue):");
+  console.log("  " + lib.promoShareLink(site, nextId, linkKey.getPrivateKey("wif")));
+  if (!(cfg && cfg.promo_enabled)) console.log("Promos are switched off for everyone. Turn them on with promo-on when you are ready.");
+  console.log("Send back: the transaction id (" + txId + ") and the campaign id. Never the link.");
+}
+
+/** promo-on / promo-off: the global switch for every campaign. */
+async function cmdPromoSwitch(args, enabled) {
+  const f = args.flags;
+  const admin = lib.requireAddress(f.admin, "admin");
+  const shop = lib.requireAddress(f.shop, "shop");
+  const { net, provider } = await connect(f);
+  const signer = await getSigner(provider, admin, "the admin wallet");
+  const { Contract } = koilib();
+  const shopC = new Contract({ id: shop, abi: loadAbiJson("shop"), provider });
+  const op = await shopC.encodeOperation({ name: "set_promo_enabled", args: { enabled } });
+  const txId = await dryRunThenSend(signer, provider, net, [op],
+    enabled ? "turn promos ON (every enabled campaign can be claimed within its dates)" : "turn promos OFF for every campaign");
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
+/** promo-end <id>: switch one campaign off for good (it can be switched on again with set_campaign_enabled). */
+async function cmdPromoEnd(args) {
+  const f = args.flags;
+  const id = lib.requireCampaignId(args.target !== undefined ? args.target : f.campaign);
+  const admin = lib.requireAddress(f.admin, "admin");
+  const shop = lib.requireAddress(f.shop, "shop");
+  const { net, provider } = await connect(f);
+  const { Contract } = koilib();
+  const shopC = new Contract({ id: shop, abi: loadAbiJson("shop"), provider });
+  const { result: row } = await shopC.functions.get_campaign({ campaign_id: id });
+  if (!row || (!row.link_signer && !row.amount)) lib.fail("Shop " + shop + " has no campaign " + id + ".");
+  const signer = await getSigner(provider, admin, "the admin wallet");
+  const op = await shopC.encodeOperation({ name: "set_campaign_enabled", args: { campaign_id: id, enabled: false } });
+  const txId = await dryRunThenSend(signer, provider, net, [op],
+    "turn OFF promo campaign " + id + " (" + (row.amount || "?") + " Ink per wallet, " + (row.budget_used || "0") + " of " + (row.budget_total || "?") + " Ink given)");
   console.log("Send back: the transaction id (" + txId + ").");
 }
 
@@ -1132,23 +1221,26 @@ async function cmdTakedown(args) {
   const versions = (kept && kept.values) || [];
   const who = lib.takedownStrike(seg, versions, strike, noStrike);
   console.log("Writer:            " + who.writer);
+  console.log("Last edited by:    " + (seg.last_edited_by || who.writer) + (seg.last_edited_by && seg.last_edited_by !== who.writer ? "" : " (the writer)"));
   console.log("Changed by others: " + (who.changed ? (who.changers.join(", ") || "yes") : "no"));
+  console.log("Live text:         " + JSON.stringify(String(seg.text || "")));
   if (versions.length) {
+    // Every change to the text is a version naming who made it (AB-033), printed in full.
     console.log("Versions, oldest first:");
-    for (const line of lib.versionHistory(versions)) console.log(line);
+    for (const line of lib.versionHistory(versions, seg)) console.log(line);
   }
   if (who.needsChoice) {
     lib.fail(
       "Someone other than the writer changed this part, so the contract will not pick who gets the strike.\n" +
       "Nothing was sent. Compare the versions above: strike the wallet whose change made the text infringing.\n" +
       "A cut can change the meaning as much as new words, and a typo fix alone is no reason for a strike.\n" +
-      "The same history is public on a block explorer: each stories.revise_event for this part (\"by\" is who\n" +
-      "changed it), and for a change in the final edit, this part's item in the finalizer's submit_final_batch.\n" +
-      "Then run this command again with one of:\n" +
-      [who.writer, ...who.changers].map((a) => "  --strike " + a).join("\n") + "\n" +
+      "The same history is public on a block explorer: each stories.revise_event and stories.segment_changed_event\n" +
+      "for this part (\"by\" is who changed it).\n" +
+      "Then run this command again with one of (whoever last edited the text comes first, even the writer):\n" +
+      who.candidates.map((a) => "  --strike " + a + (a === who.writer ? "   (the writer)" : "")).join("\n") + "\n" +
       "  --no-strike   (take the part down without striking anyone)");
   }
-  if (strike && strike !== who.writer && !who.changers.includes(strike)) {
+  if (strike && !who.candidates.includes(strike)) {
     console.log("--strike " + strike + " is not the writer or a wallet seen above. The contract accepts it only if that wallet changed this part; the dry run checks this before anything is sent.");
   }
 
@@ -1246,6 +1338,14 @@ async function main() {
       return cmdTestPromo(args);
     case "claim-promo":
       return cmdClaimPromo(args);
+    case "promo-new":
+      return cmdPromoNew(args);
+    case "promo-on":
+      return cmdPromoSwitch(args, true);
+    case "promo-off":
+      return cmdPromoSwitch(args, false);
+    case "promo-end":
+      return cmdPromoEnd(args);
     case "user-checks":
       return cmdUserChecks(args);
     case "wire-stories":

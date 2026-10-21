@@ -498,8 +498,10 @@ test("takedown: a part nobody else changed needs no choice; a changed part does 
   // The finalizer's edit keeps no version: last_edited_by shows who it was.
   who = lib.takedownStrike({ author: ADDR_A, edited_by_others: true, last_edited_by: ADDR_B }, [], "", false);
   assert.deepStrictEqual([who.needsChoice, who.changers], [true, [ADDR_B]]);
-  // Revised before edited_by_others existed: version_count still counts.
-  assert.strictEqual(lib.takedownStrike({ author: ADDR_A, version_count: 2 }, [], "", false).needsChoice, true);
+  // A paid change counts; the writer's own edits (also versions now, AB-033) do not.
+  assert.strictEqual(lib.takedownStrike({ author: ADDR_A, paid_changes: 1 }, [], "", false).needsChoice, true);
+  assert.strictEqual(lib.takedownStrike({ author: ADDR_A, version_count: 3 },
+    [{ version: 1, kind: 1, by: ADDR_A }, { version: 2, kind: 4, by: ADDR_A }, { version: 3, kind: 4, by: ADDR_A }], "", false).needsChoice, false);
   // Once the admin chooses, it may go ahead; both choices at once are refused.
   assert.strictEqual(lib.takedownStrike({ author: ADDR_A, edited_by_others: true }, [], ADDR_B, false).needsChoice, false);
   assert.strictEqual(lib.takedownStrike({ author: ADDR_A, edited_by_others: true }, [], "", true).needsChoice, false);
@@ -509,7 +511,8 @@ test("takedown: a part nobody else changed needs no choice; a changed part does 
   assert.strictEqual(lines.length, 3);
   assert.match(lines[0], /^ {2}v1 original by 1Dde.* at 2023-11-14T22:13:20Z: "original"$/);
   assert.match(lines[2], /v3 changed by 1NRN.*"planted!"$/);
-  assert.match(lib.versionHistory([{ version: 2, kind: 2, by: ADDR_B, text: "x".repeat(200), at: "0" }])[0], /at \?: "x{160}…"$/);
+  // Versions are printed in full (AB-033), never cut at 160 characters.
+  assert.match(lib.versionHistory([{ version: 2, kind: 2, by: ADDR_B, text: "x".repeat(200), at: "0" }])[0], /at \?: "x{200}"$/);
 });
 
 test("takedown --no-strike reaches the operation through the built ABI", async () => {

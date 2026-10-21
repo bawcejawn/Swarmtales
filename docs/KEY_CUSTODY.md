@@ -38,7 +38,7 @@ These keys can replace a contract's code, so they are the most valuable keys.
 ## 5. Moderator (copy checker)
 
 - [ ] A fresh key from `node deploy/deploy.js new-moderator-key`, used for nothing else. It can only hide, unhide and add notes.
-- [ ] Stored only as the `MODERATOR_WIF` secret in GitHub. Ideally in a protected `copy-checker` environment limited to the `main` branch.
+- [ ] Stored only as the `MODERATOR_WIF` secret of the `copy-checker` environment (Settings > Environments > copy-checker), with "Deployment branches" limited to `main`. The workflow's `check` job runs in that environment, so a run dispatched on any other branch never gets the key. Delete any repository-level `MODERATOR_WIF` secret: every branch can read those.
 - [ ] Set the `EXPECTED_CHAIN_ID` variable if the checker uses a node other than the Foundation testnet or api.koinos.io.
 - [ ] If it leaks: set a new moderator with `set-moderation` (admin), then replace the secret.
 
@@ -51,6 +51,18 @@ These keys can replace a contract's code, so they are the most valuable keys.
 | Contract key leaked | Treat as critical: the holder can replace the code. Pause the contract (admin), warn users publicly, and stop sending payments to it |
 | Treasury or founder | The Shop admin points payments at new addresses with `set_addresses` |
 | Moderator | The Stories admin sets a new moderator |
+
+### Replacing contract code on mainnet (the re-upload above, or a reviewed fix after launch)
+
+The contract key is the only key that can do this, and the stored data (stories, memberships, balances, settings) is kept.
+
+1. Build the reviewed code (`npx yarn@1.22.22 build:release` in the contract's folder) and record its sha256. Have a second person build the same commit and compare the hash.
+2. Pause the contract with its admin first, if the admin still works.
+3. Run, from the repository root:
+   `node deploy/deploy.js upload ink|shop|stories --expect <contract address> --expect-sha256 <recorded hash> --upgrade --network mainnet --i-understand-this-is-mainnet --i-understand-this-replaces-mainnet-code`
+   The script stops on a sha256 mismatch, on an unlisted node, or without both mainnet flags. It runs a dry run, then waits for you to type SEND.
+4. For a lost admin: the recovery build lets a new admin be proposed. Propose and accept it (`set-admin`, `accept-admin`), then upload the normal release build again the same way, with its own recorded sha256.
+5. Check `status`, unpause, and publish what changed and why.
 
 ## 7. Before the mainnet upload
 
