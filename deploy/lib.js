@@ -448,7 +448,8 @@ function takedownStrike(seg, versions, strike, noStrike, recorded) {
   const lastEditedBy = (seg && seg.last_edited_by) || "";
   if (seg && seg.edited_by_others) add(lastEditedBy);
   // A part revised before edited_by_others existed shows it only in its versions (AB-052).
-  const changed = !!(seg && seg.edited_by_others) || Number((seg && seg.paid_changes) || 0) > 0 || changers.length > 0;
+  const changed = !!(seg && (seg.edited_by_others || seg.other_version)) || Number((seg && seg.paid_changes) || 0) > 0 ||
+    changers.length > 0;
   const unseen = changed && changers.length === 0;
   const candidates = [];
   for (const who of [lastEditedBy, writer, ...changers]) if (who && !candidates.includes(who)) candidates.push(who);
@@ -470,9 +471,61 @@ function legacyPartNotes(seq, seg, versions) {
       "). After the upgrade a takedown asks who gets the strike.");
   }
   if (seg.hidden && !seg.hidden_by_reports && !Number(seg.hidden_by || 0)) {
-    notes.push("part " + seq + ": hidden by the admin or the checker. If the admin hid it, unhide and hide it again after the upgrade, so the opener can't restore it.");
+    notes.push("part " + seq + ": hidden by the admin or the checker. After the upgrade only the admin or the moderator can unhide it; " +
+      "to make it an admin hide, run deploy.js hide on it again with the admin key (one transaction).");
   }
   return notes;
+}
+
+// get_versions returns at most this many per call (AB-060).
+const VERSIONS_PER_READ = 5;
+
+/**
+ * Every kept version of a part, oldest first, read a few at a time (AB-060).
+ * `page(from, count)` returns one get_versions call's values. A Stories
+ * version without paging returns all of them on every call; versions are
+ * kept by number, so that reads the same.
+ */
+async function readVersions(page, versionCount) {
+  const total = Number(versionCount || 0);
+  const byNumber = new Map();
+  for (let from = 1; from <= total; from += VERSIONS_PER_READ) {
+    let added = 0;
+    for (const v of (await page(from, VERSIONS_PER_READ)) || []) {
+      if (!byNumber.has(Number(v.version))) {
+        byNumber.set(Number(v.version), v);
+        added++;
+      }
+    }
+    if (!added) break;
+  }
+  return [...byNumber.values()].sort((a, b) => Number(a.version) - Number(b.version));
+}
+
+const HIDDEN_BY = { 1: "writer reports", 2: "the copy checker", 3: "the admin" };
+
+/**
+ * What `deploy.js hide` will do for a part (AB-061, AB-062), or fail before
+ * any key is asked for. Hiding a part that is already hidden is the admin
+ * taking over that hide in one transaction: it becomes an admin hide, so the
+ * opener can't restore it and removing it refunds nothing. Only the admin
+ * unhides an admin hide.
+ */
+function hidePlan(seg, hidden, actor, admin) {
+  if (!seg || !seg.author) fail("There is no such part.");
+  if (Number(seg.status) !== 1) fail("That part was removed; nothing to hide or unhide.");
+  const by = Number(seg.hidden_by || 0);
+  const who = HIDDEN_BY[by] || (seg.hidden_by_reports ? "writer reports" : "the admin or the checker, before hidden_by existed");
+  if (!hidden) {
+    if (!seg.hidden) fail("That part is not hidden. Nothing was sent.");
+    if (by === 3 && actor !== admin) fail("The admin hid this part, so only the admin key can unhide it. Nothing was sent.");
+    return "UNHIDE (hidden by " + who + ")";
+  }
+  if (!seg.hidden) return "HIDE";
+  if (by === 3) fail("The admin already hid this part. Nothing was sent.");
+  if (actor !== admin) fail("That part is already hidden (by " + who + "). Only the admin key can take over a hide. Nothing was sent.");
+  return "HIDE AS THE ADMIN (now hidden by " + who + "; in one transaction it becomes an admin hide: the opener can't restore it " +
+    "and removing it refunds nothing)";
 }
 
 /** A set-once address (AB-037, AB-050): empty on chain, or already exactly `wanted`. */
@@ -758,6 +811,9 @@ module.exports = {
   SHOP_MOVE_HELP,
   legacyPartNotes,
   versionHistory,
+  VERSIONS_PER_READ,
+  readVersions,
+  hidePlan,
   resolveNetwork,
   checkChainId,
   classifySecret,

@@ -90,6 +90,8 @@
  *   node deploy/deploy.js set-moderation --admin <addr> --stories <addr> --moderator <addr|off> [--threshold 3] [--strikes 5]
  *       (--strikes: takedowns before a wallet is blocked, 1 to 20 (default 5). Change it at any time)
  *   node deploy/deploy.js hide --actor <admin or moderator addr> --stories <addr> --story <id> --seq <n> --reason copyright|duplicate|spam|illegal|other [--note "..."] [--unhide]
+ *       (with the admin key, hiding a part that is already hidden makes it an admin hide in one transaction:
+ *        the opener can't restore it and removing it refunds nothing. Only the admin unhides an admin hide)
  *   node deploy/deploy.js takedown --admin <addr> --stories <addr> --story <id> --seq <n> --reason copyright|duplicate|spam|illegal|other --note "notice reference" [--strike <addr> | --no-strike]
  *       (permanent: clears the part's text and its kept versions from contract storage. No Ink refund. It first
  *        prints the writer, who last edited it, who else changed it, the live text and every kept version in full.
@@ -465,7 +467,15 @@ async function cmdWire(args) {
   if (f["replace-shop"] !== undefined) lib.fail(lib.SHOP_MOVE_HELP);
   const { net, provider } = await connect(f);
   // Shop's Ink address is set once (AB-050), and a Stories link already made is kept.
-  const shopCfg = await readOnly(provider, "shop", shop, "get_config").catch(() => ({}));
+  // A failed read stops here: taken as "nothing set", it would skip the check and
+  // send an empty Stories address over the one Shop has (AB-064).
+  let shopCfg;
+  try {
+    shopCfg = await readOnly(provider, "shop", shop, "get_config");
+  } catch (e) {
+    lib.fail("Could not read Shop's settings at " + shop + " (" + (e && e.message ? e.message : String(e)) + ").\n" +
+      "Nothing was sent. Try again, or with another listed node (--rpc).");
+  }
   lib.requireSetOnce("Shop's Ink address", shopCfg && shopCfg.ink, ink);
   const stories = (shopCfg && shopCfg.stories) || "";
   const signer = await getSigner(provider, admin, "the admin wallet");
@@ -1183,7 +1193,7 @@ async function cmdNewModeratorKey() {
   const key = new Signer({ privateKey: utils.toHexString(crypto.randomBytes(32)) });
   console.log("");
   console.log("A new key for the automated copy checker (the moderator). It is shown ONCE and saved nowhere.");
-  console.log("It can only hide and unhide story parts. It can't remove text, move Ink, or change settings.");
+  console.log("It can only hide story parts and unhide ones the admin didn't hide. It can't remove text, move Ink, or change settings.");
   console.log("");
   console.log("  Moderator address (safe to share): " + key.getAddress());
   console.log("  Private key (put it in the GitHub secret MODERATOR_WIF, then clear this window):");
@@ -1223,15 +1233,20 @@ async function cmdHide(args) {
   const note = f.note === undefined || f.note === true ? "" : String(f.note);
   if (note.length > 200) lib.fail("--note must be at most 200 characters.");
   const { net, provider } = await connect(f);
-  const signer = await getSigner(provider, actor, "the admin or moderator wallet");
   const { Contract } = koilib();
   const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  // Hiding a part that is already hidden is the admin taking it over, in one
+  // transaction (AB-062); only the admin unhides an admin hide (AB-061).
+  const { result: seg } = await storiesC.functions.get_segment({ story_id: storyId, seq });
+  const { result: cfg } = await storiesC.functions.get_config({});
+  const what = lib.hidePlan(seg, hidden, actor, (cfg && cfg.admin) || "");
+  const signer = await getSigner(provider, actor, "the admin or moderator wallet");
   const op = await storiesC.encodeOperation({
     name: "set_segment_hidden",
     args: { actor, story_id: storyId, seq, hidden, reason, note },
   });
   const txId = await dryRunThenSend(signer, provider, net, [op],
-    (hidden ? "HIDE" : "UNHIDE") + " story " + storyId + " part " + seq + (note ? " (" + note + ")" : ""));
+    what + " story " + storyId + " part " + seq + (note ? " (" + note + ")" : ""));
   console.log("Send back: the transaction id (" + txId + ").");
 }
 
@@ -1272,8 +1287,19 @@ async function cmdTakedown(args) {
   // takedown wipes the kept versions, so this is the last easy look at them.
   const { result: seg } = await storiesC.functions.get_segment({ story_id: storyId, seq });
   if (!seg || !seg.author) lib.fail("Story " + storyId + " has no part " + seq + ".");
-  const { result: kept } = await storiesC.functions.get_versions({ story_id: storyId, seq });
-  const versions = (kept && kept.values) || [];
+  // A few versions per read (AB-060). If the history can't be read, say so and
+  // carry on: the takedown itself never needs it, and the dry run below still
+  // checks the strike.
+  let versions = [];
+  let historyError = "";
+  try {
+    versions = await lib.readVersions(async (from, count) => {
+      const { result: kept } = await storiesC.functions.get_versions({ story_id: storyId, seq, from, count });
+      return (kept && kept.values) || [];
+    }, seg.version_count);
+  } catch (e) {
+    historyError = e && e.message ? e.message : String(e);
+  }
   // Every wallet the contract recorded as a changer, citation-only ones too
   // (AB-048). A Stories contract older than get_changers can't list them.
   let recorded;
@@ -1289,6 +1315,10 @@ async function cmdTakedown(args) {
   console.log("Changed by others: " + (who.changed ? (who.changers.join(", ") || "yes") : "no"));
   if (who.unseen) console.log("                   " + lib.UNSEEN_CHANGER);
   console.log("Live text:         " + JSON.stringify(String(seg.text || "")));
+  if (historyError) {
+    console.log("Versions:          could not be read (" + historyError + "). Carrying on without them; the same history is");
+    console.log("                   public on a block explorer (stories.revise_event and stories.segment_changed_event).");
+  }
   if (versions.length) {
     // Every change to the text is a version naming who made it (AB-033), printed in full.
     console.log("Versions, oldest first:");
@@ -1340,11 +1370,10 @@ async function cmdLegacyParts(args) {
   let found = 0;
   for (let seq = 1; seq <= count; seq++) {
     const { result: seg } = await storiesC.functions.get_segment({ story_id: storyId, seq: String(seq) });
-    let versions = [];
-    if (seg && Number(seg.version_count || 0) > 0) {
-      const { result: kept } = await storiesC.functions.get_versions({ story_id: storyId, seq: String(seq) });
-      versions = (kept && kept.values) || [];
-    }
+    const versions = seg ? await lib.readVersions(async (from, count) => {
+      const { result: kept } = await storiesC.functions.get_versions({ story_id: storyId, seq: String(seq), from, count });
+      return (kept && kept.values) || [];
+    }, seg.version_count) : [];
     for (const line of lib.legacyPartNotes(seq, seg, versions)) {
       console.log(line);
       found++;
