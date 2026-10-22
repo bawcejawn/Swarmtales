@@ -66,7 +66,7 @@ export class Index {
 
   static fromJSON(obj) {
     const idx = new Index();
-    for (const [key, entry] of Object.entries(obj || {})) idx.add(key, entry.author, entry.hashes, entry.at);
+    for (const [key, entry] of Object.entries(obj || {})) idx.add(key, entry.author, entry.hashes, entry.at, entry.copyOf);
     return idx;
   }
 
@@ -76,14 +76,34 @@ export class Index {
     return out;
   }
 
-  /** `at`: when the part was written (segment.created_at); 0 if unknown. */
-  add(key, author, hashes, at = 0) {
-    this.parts.set(key, { author, hashes, at: Number(at) || 0 });
+  /**
+   * `at`: when the text was written (segment.created_at, or last_edited_at
+   * for an edited part); 0 if unknown. Adding a key again replaces its text.
+   * `copyOf`: the part this one was found to copy, when it is indexed anyway
+   * (its opener restored it); that part is never flagged for matching it.
+   */
+  add(key, author, hashes, at = 0, copyOf = undefined) {
+    this.remove(key);
+    const entry = { author, hashes, at: Number(at) || 0 };
+    if (copyOf) entry.copyOf = copyOf;
+    this.parts.set(key, entry);
     for (const h of hashes) {
       let set = this.byHash.get(h);
       if (!set) this.byHash.set(h, (set = new Set()));
       set.add(key);
     }
+  }
+
+  remove(key) {
+    const old = this.parts.get(key);
+    if (!old) return;
+    for (const h of old.hashes) {
+      const set = this.byHash.get(h);
+      if (!set) continue;
+      set.delete(key);
+      if (!set.size) this.byHash.delete(h);
+    }
+    this.parts.delete(key);
   }
 
   /**
@@ -116,7 +136,7 @@ export class Index {
       for (const key of keys) {
         if (key === exceptKey) continue;
         const entry = this.parts.get(key);
-        if (!entry || entry.author === author || !include(entry)) continue;
+        if (!entry || entry.author === author || entry.copyOf === exceptKey || !include(entry)) continue;
         counts.set(key, (counts.get(key) || 0) + 1);
       }
     }
