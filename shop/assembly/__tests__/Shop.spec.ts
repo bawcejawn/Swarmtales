@@ -1864,6 +1864,11 @@ describe("Shop: purchases carry the buyer's price limit (AB-017)", () => {
 
 // Tests that notice the planted bugs the October 2026 mutation run missed (AB-058),
 // and the set-once Ink address (AB-050).
+//
+// Not covered here: Shop's reentrancy lock (enter()/leave(), "SHOP: reentrant
+// call"; mutant M0011 removes it). MockVM never runs another contract, so no
+// token can call back into Shop during its transfer and no test in this file
+// can notice the lock missing. The Audit Bot local-chain audit covers it.
 describe("Shop: mutation gaps (AB-058) and the set-once Ink address (AB-050)", () => {
   beforeEach(() => {
     MockVM.reset();
