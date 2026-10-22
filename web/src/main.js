@@ -50,6 +50,7 @@ import { createReader } from "./ui/readAloud.js";
 import { grammarTool } from "./ui/grammar.js";
 import { findCharacters, openingLines } from "./lib/characters.js";
 import { MAX_PAID_CHANGES, changeMultiplier, changePrice, editPrice, editorChanged, refundSplit, removalRefunds } from "./lib/change.js";
+import { readAllVersions } from "./lib/versions.js";
 
 const problems = configProblems();
 const kondor = createKondorWallet();
@@ -1339,6 +1340,9 @@ function changePanel(storyId, story, block) {
       save.disabled = false;
     }
     const r = changePrice(oldText, "", seg.paid_changes, seg.charged, seg.refund_forfeited);
+    // As the contract: a paid removal gives back what the writer paid, unless
+    // its checker hide was undone (AB-068).
+    r.refund = removalRefunds(seg) ? Number(seg.charged || 0) : 0;
     removeAll.textContent = "Remove the whole part instead (" + num(r.price) + " Ink" + (r.refund ? ";" + refundLine(seg, r.refund, whose, "").replace(/\.$/, "") : "") + ")";
   };
   area.addEventListener("input", update);
@@ -1417,9 +1421,6 @@ function versionLabel(v) {
   }
 }
 
-// get_versions returns at most this many per call (AB-060).
-const VERSIONS_PER_READ = 5;
-
 function versionsView(storyId, block) {
   const n = Number(block.segment.version_count || 0);
   const list = h("ol", { class: "version-list" });
@@ -1433,16 +1434,9 @@ function versionsView(storyId, block) {
     loaded = true;
     list.replaceChildren(h("li", { class: "meta small" }, ["Loading\u2026"]));
     try {
-      // A few versions per read: each can hold a whole part (AB-060). Kept by
-      // number, so a Stories version that returns them all at once reads the same.
-      const byNumber = new Map();
-      for (let from = 1; from <= n; from += VERSIONS_PER_READ) {
-        const res = await read("stories", "get_versions", { story_id: String(storyId), seq: String(block.seq), from, count: VERSIONS_PER_READ });
-        const page = ((res && res.values) || []).filter((v) => !byNumber.has(Number(v.version)));
-        if (!page.length) break;
-        for (const v of page) byNumber.set(Number(v.version), v);
-      }
-      const values = [...byNumber.values()].sort((a, b) => Number(a.version) - Number(b.version));
+      // A few versions per read: each can hold a whole part (AB-060, AB-070).
+      const values = await readAllVersions(
+        (from, count) => read("stories", "get_versions", { story_id: String(storyId), seq: String(block.seq), from, count }), n);
       list.replaceChildren(...values.slice().reverse().map((v) => h("li", {}, [
         h("p", { class: "meta small" }, [
           "Version " + v.version + " \u00b7 " + versionLabel(v) + (formatUtc(v.at) ? " \u00b7 " + formatUtc(v.at).split(",")[0] : ""),

@@ -25,6 +25,8 @@ test("the history panel reads get_versions a few versions at a time (AB-060)", (
   const src = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
   const a = src.indexOf("function versionsView(");
   const body = src.slice(a, src.indexOf("\nconst NUMBER_WORDS", a));
-  assert.match(body, /get_versions", \{[^}]*from, count: VERSIONS_PER_READ/);
-  assert.match(src, /const VERSIONS_PER_READ = 5;/);
+  // The paging moved to lib/versions.js (AB-070); versions.audit-fc4.test.js runs it.
+  assert.match(body, /readAllVersions\(\s*\(from, count\) => read\("stories", "get_versions", \{[^}]*from, count \}\)/);
+  const lib = readFileSync(new URL("../src/lib/versions.js", import.meta.url), "utf8");
+  assert.match(lib, /const VERSIONS_PER_READ = 5;/);
 });
