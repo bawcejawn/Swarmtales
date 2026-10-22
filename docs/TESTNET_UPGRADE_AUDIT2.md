@@ -16,12 +16,20 @@ What changes for people using the site:
   longer use "Change" on their own part.
 - Every change to a part's text is kept in its history, naming who made it. A takedown wipes the
   history, even for a part that was already removed. Your own edits never use up the room
-  others' paid changes need (a part now keeps up to 220 versions).
+  others' paid changes need (a part now keeps up to 220 versions). The history is read 5 versions
+  at a time, so a long one still loads, and a takedown never reads it: free edits can't make a part
+  impossible to take down.
 - Blocked wallets can't edit, set a citation (they can still clear one), restore a hidden part
   or rename a story; a hidden part can't be edited; the story summary follows pause and
   membership, and the admin or moderator can clear it (`deploy.js clear-summary`).
-- An opener or editor can't restore a part the **admin** hid (only the admin or the moderator can
-  unhide it). Parts the copy checker or reports hid can still be restored.
+- An opener or editor can't restore a part the **admin** hid, and only the admin can unhide it
+  (the copy checker's moderator key can't). The admin can hide a part that is already hidden: it
+  becomes an admin hide in one transaction. Parts the copy checker or reports hid can still be
+  restored, but a part restored after a **checker** hide gives no Ink back when cut or removed. If
+  the checker unhides its own hide (the writer cited the source), the part is refundable again.
+- Blocked wallets also can't add editors or change a story's allow-list.
+- Only someone with a live part of their own (or the opener or an editor) can update the story
+  summary; changing someone else's part no longer counts.
 - Saving a part or a citation unchanged no longer counts as changing it.
 - **Promos:** each wallet may claim each campaign once (it was once ever).
 - Stories' Ink **and Shop** addresses, and Shop's Ink address, can't be changed any more. They are
@@ -39,8 +47,14 @@ The new code reads three new segment fields that are 0 on every part written bef
   shows. So it never gets an automatic strike against its writer for someone else's words.
 - **Refunds:** cuts refund what the writer paid beyond the new length, like every part now. An
   old part never refunds more than its `charged`, so nobody can get back more than they paid.
-- **Hidden parts:** a part the admin hid before the upgrade has `hidden_by` 0, so its opener could
-  still restore it. Unhide it and hide it again with the admin key to lock it.
+- **Hidden parts:** a part hidden before the upgrade other than by reports has `hidden_by` 0. Its
+  opener can't restore it (it may be an admin hide); the admin or the moderator can unhide it. To
+  make it an admin hide (so the moderator can't unhide it either), run `deploy.js hide` on it again
+  with the admin key: one transaction, the part stays hidden throughout.
+- **Summary:** a wallet that wrote only before the upgrade keeps its summary right by its Ink total,
+  as now. Once it writes a new part, only its new parts count.
+- **Copy checker:** it now only brings back parts it hid itself (`hidden_by` 2), so it forgets the
+  parts it hid before the upgrade (they stay hidden until the admin or moderator unhides them).
 - **Takedown tool:** for old parts it lists changers from the versions and `last_edited_by`; it
   can't see a citation-only changer from before the upgrade and says so.
 
@@ -52,7 +66,11 @@ node deploy/deploy.js legacy-parts --stories 1MJz8k1jSgbf1QU9Zdyfip1M7nuXJP3eCZ 
 
 It prints the parts someone else revised before `edited_by_others` existed (the strike rule
 above covers them) and the hidden parts that reports did not hide (re-hide the admin's after the
-upgrade). Send me its output.
+upgrade with `deploy.js hide` and the admin key). Send me its output.
+
+**Contribution cap.** Keep `contribution_cap` at or below 4,000 until the Audit Bot local-chain
+takedown test (`tests/chain/Swarmtales.audit-ab047-takedown.chain.test.js`) has passed on this
+build.
 
 ## 1. Get the branch and build (folder `C:\swarmtales`)
 
@@ -72,11 +90,11 @@ Get-FileHash stories\build\release\contract.wasm
 Get-FileHash shop\build\release\contract.wasm
 ```
 
-**Expect:** Stories **315 pass**, Shop **89 pass**, 0 fail. On the build this branch was made
+**Expect:** Stories **343 pass**, Shop **89 pass**, 0 fail. On the build this branch was made
 with, the fingerprints were:
 
 ```
-Stories  DF132991DAD92C472DBAEF3F64B624854D85F230F2E7291D6F8A95DF35E063C3
+Stories  F45D4B665EFB697CBEA7A432C27F6400DC73E829085A1DFA525535DB260027FF
 Shop     4EDF015169C85E2F3460ABEF85AAB0DDCBE279C58B074B5B0E208580E54846C6
 ```
 

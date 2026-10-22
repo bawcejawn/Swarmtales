@@ -12,7 +12,7 @@ Last checked against the code: October 2026 (audit fixes AB-001 to AB-058).
 | Shop contract key | Founder, offline | The key of the address Shop was uploaded to |
 | Stories contract key | Founder, offline | The key of the address Stories was uploaded to |
 | Admin (one per contract) | Founder | Runs day-to-day settings. Can be a multisig wallet |
-| Moderator | The automated copy checker | Can only hide and unhide parts, add source notes and clear a story's summary |
+| Moderator | The automated copy checker | Can only hide parts, unhide parts the admin didn't hide, add source notes and clear a story's summary |
 | Treasury, founder | Founder | Only receive payments. They have no powers in the contracts |
 
 ## Contract keys: the strongest power
@@ -51,7 +51,9 @@ The Shop admin **cannot** take back a payment that has already been split, or se
 ## Stories admin
 
 - **Moderation:**
-  - Hide or unhide any part, at any stage. A part the admin hid can be unhidden only by the admin or the moderator. The story's opener or an editor can restore a part the copy checker or writer reports hid, but not one the admin hid. Removing a part the admin or the checker hid refunds nothing.
+  - Hide or unhide any part, at any stage. A part the admin hid can be unhidden only by the admin, never by the moderator (the copy checker's key). The admin can also hide a part that is already hidden (by the copy checker or writer reports): in one transaction it becomes an admin hide, with `deploy.js hide` and the admin key.
+  - The story's opener or an editor can restore a part the copy checker or writer reports hid, but not one the admin hid (nor one hidden before the audit-2 upgrade other than by reports: it may be the admin's).
+  - Refunds: removing a part while the admin or the copy checker has it hidden refunds nothing; one hidden only by writer reports is refunded. For a part the copy checker hid: if the checker itself unhides it (for example after the writer adds the right citation), it is refundable again; if the opener or an editor restores it instead, cutting or removing it later refunds nothing.
   - **Take a part down for good:** its text is cleared from contract storage and no Ink is refunded. A takedown also wipes every kept version of the part, whether the part was still live or already removed, and its history can no longer be read. A part nobody else changed is a strike against its writer. Once anyone else changed it (a paid change with `revise_part`, the finalizer's edit, or a citation someone else set; saving the text or the citation unchanged is not a change), even by one letter or only by cutting words, the contract does not pick: the admin must name who gets the strike (the writer or any wallet that changed the part) or choose no strike. Every change to a part's text, the writer's own edits included, is kept as a version naming who made it. `deploy.js takedown` prints the writer, who last edited the part, every wallet the contract recorded as changing it (citation-only ones too), the live text and every kept version in full first, and stops until `--strike` or `--no-strike` is given. The admin cannot strike a wallet that never changed the part. At the strike limit the wallet is blocked.
   - Block or unblock a wallet from opening, writing, editing, changing and reporting, setting a citation (it may still clear one), restoring a hidden part and renaming a story it opened, and from making text changes in a final edit.
   - Clear a story's summary ("the story so far"), with `deploy.js clear-summary`. The moderator can too. This works while Stories is paused.
@@ -69,7 +71,7 @@ The Stories admin **cannot** mint or burn Ink, refund outside the rules, or fina
 
 ## The moderator (copy checker)
 
-The moderator key can hide and unhide parts, add a public "this text also appears in…" note, and clear any story's summary ("the story so far"), even while Stories is paused. It can't take a part down or delete a part's text, write a summary of its own, touch Ink, or change any setting. It runs in GitHub Actions and signs only for the chain id it expects.
+The moderator key can hide parts, unhide any part the admin didn't hide, add a public "this text also appears in…" note, and clear any story's summary ("the story so far"), even while Stories is paused. The copy checker only ever unhides parts it hid itself, and only hides it actually sent count as its own. It can't take a part down or delete a part's text, write a summary of its own, touch Ink, or change any setting. It runs in GitHub Actions and signs only for the chain id it expects.
 
 ## How you can check
 
