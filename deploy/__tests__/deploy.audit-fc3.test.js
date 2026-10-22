@@ -37,7 +37,9 @@ test("readVersions also reads a Stories version that returns every version at on
   let calls = 0;
   const got = await lib.readVersions(async () => { calls++; return all; }, 7);
   assert.strictEqual(got.length, 7);
-  assert.strictEqual(calls, 2, "stops once a page adds nothing new");
+  // It goes on right after the last version returned (AB-070), so one read
+  // covers all 7; it used to step by 5 and stop on a page that added nothing.
+  assert.strictEqual(calls, 1, "one read returns them all");
 });
 
 test("readVersions reads nothing for a part that never changed", async () => {

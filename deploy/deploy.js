@@ -1293,10 +1293,7 @@ async function cmdTakedown(args) {
   let versions = [];
   let historyError = "";
   try {
-    versions = await lib.readVersions(async (from, count) => {
-      const { result: kept } = await storiesC.functions.get_versions({ story_id: storyId, seq, from, count });
-      return (kept && kept.values) || [];
-    }, seg.version_count);
+    versions = await lib.readVersions(lib.versionPage(storiesC, storyId, seq), seg.version_count);
   } catch (e) {
     historyError = e && e.message ? e.message : String(e);
   }
@@ -1336,6 +1333,14 @@ async function cmdTakedown(args) {
       (who.unseen ? "  --strike <the wallet you found>   (" + lib.UNSEEN_CHANGER + ")\n" : "") +
       "  --no-strike   (take the part down without striking anyone)");
   }
+  // A part from before the upgrade that someone else revised shows it only in
+  // its versions, so without them the "no" above may be wrong (AB-069).
+  if (historyError && !strike && !noStrike && Number(seg.version_count || 0) > 0) {
+    lib.fail(
+      "The part's history could not be read, so this tool can't tell whether someone other than the writer changed it.\n" +
+      "Nothing was sent. Check its history on a block explorer (stories.revise_event and stories.segment_changed_event\n" +
+      "for this part), then run this command again with --strike <wallet> or --no-strike.");
+  }
   if (strike && !who.candidates.includes(strike)) {
     console.log("--strike " + strike + " is not the writer or a wallet seen above. The contract accepts it only if that wallet changed this part; the dry run checks this before anything is sent.");
   }
@@ -1370,10 +1375,15 @@ async function cmdLegacyParts(args) {
   let found = 0;
   for (let seq = 1; seq <= count; seq++) {
     const { result: seg } = await storiesC.functions.get_segment({ story_id: storyId, seq: String(seq) });
-    const versions = seg ? await lib.readVersions(async (from, count) => {
-      const { result: kept } = await storiesC.functions.get_versions({ story_id: storyId, seq: String(seq), from, count });
-      return (kept && kept.values) || [];
-    }, seg.version_count) : [];
+    // One unreadable history (too long for the node, say) never stops the list (AB-070).
+    let versions = [];
+    try {
+      if (seg) versions = await lib.readVersions(lib.versionPage(storiesC, storyId, seq), seg.version_count);
+    } catch (e) {
+      console.log("part " + seq + ": its versions could not be read (" + (e && e.message ? e.message : String(e)) + "). " +
+        "Check them on a block explorer (stories.revise_event for this part).");
+      found++;
+    }
     for (const line of lib.legacyPartNotes(seq, seg, versions)) {
       console.log(line);
       found++;

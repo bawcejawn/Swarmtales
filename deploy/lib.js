@@ -471,35 +471,59 @@ function legacyPartNotes(seq, seg, versions) {
       "). After the upgrade a takedown asks who gets the strike.");
   }
   if (seg.hidden && !seg.hidden_by_reports && !Number(seg.hidden_by || 0)) {
-    notes.push("part " + seq + ": hidden by the admin or the checker. After the upgrade only the admin or the moderator can unhide it; " +
+    notes.push("part " + seq + ": hidden by the admin or the checker. After the upgrade only the admin can unhide it; " +
       "to make it an admin hide, run deploy.js hide on it again with the admin key (one transaction).");
   }
   return notes;
 }
 
-// get_versions returns at most this many per call (AB-060).
+// get_versions returns at most this many per call (AB-060), fewer when they
+// are long (AB-070).
 const VERSIONS_PER_READ = 5;
 
 /**
  * Every kept version of a part, oldest first, read a few at a time (AB-060).
- * `page(from, count)` returns one get_versions call's values. A Stories
- * version without paging returns all of them on every call; versions are
- * kept by number, so that reads the same.
+ * `page(from, count)` returns one get_versions result ({ values, next }) or
+ * just its values. Each read goes on from the contract's next, or else right
+ * after the last version returned, since a page stops early when its versions
+ * are long (AB-070). A read that fails is tried once more for one version.
+ * A Stories version without paging returns all of them on every call;
+ * versions are kept by number, so that reads the same.
  */
 async function readVersions(page, versionCount) {
   const total = Number(versionCount || 0);
   const byNumber = new Map();
-  for (let from = 1; from <= total; from += VERSIONS_PER_READ) {
+  let from = 1;
+  while (from <= total) {
+    let res;
+    try {
+      res = await page(from, VERSIONS_PER_READ);
+    } catch (e) {
+      res = await page(from, 1);
+    }
+    const values = Array.isArray(res) ? res : (res && res.values) || [];
     let added = 0;
-    for (const v of (await page(from, VERSIONS_PER_READ)) || []) {
+    let last = 0;
+    for (const v of values) {
+      last = Math.max(last, Number(v.version));
       if (!byNumber.has(Number(v.version))) {
         byNumber.set(Number(v.version), v);
         added++;
       }
     }
     if (!added) break;
+    const next = Array.isArray(res) ? 0 : Number((res && res.next) || 0);
+    from = next > from ? next : last + 1;
   }
   return [...byNumber.values()].sort((a, b) => Number(a.version) - Number(b.version));
+}
+
+/** readVersions' page reader for a Stories contract (a koilib Contract). */
+function versionPage(storiesC, storyId, seq) {
+  return async (from, count) => {
+    const { result } = await storiesC.functions.get_versions({ story_id: String(storyId), seq: String(seq), from, count });
+    return result || {};
+  };
 }
 
 const HIDDEN_BY = { 1: "writer reports", 2: "the copy checker", 3: "the admin" };
@@ -508,22 +532,31 @@ const HIDDEN_BY = { 1: "writer reports", 2: "the copy checker", 3: "the admin" }
  * What `deploy.js hide` will do for a part (AB-061, AB-062), or fail before
  * any key is asked for. Hiding a part that is already hidden is the admin
  * taking over that hide in one transaction: it becomes an admin hide, so the
- * opener can't restore it and removing it refunds nothing. Only the admin
- * unhides an admin hide.
+ * opener can't restore it and removing it refunds nothing. The moderator key
+ * may take over a hide writer reports made, as the copy checker does for a
+ * copy (AB-071). Only the admin unhides an admin hide, or a hide from before
+ * hidden_by that reports did not make (it may be the admin's, AB-074).
  */
 function hidePlan(seg, hidden, actor, admin) {
   if (!seg || !seg.author) fail("There is no such part.");
   if (Number(seg.status) !== 1) fail("That part was removed; nothing to hide or unhide.");
   const by = Number(seg.hidden_by || 0);
   const who = HIDDEN_BY[by] || (seg.hidden_by_reports ? "writer reports" : "the admin or the checker, before hidden_by existed");
+  const maybeAdmin = by === 3 || (by === 0 && !seg.hidden_by_reports);
   if (!hidden) {
     if (!seg.hidden) fail("That part is not hidden. Nothing was sent.");
-    if (by === 3 && actor !== admin) fail("The admin hid this part, so only the admin key can unhide it. Nothing was sent.");
+    if (maybeAdmin && actor !== admin) fail("The admin hid this part (or may have), so only the admin key can unhide it. Nothing was sent.");
     return "UNHIDE (hidden by " + who + ")";
   }
   if (!seg.hidden) return "HIDE";
   if (by === 3) fail("The admin already hid this part. Nothing was sent.");
-  if (actor !== admin) fail("That part is already hidden (by " + who + "). Only the admin key can take over a hide. Nothing was sent.");
+  if (actor !== admin) {
+    if (by === 1 || (by === 0 && seg.hidden_by_reports)) {
+      return "HIDE AS THE CHECKER (now hidden by writer reports; in one transaction it becomes the checker's hide: removing it " +
+        "refunds nothing and restoring it gives up the refund)";
+    }
+    fail("That part is already hidden (by " + who + "). Only the admin key can take over a hide. Nothing was sent.");
+  }
   return "HIDE AS THE ADMIN (now hidden by " + who + "; in one transaction it becomes an admin hide: the opener can't restore it " +
     "and removing it refunds nothing)";
 }
@@ -813,6 +846,7 @@ module.exports = {
   versionHistory,
   VERSIONS_PER_READ,
   readVersions,
+  versionPage,
   hidePlan,
   resolveNetwork,
   checkChainId,
