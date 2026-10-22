@@ -310,6 +310,7 @@ async function main() {
 
   state.noted = state.noted || {};
   state.hiddenByChecker = state.hiddenByChecker || {};
+  state.hiddenWhenRead = state.hiddenWhenRead || {};
 
   /** Sign one Stories call with the moderator key (at most 0.5 mana; a hide uses about 0.05). */
   async function sendAsModerator(name, args) {
@@ -333,6 +334,7 @@ async function main() {
     return true;
   }
 
+  /** Returns whether the hide was sent. */
   async function hide(storyId, seq, reason, why) {
     const action = { story: storyId, seq, reason, kind: "hide", note: why.slice(0, 200), sent: false };
     actions.push(action);
@@ -340,6 +342,7 @@ async function main() {
     action.sent = await sendAsModerator("set_segment_hidden", {
       story_id: String(storyId), seq: String(seq), hidden: true, reason, note: action.note,
     });
+    return action.sent;
   }
 
   /** A public note under the part. Nothing is hidden. Added once per part. */
@@ -394,9 +397,12 @@ async function main() {
       if (web === "defer") return "defer";
       if (web && web.cited) return "clean"; // the writer named this source
       if (web && web.action === "hide" && !seg.restored) {
-        await hide(storyId, seq, REASON.COPYRIGHT, "copied text: " + web.found + " of " + web.of + " phrases found, " + web.same + " of them in " + web.label);
-        // Remembered so the part comes back by itself if its writer names this source.
-        state.hiddenByChecker[key] = { source: web.source, label: web.label };
+        // Remembered so the part comes back by itself if its writer names this
+        // source, but only a hide that was sent: in a report-only run, or when
+        // the chain refused it, the checker hid nothing it may undo (AB-061).
+        if (await hide(storyId, seq, REASON.COPYRIGHT, "copied text: " + web.found + " of " + web.of + " phrases found, " + web.same + " of them in " + web.label)) {
+          state.hiddenByChecker[key] = { source: web.source, label: web.label };
+        }
         return "flagged";
       }
       if (web) {
@@ -407,14 +413,36 @@ async function main() {
     return "clean";
   }
 
+  // Parts hidden when the checker first read them (by writer reports, say)
+  // were never checked: check each once it is visible again, before newer
+  // parts, so restoring it never skips the check.
+  for (const key of Object.keys(state.hiddenWhenRead)) {
+    try {
+      const [sid, sq] = key.split(":");
+      const seg = await read("get_segment", { story_id: sid, seq: sq });
+      if (Number(seg.status) !== 1 || !seg.text) {
+        delete state.hiddenWhenRead[key];
+        continue;
+      }
+      if (seg.hidden) continue;
+      const result = await checkPart(Number(sid), Number(sq), seg, true);
+      if (result === "defer") break;
+      if (result === "clean" || seg.restored) index.add(key, seg.author, fingerprint(seg.text), seg.created_at);
+      delete state.hiddenWhenRead[key];
+    } catch (error) {
+      note("  could not check " + key + ": " + (error && error.message ? error.message : String(error)));
+    }
+  }
+
   // Parts the checker hid: bring one back when its writer has named the source,
-  // and forget the ones the opener restored.
+  // and forget the ones the opener restored. Only the checker's own hide
+  // (hidden_by 2): never one the admin or writer reports made, or took over (AB-061).
   for (const key of Object.keys(state.hiddenByChecker)) {
     try {
       const [sid, sq] = key.split(":");
       const seg = await read("get_segment", { story_id: sid, seq: sq });
       const entry = state.hiddenByChecker[key];
-      if (!seg.hidden || Number(seg.status) !== 1) {
+      if (!seg.hidden || Number(seg.status) !== 1 || Number(seg.hidden_by || 0) !== 2) {
         delete state.hiddenByChecker[key];
         continue;
       }
@@ -462,6 +490,8 @@ async function main() {
     if (stopped.has(id)) continue;
     try {
       if (Number(seg.status) !== 1 || seg.hidden || !seg.text) {
+        // A hidden part is checked once it is visible again (above).
+        if (Number(seg.status) === 1 && seg.hidden && seg.text) state.hiddenWhenRead[id + ":" + seq] = true;
         state.checked[id] = seq;
         continue;
       }
