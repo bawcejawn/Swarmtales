@@ -16,9 +16,10 @@ What changes for people using the site:
   longer use "Change" on their own part.
 - Every change to a part's text is kept in its history, naming who made it. A takedown wipes the
   history, even for a part that was already removed. Your own edits never use up the room
-  others' paid changes need (a part now keeps up to 220 versions). The history is read 5 versions
-  at a time, so a long one still loads, and a takedown never reads it: free edits can't make a part
-  impossible to take down.
+  others' paid changes need (a part now keeps up to 220 versions). The history is read up to 5
+  versions at a time, fewer when they are long (at most about 64 KB of text per read), so a long
+  one still loads, and a takedown never reads it: free edits can't make a part impossible to take
+  down.
 - Blocked wallets can't edit, set a citation (they can still clear one), restore a hidden part
   or rename a story; a hidden part can't be edited; the story summary follows pause and
   membership, and the admin or moderator can clear it (`deploy.js clear-summary`).
@@ -27,6 +28,12 @@ What changes for people using the site:
   becomes an admin hide in one transaction. Parts the copy checker or reports hid can still be
   restored, but a part restored after a **checker** hide gives no Ink back when cut or removed. If
   the checker unhides its own hide (the writer cited the source), the part is refundable again.
+  Someone else's paid removal of such a part gives no Ink back either.
+- The copy checker checks a part again whenever its text or citation changes, so rewording a part
+  after its check doesn't get copied text past it. It also checks parts that writer reports hid:
+  a copy becomes the checker's hide in place (no refund on removal; restoring it gives up the
+  refund). A part whose checker hide its opener restored is never hidden again for the same text.
+- Blocked openers and editors can't create invites or remove other writers' hidden parts.
 - Blocked wallets also can't add editors or change a story's allow-list.
 - Only someone with a live part of their own (or the opener or an editor) can update the story
   summary; changing someone else's part no longer counts.
@@ -47,14 +54,22 @@ The new code reads three new segment fields that are 0 on every part written bef
   shows. So it never gets an automatic strike against its writer for someone else's words.
 - **Refunds:** cuts refund what the writer paid beyond the new length, like every part now. An
   old part never refunds more than its `charged`, so nobody can get back more than they paid.
+- **Strikes, after more edits:** when the writer's own edits take such a part past 61 versions, the
+  edit that makes version 62 reads its versions once and records every other wallet it finds, so
+  the takedown still asks who gets the strike and the admin can name that wallet. That one edit
+  costs more mana than usual (it reads up to 60 versions); it happens at most once per part.
 - **Hidden parts:** a part hidden before the upgrade other than by reports has `hidden_by` 0. Its
-  opener can't restore it (it may be an admin hide); the admin or the moderator can unhide it. To
-  make it an admin hide (so the moderator can't unhide it either), run `deploy.js hide` on it again
-  with the admin key: one transaction, the part stays hidden throughout.
-- **Summary:** a wallet that wrote only before the upgrade keeps its summary right by its Ink total,
-  as now. Once it writes a new part, only its new parts count.
+  opener can't restore it and the moderator can't unhide it (it may be an admin hide); only the
+  admin can. To make it an admin hide on the record, run `deploy.js hide` on it again with the
+  admin key: one transaction, the part stays hidden throughout.
+- **Summary:** a wallet that wrote before the upgrade keeps its summary right by its Ink total, as
+  now, also after it writes new parts (its old parts were never counted, so removing a new one no
+  longer takes the right away while an old one is live).
 - **Copy checker:** it now only brings back parts it hid itself (`hidden_by` 2), so it forgets the
-  parts it hid before the upgrade (they stay hidden until the admin or moderator unhides them).
+  parts it hid before the upgrade (they stay hidden until the admin unhides them). Its saved state
+  gains each part's text key: on the first run after the merge, parts it already checked and
+  nobody edited count as checked; parts edited since they were written, and parts it found hidden,
+  are checked once (web search included, within the usual search budget).
 - **Takedown tool:** for old parts it lists changers from the versions and `last_edited_by`; it
   can't see a citation-only changer from before the upgrade and says so.
 
@@ -70,7 +85,11 @@ upgrade with `deploy.js hide` and the admin key). Send me its output.
 
 **Contribution cap.** Keep `contribution_cap` at or below 4,000 until the Audit Bot local-chain
 takedown test (`tests/chain/Swarmtales.audit-ab047-takedown.chain.test.js`) has passed on this
-build.
+build. On **mainnet**, keep it at **6,000 or lower** until someone measures `get_versions` on a
+node with this build: the fourth fix check measured the read limit only on a local node with the
+chain's default limits, where a version page failed above about 6,000 three-byte characters per
+version (AB-070). This build stops a page at about 64 KB of text, which reads there even at
+10,000, but public nodes' limits weren't measured.
 
 ## 1. Get the branch and build (folder `C:\swarmtales`)
 
@@ -90,11 +109,11 @@ Get-FileHash stories\build\release\contract.wasm
 Get-FileHash shop\build\release\contract.wasm
 ```
 
-**Expect:** Stories **343 pass**, Shop **89 pass**, 0 fail. On the build this branch was made
+**Expect:** Stories **374 pass**, Shop **89 pass**, 0 fail. On the build this branch was made
 with, the fingerprints were:
 
 ```
-Stories  F45D4B665EFB697CBEA7A432C27F6400DC73E829085A1DFA525535DB260027FF
+Stories  26DF39A915AE84C898A988E53A663C457841F3807F8FA3B1AE8AD1FA6A84F0D6
 Shop     4EDF015169C85E2F3460ABEF85AAB0DDCBE279C58B074B5B0E208580E54846C6
 ```
 

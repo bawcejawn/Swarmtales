@@ -495,6 +495,12 @@ This prints the mana for 100, 500, 1000, 2000 and 4000-character contributions. 
 current cap show as "skipped".
 
 After the 19 October 2026 mana measure, the live testnet `contribution_cap` was left at **4000**.
+
+**Mainnet:** keep `contribution_cap` at **6,000 or lower** until `get_versions` has been measured
+on a mainnet node with the current build. On the Audit Bot's local node (the chain's default
+limits), a page of version history failed above about 6,000 three-byte characters per version
+(AB-070). The contract now stops a page at about 64 KB of text, but public nodes' read limits
+weren't measured.
 A plain 4,000-character contribution was about 0.5006 mana, and the same length in emoji was about 0.5779 mana.
 
 An admin can change the cap again:
