@@ -49,7 +49,7 @@ import * as reading from "./lib/bookmarks.js";
 import { createReader } from "./ui/readAloud.js";
 import { grammarTool } from "./ui/grammar.js";
 import { findCharacters, openingLines } from "./lib/characters.js";
-import { changeMultiplier, changePrice, editPrice, editorChanged, refundSplit } from "./lib/change.js";
+import { MAX_PAID_CHANGES, changeMultiplier, changePrice, editPrice, editorChanged, refundSplit, removalRefunds } from "./lib/change.js";
 
 const problems = configProblems();
 const kondor = createKondorWallet();
@@ -1189,7 +1189,8 @@ function segmentView(block, story, storyId, ctx) {
       append(tools, h("button", { type: "button", class: "text-button tool" }, ["Remove"]));
       tools.lastChild.addEventListener("click", () => toggle("remove", () => removePanel(storyId, block)));
     }
-    if (ctx.canAdd && !segment.hidden && !ownPart && me) {
+    // revise_part refuses every change from the 60th paid one on (AB-065).
+    if (ctx.canAdd && !segment.hidden && !ownPart && me && Number(segment.paid_changes || 0) < MAX_PAID_CHANGES) {
       const times = changeMultiplier(segment.paid_changes);
       append(tools, h("button", { type: "button", class: "text-button tool", title: "Change this part: you pay for the letters you add and remove, \u00d7" + times + ". The earlier version stays readable." }, ["Change (\u00d7" + times + ")"]));
       tools.lastChild.addEventListener("click", () => toggle("change", () => changePanel(storyId, story, block)));
@@ -1241,10 +1242,13 @@ function editPanel(storyId, block) {
   const update = () => {
     const text = normalizePasted(area.value).trim();
     const p = editPrice(seg, text);
+    // A part from before the upgrade can cost and refund in the same edit (AB-065).
+    const back = p.refund ? num(p.toWriter) + " Ink comes back to you" + (p.toPool ? " and " + num(p.toPool) + " to the story's pool" : "") + "." : "";
     let line = num(inkCost(text)) + " characters (now " + num(seg.current_cost) + "). ";
     if (!editorChanged(seg.text, area.value, normalizePasted)) line += "Rewording is free; added letters cost 1 Ink each.";
-    else if (p.cost) line += "The " + num(p.cost) + " added letters cost " + num(p.cost) + " Ink, paid by you.";
-    else if (p.refund) line += num(p.toWriter) + " Ink comes back to you" + (p.toPool ? " and " + num(p.toPool) + " to the story's pool" : "") + ".";
+    else if (p.cost) line += "The " + num(p.cost) + " added letters cost " + num(p.cost) + " Ink, paid by you." + (back ? " " + back : "");
+    else if (p.refund) line += back;
+    else if (seg.refund_forfeited && inkCost(text) < Number(seg.current_cost || 0)) line += "Free. This part was restored after the copy checker hid it, so no Ink comes back.";
     else if (inkCost(text) < Number(seg.current_cost || 0)) line += "Free. The cut letters were added by someone else, so no Ink comes back.";
     else line += "Free.";
     counter.textContent = line;
@@ -1316,10 +1320,12 @@ function changePanel(storyId, story, block) {
   const removeAll = h("button", { type: "button", class: "text-button" }, []);
   const citation = citationField();
   const aiBox = aiToggle();
-  const current = () => normalizePasted(area.value).trim();
+  // Sent as typed: the contract keeps edge spaces, so trimming here would price
+  // a one-letter fix as rewriting the whole part (AB-065).
+  const current = () => normalizePasted(area.value);
   const update = () => {
     const text = current();
-    const p = changePrice(oldText, text, seg.paid_changes, seg.charged);
+    const p = changePrice(oldText, text, seg.paid_changes, seg.charged, seg.refund_forfeited);
     const whose = shortAddress(seg.author);
     if (!editorChanged(oldText, area.value, normalizePasted)) {
       price.textContent = "Make your change above. You pay for the letters you add and remove (at least 10), \u00d7" + p.multiplier + " for this part.";
@@ -1328,11 +1334,11 @@ function changePanel(storyId, story, block) {
     } else {
       price.textContent = "You add " + num(p.added) + " and remove " + num(p.removed) + " letters: " + num(p.units) + " \u00d7 " + p.multiplier +
         " = " + num(p.price) + " Ink." + refundLine(seg, p.refund, whose, " for the removed letters") +
-        " The next change to this part will cost \u00d7" + p.multiplier * 2 + ".";
+        " The next change to this part will cost \u00d7" + p.multiplier * 2n + ".";
       save.textContent = "Change for " + num(p.price) + " Ink";
       save.disabled = false;
     }
-    const r = changePrice(oldText, "", seg.paid_changes, seg.charged);
+    const r = changePrice(oldText, "", seg.paid_changes, seg.charged, seg.refund_forfeited);
     removeAll.textContent = "Remove the whole part instead (" + num(r.price) + " Ink" + (r.refund ? ";" + refundLine(seg, r.refund, whose, "").replace(/\.$/, "") : "") + ")";
   };
   area.addEventListener("input", update);
@@ -1346,7 +1352,7 @@ function changePanel(storyId, story, block) {
       }
       if (text === oldText || (text && !editorChanged(oldText, area.value, normalizePasted))) throw new Error("Change the text first.");
       if (!rights.input.checked) throw new Error(RIGHTS_PROBLEM);
-      const p = changePrice(oldText, text, seg.paid_changes, seg.charged);
+      const p = changePrice(oldText, text, seg.paid_changes, seg.charged, seg.refund_forfeited);
       // The changer always pays; the story's pool never pays for changes.
       if (state.account && Number(state.account.ink || 0) < p.price) {
         throw new Error("This costs " + num(p.price) + " Ink and you have " + num(state.account.ink) + ".");
@@ -1411,6 +1417,9 @@ function versionLabel(v) {
   }
 }
 
+// get_versions returns at most this many per call (AB-060).
+const VERSIONS_PER_READ = 5;
+
 function versionsView(storyId, block) {
   const n = Number(block.segment.version_count || 0);
   const list = h("ol", { class: "version-list" });
@@ -1424,8 +1433,16 @@ function versionsView(storyId, block) {
     loaded = true;
     list.replaceChildren(h("li", { class: "meta small" }, ["Loading\u2026"]));
     try {
-      const res = await read("stories", "get_versions", { story_id: String(storyId), seq: String(block.seq) });
-      const values = (res && res.values) || [];
+      // A few versions per read: each can hold a whole part (AB-060). Kept by
+      // number, so a Stories version that returns them all at once reads the same.
+      const byNumber = new Map();
+      for (let from = 1; from <= n; from += VERSIONS_PER_READ) {
+        const res = await read("stories", "get_versions", { story_id: String(storyId), seq: String(block.seq), from, count: VERSIONS_PER_READ });
+        const page = ((res && res.values) || []).filter((v) => !byNumber.has(Number(v.version)));
+        if (!page.length) break;
+        for (const v of page) byNumber.set(Number(v.version), v);
+      }
+      const values = [...byNumber.values()].sort((a, b) => Number(a.version) - Number(b.version));
       list.replaceChildren(...values.slice().reverse().map((v) => h("li", {}, [
         h("p", { class: "meta small" }, [
           "Version " + v.version + " \u00b7 " + versionLabel(v) + (formatUtc(v.at) ? " \u00b7 " + formatUtc(v.at).split(",")[0] : ""),
@@ -1574,13 +1591,18 @@ function removePanel(storyId, block) {
       confirm.disabled = false;
     }
   });
+  // As remove_segment: a part hidden by writer reports alone is refunded, one
+  // the admin or the checker hid is not, and in a pool-paid part only what the
+  // writer paid themselves goes back to them (AB-065).
+  const refund = removalRefunds(seg) ? Number(seg.charged || 0) : 0;
+  let what;
+  if (refund) what = refundLine(seg, refund, shortAddress(seg.author), "").trim();
+  else if (seg.hidden && !seg.hidden_by_reports) what = "This part is hidden while it's checked, so its Ink isn't returned.";
+  else if (seg.refund_forfeited) what = "This part was restored after the copy checker hid it, so its Ink isn't returned.";
+  else what = "No Ink comes back: none was paid for it that hasn't been returned.";
   return h("div", { class: "inline-panel card" }, [
     h("h3", { class: "h3" }, ["Remove this part?"]),
-    h("p", { class: "body-2" }, [
-      seg.hidden
-        ? "This part is hidden while it's checked, so its Ink isn't returned."
-        : shortAddress(seg.author) + " gets their " + num(seg.charged) + " Ink back. The removal is recorded on the public record.",
-    ]),
+    h("p", { class: "body-2" }, [what + " The removal is recorded on the public record."]),
     h("div", { class: "actions" }, [confirm]),
     walletNote(),
     status,
@@ -3151,7 +3173,8 @@ function renderFinish(page, id) {
         : [h("option", { value: "1" }, ["Keep"]), h("option", { value: "2" }, ["Edit lightly"]), h("option", { value: "3" }, ["Remove"])]);
       const original = Number(seg.original_cost || 0);
       const allowance = Math.max(Math.floor(original / 10), Math.min(original, 20));
-      const maxCost = Number(seg.charged || 0) + allowance;
+      // As submit_final_batch: measured from the part as it is now (AB-056).
+      const maxCost = Number(seg.current_cost || 0) + allowance;
       const area = h("textarea", { rows: "5", hidden: true }, []);
       area.value = seg.text || "";
       const counter = h("p", { class: "meta small", hidden: true });
