@@ -217,8 +217,18 @@ message segment {
   // Who hid the part: 0 not hidden (or hidden before this field existed),
   // 1 writer reports, 2 the moderator (the copy checker), 3 the admin. The
   // opener or an editor may restore a part hidden by reports or the checker,
-  // never one the admin hid (AB-053).
+  // never one the admin hid (AB-053), and only the admin unhides an admin
+  // hide (AB-061). The admin may take over any other hide in place (AB-062).
   uint32 hidden_by = 32;
+  // Someone other than the writer made one of its kept versions (a paid
+  // change or the final edit), so a takedown never reads the versions to
+  // find out (AB-059).
+  bool other_version = 33;
+  // Its opener or an editor restored it after the copy checker hid it: a cut
+  // or removing it gives back no Ink (AB-062).
+  bool refund_forfeited = 34;
+  // Counted among its writer's live parts in the story (AB-066).
+  bool live_counted = 35;
 }
 
 message address_list {
@@ -613,12 +623,15 @@ message revise_part_arguments {
   bool ai_assisted = 9;
 }
 
-// @description Every kept version of a part, oldest first (empty if its text never changed or it was taken down).
+// @description A part's kept versions, oldest first, at most 5 per call (empty if its text never changed or it
+// was taken down). Page with from = 1, 6, 11, ... up to the segment's version_count (AB-060).
 // @read-only true
 // @result version_list
 message get_versions_arguments {
   uint64 story_id = 1 [jstype = JS_STRING];
   uint64 seq = 2 [jstype = JS_STRING];
+  uint32 from = 3;               // first version to return (0 or 1: the original)
+  uint32 count = 4;              // how many (0 or more than 5: 5)
 }
 
 // @description Every wallet other than the writer that changed a part (a paid change, the final edit or a

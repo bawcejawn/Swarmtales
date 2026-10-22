@@ -106,6 +106,10 @@ function aliceRestores(): void {
   authorize(ALICE);
   new Stories().restore_segment(new stories.restore_segment_arguments(ALICE, gId, gSeq, ""));
 }
+function botUnhides(): void {
+  authorize(BOT);
+  new Stories().set_segment_hidden(new stories.set_segment_hidden_arguments(BOT, gId, gSeq, false, COPYRIGHT, "cleared"));
+}
 function hideAs(actor: Uint8Array): void {
   authorize(actor);
   new Stories().set_segment_hidden(new stories.set_segment_hidden_arguments(actor, gId, gSeq, true, COPYRIGHT, "checking"));
@@ -328,9 +332,11 @@ describe("AB-048, AB-053: the changer list and who hid a part", () => {
     expect(segment(gId, gSeq).hidden_by).toBe(3);
     expect(aliceRestores).toThrow("AB-053: the opener restored a part the admin hid");
     MockVM.rollbackTransaction();
-    // The moderator may unhide it.
-    authorize(BOT);
-    new Stories().set_segment_hidden(new stories.set_segment_hidden_arguments(BOT, gId, gSeq, false, COPYRIGHT, "cleared"));
+    // Only the admin may unhide it; the moderator key is the copy checker's (AB-061).
+    expect(botUnhides).toThrow("AB-061: the moderator undid the admin's hide");
+    MockVM.rollbackTransaction();
+    authorize(STORIES);
+    new Stories().set_segment_hidden(new stories.set_segment_hidden_arguments(STORIES, gId, gSeq, false, COPYRIGHT, "cleared"));
     checkpoint();
     expect(segment(gId, gSeq).hidden).toBe(false);
   });

@@ -43,8 +43,15 @@ export function allowCalls(count: i32): void {
 }
 export function segment(id: u64, seq: u64): stories.segment { return new Stories().get_segment(new stories.get_segment_arguments(id, seq)); }
 export function story(id: u64): stories.story { return new Stories().get_story(new stories.get_story_arguments(id)); }
+// Every kept version: get_versions returns at most 5 per call (AB-060).
 export function versions(id: u64, seq: u64): stories.segment_version[] {
-  return new Stories().get_versions(new stories.get_versions_arguments(id, seq)).values;
+  const out: stories.segment_version[] = [];
+  const count = segment(id, seq).version_count;
+  for (let from: u32 = 1; from <= count; from += 5) {
+    const page = new Stories().get_versions(new stories.get_versions_arguments(id, seq, from, 5)).values;
+    for (let i = 0; i < page.length; i++) out.push(page[i]);
+  }
+  return out;
 }
 export function strikes(who: Uint8Array): u32 { return new Stories().get_account_status(new stories.get_account_status_arguments(who)).strikes; }
 

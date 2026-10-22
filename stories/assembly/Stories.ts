@@ -34,7 +34,10 @@
 //     on the record but block finalizing until unhidden or removed. A part
 //     the admin or moderator hid is not refunded when removed; one hidden
 //     by writer reports alone is. The opener or an editor may restore a part
-//     the checker or reports hid, never one the admin hid.
+//     the checker or reports hid, never one the admin hid; a part restored
+//     after a checker hide gives no Ink back when cut or removed, but one
+//     the checker unhides itself does. Only the admin unhides the admin's
+//     hide, and the admin may take over any other hide in place.
 //   - A wallet the opener or an editor takes off a story's allow-list
 //     cannot rejoin with an invite; only they can add it back.
 //   - The admin alone may take a part down for good, at any stage. Its
@@ -77,7 +80,7 @@
 //     finalizer after admin_take_over, under the same light-edit limits
 //     (recorded as a change to the part); otherwise it can only remove text
 //     through a recorded takedown.
-//   - The moderator can only hide and unhide parts, add source notes and
+//   - The moderator can only hide parts, unhide any the admin didn't hide, add source notes and
 //     clear a story's summary. It cannot remove a part's text, touch Ink,
 //     or change any setting.
 //
@@ -143,6 +146,7 @@ const VERSIONS_SPACE_ID: u32 = 26;
 const REMOVED_SPACE_ID: u32 = 27;
 const PART_EDITORS_SPACE_ID: u32 = 28;
 const PART_CHANGERS_SPACE_ID: u32 = 29;
+const LIVE_PARTS_SPACE_ID: u32 = 30;
 const MAX_SUMMARY: i32 = 1500;
 const VERSION_ORIGINAL: u32 = 1;
 const VERSION_CHANGED: u32 = 2;
@@ -159,8 +163,16 @@ const MAX_PAID_CHANGES: u32 = 60;
 const WRITER_VERSION_ROOM: u32 = 99;
 // Kept versions per part, so a takedown can always wipe them in one call:
 // the original, the writer's 98, 60 paid changes (a paid removal included),
-// one writer edit after each of them, and the final edit.
+// one writer edit after each of them, and the final edit. A takedown only
+// deletes them; it never reads their text (AB-059).
 const MAX_VERSIONS: u32 = WRITER_VERSION_ROOM + 2 * MAX_PAID_CHANGES + 1;
+// The most versions the code before other_version kept (the original and 60
+// changes). Only a part with this many or fewer can hold versions that
+// edited_by_others and other_version don't know about (AB-052, AB-059).
+const LEGACY_MAX_VERSIONS: u32 = 61;
+// Versions per get_versions call: each can hold a whole part, and a node's
+// read limit stops a read of many (AB-060).
+const MAX_VERSION_READ: u32 = 5;
 // Who hid a part (segment.hidden_by, AB-053).
 const HIDDEN_BY_REPORTS: u32 = 1;
 const HIDDEN_BY_MODERATOR: u32 = 2;
@@ -182,6 +194,10 @@ const MAX_TITLE: i32 = 100;
 const MAX_CATEGORY_NAME: i32 = 32;
 const MAX_CATEGORIES: u32 = 255;
 const MAX_EDITORS: u32 = 10;
+// Changers recorded for a citation alone, beyond the paid changes: the
+// opener, 10 editors and the finalizer. Editors can rotate, so without this
+// the list would grow for mana alone (AB-063).
+const CITATION_CHANGER_ROOM: u32 = MAX_EDITORS + 2;
 const MAX_ACCOUNTS_PER_CALL: i32 = 20;
 const MAX_FREE_CHAPTERS: u32 = 5;
 const MAX_BATCH_ITEMS: i32 = 20;
@@ -279,9 +295,14 @@ export class Stories {
   // the admin may strike any of them on a takedown (AB-028).
   partEditors: Storage.Map<Uint8Array, stories.boole>;
   // (story, part) -> the same wallets in the order they first changed it, so
-  // the takedown tool can list every one (AB-048). Bounded: changers other
-  // than the opener, editors and the finalizer each made a paid change.
+  // the takedown tool can list every one (AB-048). Bounded: text changers each
+  // made a paid change or are the finalizer, and citation-only changers stop
+  // at CITATION_CHANGER_ROOM beyond the paid changes (AB-063).
   partChangers: Storage.Map<Uint8Array, stories.address_list>;
+  // (story, wallet) -> how many live parts the wallet wrote there. "A current
+  // writer" means owning one (AB-066). No entry: the wallet wrote only before
+  // parts were counted.
+  liveParts: Storage.Map<Uint8Array, stories.uint32>;
   // How many removed segments this call may still fold in (fix M2).
   skipBudget: u32 = MAX_SKIP_PER_CALL;
 
@@ -325,6 +346,7 @@ export class Stories {
     this.removed = new Storage.Map(id, REMOVED_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
     this.partEditors = new Storage.Map(id, PART_EDITORS_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
     this.partChangers = new Storage.Map(id, PART_CHANGERS_SPACE_ID, stories.address_list.decode, stories.address_list.encode, () => new stories.address_list());
+    this.liveParts = new Storage.Map(id, LIVE_PARTS_SPACE_ID, stories.uint32.decode, stories.uint32.encode, null);
   }
 
   // ===================================================================
@@ -436,9 +458,14 @@ export class Stories {
     const out = new stories.version_list();
     const seg = this.segments.get(this.pairKey(args.story_id, args.seq));
     if (seg == null || seg.taken_down) return out;
-    for (let v: u32 = 1; v <= seg.version_count; v++) {
+    // A few at a time: each version can hold a whole part, and reading many
+    // in one call runs past a node's read limit (AB-060).
+    const limit = args.count == 0 || args.count > MAX_VERSION_READ ? MAX_VERSION_READ : args.count;
+    let v: u32 = args.from == 0 ? 1 : args.from;
+    for (let n: u32 = 0; n < limit && v <= seg.version_count; n++) {
       const found = this.versions.get(this.versionKey(args.story_id, args.seq, v));
       if (found != null) out.values.push(found);
+      v++;
     }
     return out;
   }
@@ -629,6 +656,8 @@ export class Stories {
     this.requireNotPaused();
     const opener = this.requireAddress(args.opener, "STORIES: invalid opener address");
     this.requireSigner(opener, "STORIES: opener has not authorized this");
+    // A blocked opener can't hand out editing powers either (AB-046).
+    this.requireNotBlocked(opener);
     const st = this.requireStory(args.story_id);
     this.requireOpener(st, opener);
     System.require(st.status != stories.story_status.STATUS_FINALIZED, "STORIES: a finalized story cannot be changed");
@@ -659,6 +688,8 @@ export class Stories {
     this.requireNotPaused();
     const actor = this.requireAddress(args.actor, "STORIES: invalid address");
     this.requireSigner(actor, "STORIES: caller has not authorized this");
+    // Nor change who may write (AB-046).
+    this.requireNotBlocked(actor);
     const st = this.requireStory(args.story_id);
     System.require(this.isPrivileged(args.story_id, st, actor), "STORIES: only the opener or an editor may change the allow-list");
     System.require(st.status != stories.story_status.STATUS_FINALIZED, "STORIES: a finalized story cannot be changed");
@@ -915,6 +946,7 @@ export class Stories {
     const oldCost = seg.current_cost;
     const now = this.now();
     const mint = this.settleRefund(args.story_id, st, seg, refund);
+    this.dropLivePart(args.story_id, seg);
     this.clearSegment(seg, editor, now);
     this.segments.put(key, seg);
 
@@ -1073,7 +1105,7 @@ export class Stories {
         // Saving the text unchanged changes nothing: no version, no changer (AB-048).
         if (text != oldText) {
           this.keepVersion(args.story_id, next, seg, oldText, VERSION_FINAL, finalizer, text, newCost, now, "", false);
-          this.recordChanger(key, seg, finalizer);
+          this.recordChanger(key, seg, finalizer, false);
         }
         seg.text = text;
         seg.text_hash = this.sha256(StringBytes.stringToBytes(text));
@@ -1090,6 +1122,7 @@ export class Stories {
         if (refund == 0) this.dropTotal(args.story_id, seg.author!, seg.charged);
         if (seg.hidden) this.unhideCount(st);
         mint = this.settleRefund(args.story_id, st, seg, refund);
+        this.dropLivePart(args.story_id, seg);
         this.clearSegment(seg, finalizer, now);
         st.used_chars = SafeMath.sub(st.used_chars, oldCost);
         removed = true;
@@ -1179,15 +1212,23 @@ export class Stories {
     const key = this.pairKey(args.story_id, args.seq);
     const seg = this.requireActiveSegment(key);
     const note = this.requireNote(args.note);
+    const byAdmin = Arrays.equal(actor, this.getAdmin());
     if (args.hidden) {
-      System.require(!seg.hidden, "STORIES: part is already hidden");
+      // The admin may take over a hide the checker or reports made (or one
+      // from before hidden_by), in place: the part is never visible or
+      // refundable in between (AB-062).
+      System.require(!seg.hidden || (byAdmin && seg.hidden_by != HIDDEN_BY_ADMIN), "STORIES: part is already hidden");
       System.require(args.reason != stories.moderation_reason.REASON_UNSPECIFIED, "STORIES: give a reason");
+      if (!seg.hidden) st.hidden_count = st.hidden_count + 1;
       seg.hidden = true;
-      seg.hidden_by = Arrays.equal(actor, this.getAdmin()) ? HIDDEN_BY_ADMIN : HIDDEN_BY_MODERATOR;
+      seg.hidden_by = byAdmin ? HIDDEN_BY_ADMIN : HIDDEN_BY_MODERATOR;
+      seg.hidden_by_reports = false;
       seg.moderation_reason = args.reason;
-      st.hidden_count = st.hidden_count + 1;
     } else {
       System.require(seg.hidden, "STORIES: part is not hidden");
+      // The moderator key is the copy checker's: it never undoes the admin's
+      // hide (AB-061).
+      System.require(seg.hidden_by != HIDDEN_BY_ADMIN || byAdmin, "STORIES: the admin hid this part; only the admin can unhide it");
       seg.hidden = false;
       seg.hidden_by = 0;
       seg.hidden_by_reports = false;
@@ -1273,7 +1314,7 @@ export class Stories {
     const refund = removing ? seg.charged : this.cutRefund(seg, newCost);
     const version = this.keepVersion(args.story_id, args.seq, seg, oldText,
       removing ? VERSION_REMOVED : VERSION_CHANGED, writer, text, newCost, now, citation, args.ai_assisted);
-    this.recordChanger(key, seg, writer);
+    this.recordChanger(key, seg, writer, false);
     seg.paid_changes = changes + 1;
     const mint = this.settleRefund(args.story_id, st, seg, refund);
 
@@ -1281,6 +1322,7 @@ export class Stories {
     st.total_burned = SafeMath.add(st.total_burned, price);
 
     if (removing) {
+      this.dropLivePart(args.story_id, seg);
       this.clearSegment(seg, writer, now);
     } else {
       // The changer's added words count toward their part of the story.
@@ -1289,6 +1331,9 @@ export class Stories {
       if (total == null) {
         st.contributor_count = st.contributor_count + 1;
         this.contributorTotals.put(totalKey, new stories.uint64(added));
+        // Changing a part doesn't make it theirs: a current writer owns a
+        // live part (AB-066).
+        if (this.liveParts.get(totalKey) == null) this.liveParts.put(totalKey, new stories.uint32(0));
       } else {
         total.value = SafeMath.add(total.value, added);
         this.contributorTotals.put(totalKey, total);
@@ -1345,13 +1390,17 @@ export class Stories {
         st.status != stories.story_status.STATUS_FINALIZED && st.status != stories.story_status.STATUS_ARCHIVED,
         "STORIES: the summary can't change once the story is finalized or archived"
       );
-      // Writers count only while their writing is still in the story and,
-      // in an invite-only story, while they are still on its allow-list.
+      // Writers count only while a part they wrote is still in the story
+      // (changing someone else's part doesn't count, AB-066) and, in an
+      // invite-only story, while they are still on its allow-list. A wallet
+      // that wrote only before parts were counted goes by its Ink total.
       const key = this.idAddrKey(args.story_id, account);
+      const parts = this.liveParts.get(key);
       const total = this.contributorTotals.get(key);
+      const writes = parts != null ? parts.value > 0 : total != null && total.value > 0;
       const member = st.visibility == stories.visibility.VISIBILITY_PUBLIC || this.allowed.get(key)!.value;
       System.require(
-        this.isPrivileged(args.story_id, st, account) || (total != null && total.value > 0 && member),
+        this.isPrivileged(args.story_id, st, account) || (writes && member),
         "STORIES: only the opener, an editor or a current writer of this story may update its summary"
       );
     }
@@ -1410,7 +1459,7 @@ export class Stories {
     const citation = this.requireCitation(args.citation);
     if (citation.length > 0) this.requireNotBlocked(account);
     const before = seg.citation != null ? seg.citation! : "";
-    if (citation != before) this.recordChanger(key, seg, account);
+    if (citation != before) this.recordChanger(key, seg, account, true);
     seg.citation = citation;
     this.segments.put(key, seg);
     const ev = new stories.citation_event(args.story_id, args.seq, account, citation, false);
@@ -1439,8 +1488,11 @@ export class Stories {
 
   // The story's opener or an editor brings back a hidden part (the checker or
   // writer reports hid it). A part the admin hid stays hidden until the admin
-  // or the moderator unhides it, so an opener who wrote it cannot restore it
-  // and remove it for a refund (AB-053). A part taken down stays removed.
+  // unhides it, so an opener who wrote it cannot restore it and remove it for
+  // a refund (AB-053, AB-061). A part hidden before hidden_by existed and not
+  // by reports may be an admin hide, so it is treated as one. Restoring a part
+  // the checker hid gives up its refund: cutting or removing it later gives no
+  // Ink back (AB-062). A part taken down stays removed.
   restore_segment(args: stories.restore_segment_arguments): stories.empty_object {
     this.enter();
     this.requireNotPaused();
@@ -1453,8 +1505,10 @@ export class Stories {
     const key = this.pairKey(args.story_id, args.seq);
     const seg = this.requireActiveSegment(key);
     System.require(seg.hidden, "STORIES: part is not hidden");
-    System.require(seg.hidden_by != HIDDEN_BY_ADMIN, "STORIES: the admin hid this part; only the admin or the moderator can unhide it");
+    System.require(seg.hidden_by == HIDDEN_BY_REPORTS || seg.hidden_by == HIDDEN_BY_MODERATOR || seg.hidden_by_reports,
+      "STORIES: the admin hid this part; only the admin can unhide it");
     const note = this.requireNote(args.note);
+    if (seg.hidden_by == HIDDEN_BY_MODERATOR) seg.refund_forfeited = true;
     seg.hidden = false;
     seg.hidden_by = 0;
     seg.hidden_by_reports = false;
@@ -1493,16 +1547,25 @@ export class Stories {
     // change of its words, and the writer's own edits don't count. A part
     // someone else revised before edited_by_others existed shows it only in
     // its kept versions (AB-052).
-    const changed = seg.edited_by_others || seg.paid_changes > 0 || this.versionByOther(args.story_id, args.seq, seg, null);
+    // The strike choice comes first, and only an automatic strike asks
+    // whether someone else changed the part. The flags answer that without
+    // reading any version text; only a part small enough to be from before
+    // the flags (LEGACY_MAX_VERSIONS) is also looked at version by version,
+    // so the writer's free edits can never make a takedown too big (AB-059).
     const named = args.strike != null && args.strike!.length > 0;
     System.require(!(named && args.no_strike), "STORIES: name a wallet to strike or choose no strike, not both");
+    const legacy = seg.version_count <= LEGACY_MAX_VERSIONS;
     let struck: Uint8Array = new Uint8Array(0);
     if (named) {
       struck = args.strike!;
-      const changer = this.partEditors.get(this.join(key, struck))!.value || this.versionByOther(args.story_id, args.seq, seg, struck);
-      System.require(Arrays.equal(struck, seg.author!) || changer,
-        "STORIES: strike the part's writer or a wallet that changed it");
+      if (!Arrays.equal(struck, seg.author!)) {
+        const changer = this.partEditors.get(this.join(key, struck))!.value ||
+          (legacy && this.versionByOther(args.story_id, args.seq, seg, struck));
+        System.require(changer, "STORIES: strike the part's writer or a wallet that changed it");
+      }
     } else if (!args.no_strike) {
+      const changed = seg.edited_by_others || seg.paid_changes > 0 || seg.other_version ||
+        (legacy && this.versionByOther(args.story_id, args.seq, seg, null));
       System.require(!changed, "STORIES: someone other than the writer changed this part; name who gets the strike, or choose no strike");
       struck = seg.author!;
     }
@@ -1519,6 +1582,7 @@ export class Stories {
       }
       if (seg.hidden) this.unhideCount(st);
       st.used_chars = SafeMath.sub(st.used_chars, seg.current_cost);
+      this.dropLivePart(args.story_id, seg);
       this.clearSegment(seg, admin, now);
       seg.hidden = false;
       seg.hidden_by = 0;
@@ -1898,6 +1962,7 @@ export class Stories {
     seg.insert_after = insertAfter;
     seg.fund_paid = fromFund;
     seg.citation = citation;
+    seg.live_counted = true;
     this.segments.put(this.pairKey(storyId, seq), seg);
 
     st.segment_count = seq;
@@ -1917,6 +1982,8 @@ export class Stories {
       total.value = SafeMath.add(total.value, cost);
       this.contributorTotals.put(totalKey, total);
     }
+    const parts = this.liveParts.get(totalKey);
+    this.liveParts.put(totalKey, new stories.uint32(parts != null ? parts.value + 1 : 1));
     const count = this.authorCount.get(author)!;
     this.authorList.put(this.addrIdxKey(author, count.value), new stories.segment_ref(storyId, seq));
     count.value = count.value + 1;
@@ -1994,23 +2061,39 @@ export class Stories {
 
   // Remembers that `by` changed someone else's part, even only by cutting
   // words, so the admin can strike them on a takedown (AB-028). One entry
-  // per part and wallet: nothing grows and nothing is looped over. The
-  // writer can always be struck, so their own changes are not recorded.
-  private recordChanger(key: Uint8Array, seg: stories.segment, by: Uint8Array): void {
+  // per part and wallet: nothing is looped over. The writer can always be
+  // struck, so their own changes are not recorded. A citation alone is
+  // recorded only while the list has room beyond the paid changes, so
+  // rotating editors can't grow it without limit (AB-063); the part still
+  // counts as changed.
+  private recordChanger(key: Uint8Array, seg: stories.segment, by: Uint8Array, citationOnly: bool): void {
     if (Arrays.equal(by, seg.author!)) return;
-    const flag = this.join(key, by);
-    if (!this.partEditors.get(flag)!.value) {
-      this.partEditors.put(flag, new stories.boole(true));
-      const list = this.partChangers.get(key)!;
-      list.values.push(by);
-      this.partChangers.put(key, list);
-    }
     seg.edited_by_others = true;
+    const flag = this.join(key, by);
+    if (this.partEditors.get(flag)!.value) return;
+    const list = this.partChangers.get(key)!;
+    if (citationOnly && <u32>list.values.length >= seg.paid_changes + CITATION_CHANGER_ROOM) return;
+    this.partEditors.put(flag, new stories.boole(true));
+    list.values.push(by);
+    this.partChangers.put(key, list);
+  }
+
+  // A part's writer has one live part less in the story (AB-066). Parts
+  // written before they were counted were never added.
+  private dropLivePart(storyId: u64, seg: stories.segment): void {
+    if (!seg.live_counted) return;
+    seg.live_counted = false;
+    const key = this.idAddrKey(storyId, seg.author!);
+    const parts = this.liveParts.get(key);
+    if (parts == null || parts.value == 0) return;
+    parts.value = parts.value - 1;
+    this.liveParts.put(key, parts);
   }
 
   // Whether a kept version was made by `who` (any wallet but the writer when
   // null). Parts revised before edited_by_others and the changer records
-  // existed show who changed them only here (AB-052). MAX_VERSIONS bounds it.
+  // existed show who changed them only here (AB-052). Only takedowns of parts
+  // with at most LEGACY_MAX_VERSIONS versions call it (AB-059).
   private versionByOther(storyId: u64, seq: u64, seg: stories.segment, who: Uint8Array | null): bool {
     for (let v: u32 = 2; v <= seg.version_count; v++) {
       const found = this.versions.get(this.versionKey(storyId, seq, v));
@@ -2042,6 +2125,8 @@ export class Stories {
     this.versions.put(this.versionKey(storyId, seq, version), new stories.segment_version(
       version, seg.author, text, cost, now, kind, by, citation, aiAssisted));
     seg.version_count = version;
+    // A takedown reads this instead of the versions (AB-059).
+    if (!Arrays.equal(by, seg.author!)) seg.other_version = true;
     return version;
   }
 
@@ -2050,8 +2135,10 @@ export class Stories {
   // with revise_part are never in it. A cut below that refunds the
   // difference, so nobody gets back more than they paid (AB-035), and a cut
   // after someone else's change still returns the writer's own Ink, so
-  // trimming and growing back never charges twice (AB-044).
+  // trimming and growing back never charges twice (AB-044). A part whose
+  // checker hide its opener or an editor undid gives nothing back (AB-062).
   private cutRefund(seg: stories.segment, newCost: u64): u64 {
+    if (seg.refund_forfeited) return 0;
     return seg.charged > newCost ? seg.charged - newCost : 0;
   }
 
@@ -2068,9 +2155,11 @@ export class Stories {
   }
 
   // Removing a part refunds it unless the admin or the moderator hid it.
-  // Writer reports alone never cost the writer their Ink (AB-012).
+  // Writer reports alone never cost the writer their Ink (AB-012). If the
+  // checker unhides its own hide, the part is refundable again; if the opener
+  // or an editor restored it instead, it never is (AB-062).
   private refundable(seg: stories.segment): bool {
-    return !seg.hidden || seg.hidden_by_reports;
+    return (!seg.hidden || seg.hidden_by_reports) && !seg.refund_forfeited;
   }
 
   private clearSegment(seg: stories.segment, by: Uint8Array, now: u64): void {
