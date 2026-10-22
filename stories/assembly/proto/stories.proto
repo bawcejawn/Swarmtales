@@ -250,6 +250,9 @@ message segment_version {
 
 message version_list {
   repeated segment_version values = 1;
+  // get_versions: the version to ask for next (from = next), or 0 when there
+  // are no more. A page stops early at a size budget (AB-070).
+  uint32 next = 2;
 }
 
 // A wallet's standing under the repeat-infringer policy.
@@ -623,8 +626,9 @@ message revise_part_arguments {
   bool ai_assisted = 9;
 }
 
-// @description A part's kept versions, oldest first, at most 5 per call (empty if its text never changed or it
-// was taken down). Page with from = 1, 6, 11, ... up to the segment's version_count (AB-060).
+// @description A part's kept versions, oldest first, at most 5 per call and only as many as fit about 64 KB of
+// text (always at least one), so a page stays under a node's read limit (empty if its text never changed or it
+// was taken down). Start with from = 1 and continue from the returned next until it is 0 (AB-060, AB-070).
 // @read-only true
 // @result version_list
 message get_versions_arguments {
