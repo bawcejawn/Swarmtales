@@ -76,3 +76,9 @@ test("hide reads the part before any key is asked for", () => {
   assert.ok(body.indexOf("lib.hidePlan(") >= 0 && body.indexOf("lib.hidePlan(") < body.indexOf("getSigner("),
     "the plan is checked before the key prompt");
 });
+
+test("readVersions moves on when a node answers next equal to where it started (mutation survivor)", async () => {
+  const all = versionsOf(7);
+  const got = await lib.readVersions(async (from, count) => ({ values: all.slice(from - 1, from - 1 + count), next: String(from) }), 7);
+  assert.deepStrictEqual(got.map((v) => v.version), [1, 2, 3, 4, 5, 6, 7]);
+});

@@ -242,7 +242,7 @@ yarn build:release
 yarn test
 ```
 
-Success means `stories/build/release/contract.wasm` exists and the test files together report **381 pass** and **0 fail**.
+Success means `stories/build/release/contract.wasm` exists and the test files together report **417 pass** and **0 fail**.
 
 `yarn build:release` in any of the three folders makes the smaller wasm used for an upload. Tests use the debug build.
 
@@ -258,7 +258,7 @@ cd ..
 node --test "checker/__tests__/*.test.mjs" "deploy/__tests__/*.test.js"
 ```
 
-Success means the website reports **161 pass** and the checker and deploy tool **219 pass**, both with **0 fail**. (`yarn test:deploy` in the root `package.json` runs the deploy tool's tests.)
+Success means the website reports **162 pass** and the checker and deploy tool **220 pass**, both with **0 fail**. (`yarn test:deploy` in the root `package.json` runs the deploy tool's tests.)
 
 ## Testnet
 
