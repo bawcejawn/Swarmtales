@@ -5,7 +5,7 @@
 //   M-3  no reports on finished books; an admin hide there still can't be restored
 //   M-4  a writer taken off a private story's list can't edit, only remove
 //   M-5  get_segments stops at a byte budget and says where to go on
-//   F-03 the same text can't be edited or changed into a story it was ever in
+//   F-03 no new part repeats text the story ever had; no part takes another part's text
 //   F-04 own-part edits need the rights confirmation and the current Terms
 //   F-05 an opener removes only report-hidden parts; the writer keeps the refund
 //   F-06 a removal keeps the removed text as a version, and a takedown wipes it
@@ -321,7 +321,7 @@ describe("M-5: get_segments stops at a byte budget", () => {
 describe("F-03: the same text can't be in one story twice", () => {
   beforeEach(() => { reset(); configure(); });
 
-  it("an edit can't copy another part's text, nor bring back text edited away", () => {
+  it("an edit can't copy another part's text; a part may go back to its own wording; old text can't be re-posted", () => {
     gId = openPublic();
     gSeq = write(BOB, gId, "Bob's original words here!!");
     write(CARA, gId, "Cara's words for the story.");
@@ -330,8 +330,10 @@ describe("F-03: the same text can't be in one story twice", () => {
     expect(editAs).toThrow();
     errorIs("STORIES: this exact text is already in this story");
     ownerEdit(BOB, gId, gSeq, "Bob's new words here, edited.");
-    expect(() => { write(CARA, gId, "Bob's original words here!!"); }).toThrow("text that was in the story once stays blocked");
+    expect(() => { write(CARA, gId, "Bob's original words here!!"); }).toThrow("text the story had once can't come back as a new part");
     errorIs("STORIES: this exact text is already in this story");
+    ownerEdit(BOB, gId, gSeq, "Bob's original words here!!");
+    expect(segment(gId, gSeq).text!).toBe("Bob's original words here!!", "a part may go back to its own wording");
   });
 
   it("a paid change can't copy another part's text either", () => {
@@ -460,6 +462,14 @@ describe("F-08: a blocked finalizer in the final edit", () => {
 
 describe("F-09 and S2-03: revive and join", () => {
   beforeEach(() => { reset(); configure(); });
+
+  it("an invite stops working once its opener is blocked (AB-081)", () => {
+    gId = openAs(PRIVATE, 10000);
+    block(ALICE);
+    gWho = BOB;
+    expect(joinAs).toThrow();
+    errorIs("STORIES: this story's opener can no longer invite writers");
+  });
 
   it("a blocked wallet can't join with an invite", () => {
     gId = openAs(PRIVATE, 10000);

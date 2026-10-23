@@ -67,7 +67,7 @@ The Shop admin **cannot** take back a payment that has already been split, or se
 
 The Stories admin **cannot** mint or burn Ink, refund outside the rules, or finalize a story outside the admin-finalize rule.
 
-**One text, once.** The same exact text can go into a story only once: text that was ever in it, even if it was edited away, removed or taken down, can't be added, edited in or changed in again.
+**One text, once.** A new part can't repeat any text the story ever had, even text that was edited away, removed or taken down, and an edit or a paid change can't copy another part's text. A part may go back to its own earlier wording (for example its original, after a paid change).
 
 **Hidden is not erased.** A hidden part is left out of the site and the book, but its text stays readable on the public chain until it is taken down. Text removed by its writer also stays readable in the part's kept versions.
 

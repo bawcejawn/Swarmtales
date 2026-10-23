@@ -30,7 +30,11 @@ export class StoriesBase {
   authorList: Storage.Map<Uint8Array, stories.segment_ref>;
   categories: Storage.Map<Uint8Array, stories.category>;
   reports: Storage.Map<Uint8Array, stories.boole>;
-  textHashes: Storage.Map<Uint8Array, stories.boole>;
+  // (story, text hash) -> the part that first had that text. Text goes into a
+  // story once: a new part may not repeat any text the story ever had, and a
+  // part may not take another part's text, though it may go back to its own
+  // earlier wording (audit F-03).
+  textHashes: Storage.Map<Uint8Array, stories.uint64>;
   termsAccepted: Storage.Map<Uint8Array, stories.uint32>;
   accountStatus: Storage.Map<Uint8Array, stories.account_status>;
   readingPlace: Storage.Map<Uint8Array, stories.reading_place>;
@@ -85,7 +89,7 @@ export class StoriesBase {
     this.authorList = new Storage.Map(id, AUTHOR_LIST_SPACE_ID, stories.segment_ref.decode, stories.segment_ref.encode, null);
     this.categories = new Storage.Map(id, CATEGORIES_SPACE_ID, stories.category.decode, stories.category.encode, null);
     this.reports = new Storage.Map(id, REPORTS_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
-    this.textHashes = new Storage.Map(id, TEXT_HASHES_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
+    this.textHashes = new Storage.Map(id, TEXT_HASHES_SPACE_ID, stories.uint64.decode, stories.uint64.encode, null);
     this.termsAccepted = new Storage.Map(id, TERMS_ACCEPTED_SPACE_ID, stories.uint32.decode, stories.uint32.encode, () => new stories.uint32(0));
     this.accountStatus = new Storage.Map(id, ACCOUNT_STATUS_SPACE_ID, stories.account_status.decode, stories.account_status.encode, () => new stories.account_status(false, 0));
     this.readingPlace = new Storage.Map(id, READING_PLACE_SPACE_ID, stories.reading_place.decode, stories.reading_place.encode, null);
@@ -111,7 +115,7 @@ export class StoriesBase {
     const now = nowSeconds();
     const seq = st.segment_count + 1;
     const chapter = startsChapter || seq == 1;
-    const hash = this.newTextHash(storyId, text);
+    const hash = this.newTextHash(storyId, seq, text);
     const seg = new stories.segment();
     seg.author = author;
     seg.text = text;
@@ -271,13 +275,16 @@ export class StoriesBase {
     this.dropLivePart(storyId, seg);
   }
 
-  // The same exact text goes into one story only once, however it gets there
-  // (added, edited in or changed in, audit F-03). Returns the text's hash.
-  protected newTextHash(storyId: u64, text: string): Uint8Array {
+  // The same exact text goes into a story once (audit F-03): new text may not
+  // repeat any text the story ever had (edited away, removed and taken-down
+  // text included), except that part `seq` may go back to wording it had
+  // itself, such as its original after a paid change. Returns the hash.
+  protected newTextHash(storyId: u64, seq: u64, text: string): Uint8Array {
     const hash = sha256(StringBytes.stringToBytes(text));
     const key = join(u64Key(storyId), hash);
-    System.require(!this.textHashes.get(key)!.value, "STORIES: this exact text is already in this story");
-    this.textHashes.put(key, new stories.boole(true));
+    const first = this.textHashes.get(key);
+    System.require(first == null || first.value == seq, "STORIES: this exact text is already in this story");
+    if (first == null) this.textHashes.put(key, new stories.uint64(seq));
     return hash;
   }
 

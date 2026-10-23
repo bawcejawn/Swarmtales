@@ -124,7 +124,7 @@ Every action takes the acting wallet as an argument and requires its signature. 
 | `set_story_summary` | opener, editor, or a writer with a live part (on the list in a private story) | free | Up to 1,500 characters. Admin and moderator may clear it. |
 | `set_reading_place` | any wallet | free | The reader's bookmark. The website keeps places in the browser and writes them on request. |
 
-**The same exact text goes into a story only once** (F-03): new parts, own edits, paid changes and final edits all check the story's list of text hashes, and text that was ever in the story stays on it, even after it was edited away, removed or taken down. *Why:* stops re-posting the same text to reset its history. A writer can't change a part back to exactly an earlier wording.
+**The same exact text goes into a story once** (F-03): every new text is checked against the story's list of text hashes, which records the part that first had each text. A new part may not repeat any text the story ever had (edited away, removed and taken-down text included), and an edit, paid change or final edit may not copy another part's text. A part may go back to its own earlier wording, so a paid change can restore a part's original. *Why:* stops re-posting the same text to reset its history.
 
 **Versions.** Every change to a part's text is kept as a version naming who made it: the original, the writer's edits (from version 99 on, an edit replaces the writer's own newest version), each paid change, a removal, and the final edit. A part has at most 220 versions, so a takedown can always wipe them in one call. `get_versions` returns at most 5 per call and stops at about 64 KB.
 

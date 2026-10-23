@@ -28,9 +28,10 @@
 //   - Every new part carries the writer's "I wrote this, or I have the
 //     right to use it" confirmation and the Terms of Use version they
 //     accepted. The contract refuses a part without both.
-//   - The same exact text can go into one story only once, whether it is
-//     added, edited in or changed in (audit F-03). Text that was in the
-//     story once, even if it was edited away or removed, stays blocked.
+//   - The same exact text goes into one story once (audit F-03): a new part
+//     may not repeat any text the story ever had, even edited away, removed
+//     or taken down, and an edit or a paid change may not copy another part's
+//     text. A part may go back to its own earlier wording.
 //   - Any wallet may report a part of a story that is not finalized, once.
 //     Reports from wallets that have written on SwarmTales count; enough of
 //     them hide the part. Finished books are reported off-chain (audit M-3).
@@ -571,6 +572,9 @@ export class Stories extends StoriesAdmin {
     this.requireNotBlocked(account);
     const st = this.requireStory(args.story_id);
     this.requireJoinable(st);
+    // Invite links are the opener's: once the opener is blocked, the links
+    // they made stop working too (AB-081). Editors can still add wallets.
+    System.require(!this.accountStatus.get(st.opener!)!.blocked, "STORIES: this story's opener can no longer invite writers");
     const key = pairKey(args.story_id, args.invite_id);
     const inv = this.invites.get(key);
     System.require(inv != null, "STORIES: unknown invite");
@@ -711,7 +715,7 @@ export class Stories extends StoriesAdmin {
       st.total_burned = SafeMath.add(st.total_burned, growth);
     }
     seg.text = text;
-    seg.text_hash = this.newTextHash(args.story_id, text);
+    seg.text_hash = this.newTextHash(args.story_id, args.seq, text);
     seg.current_cost = newCost;
     seg.last_edited_by = editor;
     seg.last_edited_at = now;
@@ -925,7 +929,7 @@ export class Stories extends StoriesAdmin {
           this.recordChanger(key, seg, finalizer, false);
         }
         seg.text = text;
-        if (text != oldText) seg.text_hash = this.newTextHash(args.story_id, text);
+        if (text != oldText) seg.text_hash = this.newTextHash(args.story_id, next, text);
         seg.current_cost = newCost;
         seg.charged = seg.charged - refund;
         seg.last_edited_by = finalizer;
@@ -1120,7 +1124,7 @@ export class Stories extends StoriesAdmin {
       this.authorCount.put(writer, count);
       seg.charged = seg.charged - refund;
       seg.text = text;
-      seg.text_hash = this.newTextHash(args.story_id, text);
+      seg.text_hash = this.newTextHash(args.story_id, args.seq, text);
       seg.current_cost = newCost;
       seg.last_edited_by = writer;
       seg.last_edited_at = now;
