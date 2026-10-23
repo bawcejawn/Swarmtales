@@ -14,6 +14,7 @@ import { VAULT_MANA_CEILING } from "./lib/money.js";
 import {
   VAULT_MANA_EXPLANATION,
   VaultError,
+  assertVaultUri,
   createVaultSession,
   fetchVaultConfig,
   vaultDisconnect,
@@ -266,9 +267,20 @@ export function createVaultWallet(pageNetwork) {
         clearSavedSession();
         return;
       }
+      // A saved pairing link passes the same check as a fresh one (AB-042):
+      // anything but https://koinvault.app/ drops the whole saved session.
+      let uri = "";
+      if (typeof saved.uri === "string" && saved.uri) {
+        try {
+          uri = assertVaultUri(saved.uri);
+        } catch {
+          clearSavedSession();
+          return;
+        }
+      }
       credentials = { sessionId: saved.sessionId, secret: saved.secret };
       expiresAt = saved.expiresAt || 0;
-      pairingUri = typeof saved.uri === "string" ? saved.uri : "";
+      pairingUri = uri;
       address = saved.address || null;
       await poll();
     },

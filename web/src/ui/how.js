@@ -43,7 +43,7 @@ export const HOW_SECTIONS = [
     id: "get-ink",
     title: "5. Three ways to get Ink",
     list: [
-      ["A promo link.", "Sometimes SwarmTales shares a link on Discord, Telegram or X. Open it, connect your wallet, and claim free Ink. Each wallet can claim one promo, ever."],
+      ["A promo link.", "Sometimes SwarmTales shares a link on Discord, Telegram or X. Open it, connect your wallet, and claim free Ink. Each wallet can claim each promo once."],
       ["An invite to a private story.", "A story's opener can send you an invite link. Joining is free. The opener's writers' pool pays for your parts while it lasts. You need an active Writer month there; the opener can pay for it."],
       ["A Writer membership.", "A Writer month comes with a set amount of Ink. Open the Membership page to see the price and the Ink included."],
     ],
@@ -61,7 +61,7 @@ export const HOW_SECTIONS = [
     id: "edits",
     title: "7. Edits and credit",
     body: [
-      "A story's opener and its editors can tidy a part. An edited part shows a small “edited” note; tap it to see who edited it and when. Credit stays with the person who wrote it, and the first version stays on the public record.",
+      "Each writer can edit their own part; anyone else who changes it pays Ink for it, the opener and editors too. An edited part shows a small “edited” note, and every change is kept as a version: open “earlier versions” to see who changed what, and when. Credit stays with the person who wrote it.",
       "If a part is removed, it is listed as removed at the bottom of the story, so the record stays complete.",
     ],
   },

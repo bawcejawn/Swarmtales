@@ -133,7 +133,10 @@ function addEditor(id: u64, who: Uint8Array): void {
 }
 function edit(as: Uint8Array, id: u64, seq: u64, text: string): void {
   authorize(as);
-  allowCalls(1);
+  // Growing the part reads the Writer membership and burns the added letters;
+  // shrinking it mints a refund.
+  if (<u64>text.length > segment(id, seq).current_cost) results([writer(), okCall()]);
+  else allowCalls(1);
   new Stories().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length));
   checkpoint();
 }

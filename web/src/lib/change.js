@@ -1,10 +1,21 @@
 /**
- * Price of changing someone else's part, exactly as the Stories contract
- * computes it: the letters added plus the letters removed (at least 10),
- * times 2, doubling with every change to the same part. A "letter" is one
- * UTF-16 unit, so most emoji count 2, as everywhere on SwarmTales.
+ * Prices for changing a part, exactly as the Stories contract computes them.
+ *
+ * Someone else's part (revise_part): the letters added plus the letters
+ * removed (at least 10), times 2, doubling with every paid change to the same
+ * part. The changer always pays, never the story's pool.
+ *
+ * Your own part (edit_segment): rewording is free; letters beyond the part's
+ * current length cost 1 Ink each (you pay, never the pool); shortening refunds
+ * only Ink you (or the pool) paid for the part and haven't had back, also
+ * after someone else changed it.
+ *
+ * A "letter" is one UTF-16 unit, so most emoji count 2, as everywhere on
+ * SwarmTales.
  */
 export const MIN_CHANGE_UNITS = 10;
+/** revise_part refuses a part's 61st paid change: offer none from 60 on. */
+export const MAX_PAID_CHANGES = 60;
 
 function isLow(c) {
   return c >= 0xdc00 && c <= 0xdfff;
@@ -25,26 +36,95 @@ export function diffSpan(oldText, newText) {
   return { pre, suf, removed: a.length - pre - suf, added: b.length - pre - suf };
 }
 
-/** Times-multiplier for the next change: 2, then 4, 8, ... */
-export function changeMultiplier(versionCount) {
-  const v = Number(versionCount || 0);
-  const changes = v === 0 ? 0 : v - 1;
-  return 2 ** (changes + 1);
+/**
+ * Times-multiplier for the next paid change: 2, then 4, 8, ... (segment.paid_changes so far).
+ * A BigInt, so labels above 2^53 print the exact number (AB-065).
+ */
+export function changeMultiplier(paidChanges) {
+  return 1n << BigInt(Number(paidChanges || 0) + 1);
 }
 
-/** { removed, added, units, multiplier, price, refund } for a change. */
-export function changePrice(oldText, newText, versionCount, charged) {
+/**
+ * The exact price as a BigInt, like the contract's u64: above 2^53 a JS
+ * number would print a rounded value and every change would be refused (AB-055).
+ */
+export function changePriceExact(units, paidChanges) {
+  return BigInt(units) * (1n << BigInt(Number(paidChanges || 0) + 1));
+}
+
+/**
+ * Ink a cut gives back to whoever paid: what was paid for the part (charged)
+ * beyond the new length. Letters someone else added are never in charged, so
+ * nobody gets back more than they paid (AB-035, AB-044). Removing the part
+ * gives back everything paid. paidChanges is kept for older callers.
+ */
+export function cutRefund(newText, paidChanges, charged, forfeited) {
+  // Restored by its opener or an editor after the copy checker hid it (AB-062).
+  if (forfeited) return 0;
+  const paid = Number(charged || 0);
+  if (String(newText ?? "").length === 0) return paid;
+  return Math.max(0, paid - String(newText).length);
+}
+
+/**
+ * Whether removing the part gives its Ink back, as the contract's refundable():
+ * not if the admin or the checker hid it (writer reports alone don't cost the
+ * writer), and never once its opener or an editor restored a checker hide.
+ */
+export function removalRefunds(segment) {
+  const seg = segment || {};
+  return (!seg.hidden || !!seg.hidden_by_reports) && !seg.refund_forfeited;
+}
+
+/** How a refund splits between the writer and a story's pool (pool-paid parts: own_paid first). */
+export function refundSplit(segment, refund) {
+  const seg = segment || {};
+  const toWriter = seg.fund_paid ? Math.min(refund, Number(seg.own_paid || 0)) : refund;
+  return { toWriter, toPool: refund - toWriter };
+}
+
+/**
+ * { removed, added, units, multiplier, price, refund } for a change to someone
+ * else's part. price is a BigInt (send String(price) as expected_ink).
+ */
+export function changePrice(oldText, newText, paidChanges, charged, forfeited) {
   const { removed, added } = diffSpan(oldText, newText);
   const units = Math.max(MIN_CHANGE_UNITS, removed + added);
-  const multiplier = changeMultiplier(versionCount);
-  const removing = String(newText ?? "").length === 0;
-  const paid = Number(charged || 0);
+  const multiplier = changeMultiplier(paidChanges);
   return {
     removed,
     added,
     units,
     multiplier,
-    price: units * multiplier,
-    refund: removing ? paid : Math.min(removed, paid),
+    price: changePriceExact(units, paidChanges),
+    refund: cutRefund(newText, paidChanges, charged, forfeited),
   };
+}
+
+/**
+ * The writer's own edit: { cost, refund, toWriter, toPool }. `cost` is what the
+ * writer pays for letters beyond the current length. In a part the story's pool
+ * paid for, a refund first returns what the writer paid themselves (own_paid),
+ * then the rest goes back to the pool. Like the contract, the refund is
+ * measured from what was paid (charged), not the current length: a part from
+ * before the upgrade can have both a cost and a refund in one edit (AB-065).
+ */
+export function editPrice(segment, newText) {
+  const seg = segment || {};
+  const length = String(newText ?? "").length;
+  const current = Number(seg.current_cost || 0);
+  const cost = Math.max(0, length - current);
+  const refund = cutRefund(newText, seg.paid_changes, seg.charged, seg.refund_forfeited);
+  return { cost, refund, ...refundSplit(seg, refund) };
+}
+
+/**
+ * Whether the editor box holds a real change. The box starts with the stored
+ * text, and what is sent is normalized and trimmed, so compare like with like:
+ * a stored part with a leading or trailing space or line break must not look
+ * changed (and priced) before anyone types (AB-042).
+ */
+export function editorChanged(storedText, boxValue, normalize) {
+  const clean = (t) => normalize(String(t ?? "")).trim();
+  return clean(boxValue) !== clean(storedText);
 }

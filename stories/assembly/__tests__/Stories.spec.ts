@@ -230,8 +230,14 @@ function addEditor(id: u64, who: Uint8Array): void {
 
 function edit(as: Uint8Array, id: u64, seq: u64, text: string): void {
   authorize(as);
-  allowCalls(1);
-  new Stories().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length));
+  // Growing the part reads the Writer membership and burns the added letters;
+  // shrinking it mints a refund.
+  const current = segment(id, seq).current_cost;
+  if (<u64>text.length > current) results([writer(), okCall()]);
+  else allowCalls(1);
+  // max_ink: the growth price the page would show (AB-049).
+  const growth: u64 = <u64>text.length > current ? <u64>text.length - current : 0;
+  new Stories().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length, growth));
   checkpoint();
 }
 
@@ -288,7 +294,7 @@ function failContribute(): void {
 function failEdit(): void {
   authorize(fWho);
   results(fResults);
-  new Stories().edit_segment(new stories.edit_segment_arguments(fWho, fId, fSeq, fText, fExpected));
+  new Stories().edit_segment(new stories.edit_segment_arguments(fWho, fId, fSeq, fText, fExpected, u64.MAX_VALUE)); // any price: these edits fail for other reasons
 }
 
 function failLimits(): void {
@@ -923,32 +929,34 @@ describe("Stories: edits, removals and refunds", () => {
     expect(contributorTotal(1, BOB)).toBe(50);
   });
 
-  it("closes the shrink-then-regrow loophole", () => {
-    edit(BOB, 1, 2, chars(50));          // refund 50, 50 still paid for
-    edit(BOB, 1, 2, chars(70));          // free growth: allowance is 20 of the original 100
+  it("charges the normal rate for letters beyond the part's current length (no free regrowth)", () => {
+    edit(BOB, 1, 2, chars(50));          // refund 50
+    expect(lastMint().value).toBe(50);
+    const burnsBefore = callsTo(BURN_ENTRY).length;
+    edit(BOB, 1, 2, chars(70));          // 20 letters beyond the current 50: Bob pays 20
+    expect(callsTo(BURN_ENTRY).length).toBe(burnsBefore + 1);
+    expect(lastBurn().value).toBe(20);
+    expect(segment(1, 2).charged).toBe(70);
+    expect(story(1).total_burned).toBe(137);
+    expect(contributorTotal(1, BOB)).toBe(70);
+    // Rewording at the same length is free: nothing burned, nothing minted.
     const mintsBefore = callsTo(MINT_ENTRY).length;
-    fWho = BOB; fId = 1; fSeq = 2; fText = chars(71); fExpected = 71; fResults = [okCall()];
-    fails(failEdit, "STORIES: edit grows the text too much (light edits only)");
-    // Shrinking back to 50 refunds nothing: only 50 was ever left paid.
-    edit(BOB, 1, 2, chars(50));
+    edit(BOB, 1, 2, chars(70));
+    expect(callsTo(BURN_ENTRY).length).toBe(burnsBefore + 1);
     expect(callsTo(MINT_ENTRY).length).toBe(mintsBefore);
-    expect(segment(1, 2).charged).toBe(50);
-    expect(story(1).total_refunded).toBe(50);
-    // Shrinking further refunds only what is still paid for.
+    // Shrinking refunds exactly the removed letters.
     edit(BOB, 1, 2, chars(10));
-    expect(lastMint().value).toBe(40);
-    expect(story(1).total_refunded).toBe(90);
-    // And growth is still measured from what is paid for now (10 + 20).
-    fText = chars(31); fExpected = 31;
-    fails(failEdit, "STORIES: edit grows the text too much (light edits only)");
-    edit(BOB, 1, 2, chars(30));
+    expect(lastMint().value).toBe(60);
+    expect(story(1).total_refunded).toBe(110);
+    expect(segment(1, 2).charged).toBe(10);
   });
 
-  it("does not let a tiny segment be padded by 20", () => {
-    writeAsOpener(1, "Hi");                 // seq 3, allowance = 2
-    edit(ALICE, 1, 3, "Hiya");
-    fWho = ALICE; fId = 1; fSeq = 3; fText = "Hiyaa"; fExpected = 5; fResults = [okCall()];
-    fails(failEdit, "STORIES: edit grows the text too much (light edits only)");
+  it("a tiny part grows only by paying for the added letters", () => {
+    writeAsOpener(1, "Hi");                 // seq 3
+    edit(ALICE, 1, 3, "Hiya");              // 2 letters beyond the current 2
+    expect(lastBurn().value).toBe(2);
+    expect(segment(1, 3).charged).toBe(4);
+    expect(segment(1, 3).current_cost).toBe(4);
   });
 
   it("in a public story, lets only the part's writer edit or remove it, while the story is open", () => {
@@ -995,9 +1003,10 @@ describe("Stories: edits, removals and refunds", () => {
     allowCalls(1);
     new Stories().remove_segment(new stories.remove_segment_arguments(BOB, 1, 2));
     checkpoint();
+    // 99 back, 20 paid to grow, 20 back, 1 back on removal.
     const st = story(1);
-    expect(st.total_refunded).toBe(100);
-    expect(st.total_burned).toBe(117);
+    expect(st.total_refunded).toBe(120);
+    expect(st.total_burned).toBe(137);
   });
 
   it("fails the edit if the refund mint fails or answers false", () => {

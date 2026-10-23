@@ -297,6 +297,71 @@ const TEST_PROMO = {
   days: 7,
 };
 
+// The published site, for promo share links (docs/UI.md). --site overrides it.
+const DEFAULT_SITE = "https://bawcejawn.github.io/Swarmtales/";
+const DEFAULT_PROMO_AMOUNT = "100";
+
+/**
+ * A promo date: "now", a day ("2026-11-01", midnight UTC), or a UTC time
+ * ("2026-11-01T18:00", seconds and a trailing Z optional). Returns unix seconds.
+ */
+function parsePromoDate(value, label, nowSec) {
+  const raw = value === undefined || value === true ? "" : String(value).trim();
+  if (raw === "now") return nowSec;
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?Z?)?$/.exec(raw);
+  if (!m) fail("--" + label + " must be now, a day like 2026-11-01, or a UTC time like 2026-11-01T18:00.");
+  const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4] || 0), Number(m[5] || 0), Number(m[6] || 0));
+  const back = new Date(ms);
+  if (back.getUTCFullYear() !== Number(m[1]) || back.getUTCMonth() !== Number(m[2]) - 1 || back.getUTCDate() !== Number(m[3]) ||
+      Number(m[4] || 0) > 23 || Number(m[5] || 0) > 59 || Number(m[6] || 0) > 59) {
+    fail("--" + label + " is not a real date: " + raw + ".");
+  }
+  return Math.floor(ms / 1000);
+}
+
+/**
+ * The create_campaign arguments for `promo-new`, without the link key.
+ * --amount defaults to 100 Ink per wallet; --budget (total Ink) and --end are
+ * required; --start defaults to now; --daily-cap is optional (0 = none).
+ */
+function planPromoCampaign(flags, nowSec) {
+  const amount = String(asWhole(flags.amount === undefined ? DEFAULT_PROMO_AMOUNT : flags.amount, "--amount"));
+  if (BigInt(amount) < 1n) fail("--amount must be at least 1 Ink.");
+  if (flags.budget === undefined || flags.budget === true) fail("--budget is required: the most Ink this campaign may give in total.");
+  const budget = String(asWhole(flags.budget, "--budget"));
+  if (BigInt(budget) < BigInt(amount)) fail("--budget must cover at least one claim (" + amount + " Ink).");
+  const dailyCap = flags["daily-cap"] === undefined ? "0" : String(asWhole(flags["daily-cap"], "--daily-cap"));
+  if (dailyCap !== "0" && BigInt(dailyCap) < BigInt(amount)) fail("--daily-cap must be 0 (no cap) or cover at least one claim (" + amount + " Ink).");
+  if (flags.end === undefined || flags.end === true) fail("--end is required: when the campaign stops (a day like 2026-12-31, UTC).");
+  const startsAt = flags.start === undefined ? nowSec : parsePromoDate(flags.start, "start", nowSec);
+  const endsAt = parsePromoDate(flags.end, "end", nowSec);
+  if (endsAt <= nowSec) fail("--end is in the past.");
+  if (endsAt <= startsAt) fail("--end must be after --start.");
+  return {
+    amount,
+    budget_total: budget,
+    daily_cap: dailyCap,
+    starts_at: String(startsAt),
+    ends_at: String(endsAt),
+    single_use: false,
+    enabled: true,
+  };
+}
+
+/** The share link for a shared campaign. Contains the link key: show it once, never log it. */
+function promoShareLink(site, campaignId, wif) {
+  const base = String(site || DEFAULT_SITE);
+  if (!/^https:\/\/[^\s#?]+$/.test(base)) fail("--site must be an https:// address with no # or ?.");
+  return base.replace(/\/?$/, "/") + "#/promo/" + campaignId + "?k=" + encodeURIComponent(wif);
+}
+
+function requireCampaignId(value) {
+  if (value === undefined || value === true) fail("Give the campaign id, for example: promo-end 3");
+  const id = asWhole(String(value), "The campaign id");
+  if (id < 1n) fail("Give the campaign id, for example: promo-end 3");
+  return String(id);
+}
+
 /**
  * A negative check passes only if the node rejected the call for a
  * contract reason. Network, mana and nonce problems are inconclusive,
@@ -353,36 +418,181 @@ function requireReason(value) {
   return MODERATION_REASONS[key];
 }
 
-const VERSION_KINDS = { 1: "original", 2: "changed", 3: "removed" };
+const VERSION_KINDS = { 1: "original", 2: "changed", 3: "removed", 4: "edited by its writer", 5: "final edit" };
+// Kinds made by someone other than the writer (a paid change, a paid removal, the final edit).
+const CHANGE_KINDS = [2, 3, 5];
 
 /**
  * Who a takedown may strike, from get_segment and get_versions (AB-028,
- * AB-029). A part nobody else changed strikes its writer automatically.
- * Once anyone else changed it, the contract refuses until the admin names
- * the writer or a wallet that changed it, or chooses no strike. `changers`
- * lists the wallets this tool can see; the contract also remembers ones
- * whose versions are gone (a finalizer's edit keeps no version).
+ * AB-029, AB-033). A part nobody else changed strikes its writer
+ * automatically; the writer's own edits don't count as a change. Once anyone
+ * else changed it, the contract refuses until the admin names the writer or a
+ * wallet that changed it, or chooses no strike. `recorded` is the contract's
+ * own list of changers (get_changers), citation-only ones included (AB-048);
+ * `changers` adds the ones the versions show. `candidates` is who the admin
+ * may name: whoever last edited the text first (even the writer), then the
+ * writer, then the other changers. When the part was changed by someone this
+ * tool can't name (a contract without get_changers), `unseen` is true and
+ * the candidates end with UNSEEN_CHANGER, so the admin is told to look.
  */
-function takedownStrike(seg, versions, strike, noStrike) {
+const UNSEEN_CHANGER = "someone else changed this part that this tool can't name (a citation or a change made before this " +
+  "Stories version): look up the part's stories.citation_event and stories.revise_event on a block explorer";
+
+function takedownStrike(seg, versions, strike, noStrike, recorded) {
   if (strike && noStrike) fail("Use --strike or --no-strike, not both.");
   const writer = (seg && seg.author) || "";
-  const changed = !!(seg && seg.edited_by_others) || Number((seg && seg.version_count) || 0) > 0;
   const changers = [];
   const add = (who) => { if (who && who !== writer && !changers.includes(who)) changers.push(who); };
-  for (const v of versions || []) if (Number(v.kind) !== 1) add(v.by);
-  if (seg && seg.edited_by_others) add(seg.last_edited_by);
-  return { writer, changed, changers, needsChoice: changed && !strike && !noStrike };
+  for (const who of recorded || []) add(who);
+  for (const v of versions || []) if (CHANGE_KINDS.includes(Number(v.kind)) || (v.by && v.by !== writer && Number(v.kind) !== 1)) add(v.by);
+  const lastEditedBy = (seg && seg.last_edited_by) || "";
+  if (seg && seg.edited_by_others) add(lastEditedBy);
+  // A part revised before edited_by_others existed shows it only in its versions (AB-052).
+  const changed = !!(seg && (seg.edited_by_others || seg.other_version)) || Number((seg && seg.paid_changes) || 0) > 0 ||
+    changers.length > 0;
+  const unseen = changed && changers.length === 0;
+  const candidates = [];
+  for (const who of [lastEditedBy, writer, ...changers]) if (who && !candidates.includes(who)) candidates.push(who);
+  if (unseen) candidates.push(UNSEEN_CHANGER);
+  return { writer, changed, changers, lastEditedBy, candidates, unseen, needsChoice: changed && !strike && !noStrike };
 }
 
-/** One line per kept version of a part, oldest first, for the admin to compare. */
-function versionHistory(versions) {
-  return (versions || []).map((v) => {
-    const at = Number(v.at || 0) ? new Date(Number(v.at) * 1000).toISOString().replace(".000Z", "Z") : "?";
-    const text = String(v.text || "");
-    const shown = text.length > 160 ? text.slice(0, 160) + "…" : text;
-    return "  v" + v.version + " " + (VERSION_KINDS[Number(v.kind)] || "kind " + v.kind) + " by " + (v.by || v.author || "?") +
-      " at " + at + ": " + JSON.stringify(shown);
-  });
+/**
+ * What the audit-2 upgrade reads differently for one part made by older code
+ * (AB-052, AB-053), as lines to print; [] when nothing applies.
+ */
+function legacyPartNotes(seq, seg, versions) {
+  if (!seg || !seg.author) return [];
+  const notes = [];
+  const others = [];
+  for (const v of versions || []) if (v.by && v.by !== seg.author && Number(v.kind) !== 1 && !others.includes(v.by)) others.push(v.by);
+  if (others.length && !seg.edited_by_others) {
+    notes.push("part " + seq + ": revised by " + others.join(", ") + " before edited_by_others existed (writer " + seg.author +
+      "). After the upgrade a takedown asks who gets the strike.");
+  }
+  if (seg.hidden && !seg.hidden_by_reports && !Number(seg.hidden_by || 0)) {
+    notes.push("part " + seq + ": hidden by the admin or the checker. After the upgrade only the admin can unhide it; " +
+      "to make it an admin hide, run deploy.js hide on it again with the admin key (one transaction).");
+  }
+  return notes;
+}
+
+// get_versions returns at most this many per call (AB-060), fewer when they
+// are long (AB-070).
+const VERSIONS_PER_READ = 5;
+
+/**
+ * Every kept version of a part, oldest first, read a few at a time (AB-060).
+ * `page(from, count)` returns one get_versions result ({ values, next }) or
+ * just its values. Each read goes on from the contract's next, or else right
+ * after the last version returned, since a page stops early when its versions
+ * are long (AB-070). A read that fails is tried once more for one version.
+ * A Stories version without paging returns all of them on every call;
+ * versions are kept by number, so that reads the same.
+ */
+async function readVersions(page, versionCount) {
+  const total = Number(versionCount || 0);
+  const byNumber = new Map();
+  let from = 1;
+  while (from <= total) {
+    let res;
+    try {
+      res = await page(from, VERSIONS_PER_READ);
+    } catch (e) {
+      res = await page(from, 1);
+    }
+    const values = Array.isArray(res) ? res : (res && res.values) || [];
+    let added = 0;
+    let last = 0;
+    for (const v of values) {
+      last = Math.max(last, Number(v.version));
+      if (!byNumber.has(Number(v.version))) {
+        byNumber.set(Number(v.version), v);
+        added++;
+      }
+    }
+    if (!added) break;
+    const next = Array.isArray(res) ? 0 : Number((res && res.next) || 0);
+    from = next > from ? next : last + 1;
+  }
+  return [...byNumber.values()].sort((a, b) => Number(a.version) - Number(b.version));
+}
+
+/** readVersions' page reader for a Stories contract (a koilib Contract). */
+function versionPage(storiesC, storyId, seq) {
+  return async (from, count) => {
+    const { result } = await storiesC.functions.get_versions({ story_id: String(storyId), seq: String(seq), from, count });
+    return result || {};
+  };
+}
+
+const HIDDEN_BY = { 1: "writer reports", 2: "the copy checker", 3: "the admin" };
+
+/**
+ * What `deploy.js hide` will do for a part (AB-061, AB-062), or fail before
+ * any key is asked for. Hiding a part that is already hidden is the admin
+ * taking over that hide in one transaction: it becomes an admin hide, so the
+ * opener can't restore it and removing it refunds nothing. The moderator key
+ * may take over a hide writer reports made, as the copy checker does for a
+ * copy (AB-071). Only the admin unhides an admin hide, or a hide from before
+ * hidden_by that reports did not make (it may be the admin's, AB-074).
+ */
+function hidePlan(seg, hidden, actor, admin) {
+  if (!seg || !seg.author) fail("There is no such part.");
+  if (Number(seg.status) !== 1) fail("That part was removed; nothing to hide or unhide.");
+  const by = Number(seg.hidden_by || 0);
+  const who = HIDDEN_BY[by] || (seg.hidden_by_reports ? "writer reports" : "the admin or the checker, before hidden_by existed");
+  const maybeAdmin = by === 3 || (by === 0 && !seg.hidden_by_reports);
+  if (!hidden) {
+    if (!seg.hidden) fail("That part is not hidden. Nothing was sent.");
+    if (maybeAdmin && actor !== admin) fail("The admin hid this part (or may have), so only the admin key can unhide it. Nothing was sent.");
+    return "UNHIDE (hidden by " + who + ")";
+  }
+  if (!seg.hidden) return "HIDE";
+  if (by === 3) fail("The admin already hid this part. Nothing was sent.");
+  if (actor !== admin) {
+    if (by === 1 || (by === 0 && seg.hidden_by_reports)) {
+      return "HIDE AS THE CHECKER (now hidden by writer reports; in one transaction it becomes the checker's hide: removing it " +
+        "refunds nothing and restoring it gives up the refund)";
+    }
+    fail("That part is already hidden (by " + who + "). Only the admin key can take over a hide. Nothing was sent.");
+  }
+  return "HIDE AS THE ADMIN (now hidden by " + who + "; in one transaction it becomes an admin hide: the opener can't restore it " +
+    "and removing it refunds nothing)";
+}
+
+/** A set-once address (AB-037, AB-050): empty on chain, or already exactly `wanted`. */
+function requireSetOnce(what, onChain, wanted) {
+  if (onChain && onChain !== wanted) {
+    fail(what + " is already " + onChain + " and can never be changed (you gave " + wanted + "). Nothing was changed.\n" + SHOP_MOVE_HELP);
+  }
+}
+
+const SHOP_MOVE_HELP =
+  "Stories' Shop address and Shop's Ink address are set once and can never be changed (AB-050): both run inside " +
+  "users' own signed transactions. Moving to a new Shop or Ink needs a reviewed code upload with the contract key " +
+  "(docs/ADMIN_POWERS.md, docs/KEY_CUSTODY.md section 6), not wire.";
+
+/**
+ * One line per kept version of a part, oldest first, with the full text, for
+ * the admin to compare (AB-033). With the part itself, a last line shows the
+ * live text and who last edited it whenever it differs from the newest
+ * version (or there is none).
+ */
+function versionHistory(versions, seg) {
+  const when = (at) => Number(at || 0) ? new Date(Number(at) * 1000).toISOString().replace(".000Z", "Z") : "?";
+  const lines = (versions || []).map((v) =>
+    "  v" + v.version + " " + (VERSION_KINDS[Number(v.kind)] || "kind " + v.kind) + " by " + (v.by || v.author || "?") +
+      " at " + when(v.at) + ": " + JSON.stringify(String(v.text || "")));
+  if (seg) {
+    const live = String(seg.text || "");
+    const newest = versions && versions.length ? String(versions[versions.length - 1].text || "") : null;
+    if (newest === null || newest !== live) {
+      lines.push("  live text, last edited by " + (seg.last_edited_by || seg.author || "?") + " at " + when(seg.last_edited_at || seg.created_at) +
+        ": " + JSON.stringify(live));
+    }
+  }
+  return lines;
 }
 
 function parseArgs(argv) {
@@ -530,6 +740,27 @@ function toKoilibAbi(generated) {
  * hash, any mismatch stops the upload: a stale, debug or tampered build is
  * never uploaded by mistake. Mainnet uploads must give one.
  */
+const MAINNET_UPGRADE_FLAG = "--i-understand-this-replaces-mainnet-code";
+
+/**
+ * Whether `upload` may go ahead when the address already holds a contract.
+ * Replacing code keeps the stored data. Testnet needs --upgrade. Mainnet
+ * needs --upgrade and MAINNET_UPGRADE_FLAG too (on top of --expect-sha256 and
+ * --i-understand-this-is-mainnet): it is the recovery path in KEY_CUSTODY.md
+ * section 6 and the way to apply a reviewed contract fix after launch (AB-041).
+ */
+function checkUpgrade(exists, flags, mainnet, address) {
+  if (!exists) return false;
+  if (flags.upgrade !== true) {
+    fail(address + " already has a contract on this network. Add --upgrade to replace its code (its stored data is kept)" +
+      (mainnet ? ", and " + MAINNET_UPGRADE_FLAG + ": see docs/KEY_CUSTODY.md section 6 first." : "."));
+  }
+  if (mainnet && flags[MAINNET_UPGRADE_FLAG.slice(2)] !== true) {
+    fail("Replacing MAINNET code also needs " + MAINNET_UPGRADE_FLAG + ". Follow docs/KEY_CUSTODY.md section 6. Nothing was sent.");
+  }
+  return true;
+}
+
 function checkWasmHash(wasm, expected, mainnet) {
   const actual = crypto.createHash("sha256").update(Buffer.from(wasm)).digest("hex");
   if (expected === undefined) {
@@ -584,6 +815,8 @@ module.exports = {
   shopAddressesForStories,
   NETWORKS,
   MAINNET_FLAG,
+  MAINNET_UPGRADE_FLAG,
+  checkUpgrade,
   SECRET_ENV,
   SHOP_MINT_MASK,
   DEFAULT_INK_AMOUNTS,
@@ -592,6 +825,11 @@ module.exports = {
   TIER_READER,
   TIER_WRITER,
   TEST_PROMO,
+  DEFAULT_SITE,
+  parsePromoDate,
+  planPromoCampaign,
+  promoShareLink,
+  requireCampaignId,
   classifyRejection,
   UserError,
   fail,
@@ -601,7 +839,15 @@ module.exports = {
   MODERATION_REASONS,
   requireReason,
   takedownStrike,
+  UNSEEN_CHANGER,
+  requireSetOnce,
+  SHOP_MOVE_HELP,
+  legacyPartNotes,
   versionHistory,
+  VERSIONS_PER_READ,
+  readVersions,
+  versionPage,
+  hidePlan,
   resolveNetwork,
   checkChainId,
   classifySecret,

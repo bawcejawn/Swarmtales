@@ -6,7 +6,8 @@
 //   - Collects Book and Short Story open/close fees when Stories asks.
 //   - Mints Ink by calling the Ink contract, only for the reasons Shop
 //     is allowed: PURCHASE, MEMBERSHIP, STARTER, PROMO.
-//   - Gives promo Ink to a wallet that presents a campaign code.
+//   - Gives promo Ink to a wallet that presents a campaign code. Each
+//     wallet may claim each campaign once (October 2026; it was once ever).
 //   - Splits every payment in that same transaction:
 //       founder gets floor(price * fee_bps / 10000)
 //       treasury gets the rest
@@ -54,6 +55,7 @@ const CAMPAIGNS_SPACE_ID: u32 = 4;
 const PROMO_CLAIMED_SPACE_ID: u32 = 5;
 const SINGLE_USE_SPACE_ID: u32 = 6;
 const LOCK_SPACE_ID: u32 = 7;
+const CAMPAIGN_CLAIMED_SPACE_ID: u32 = 8;
 
 const ADDRESS_LENGTH: i32 = 25;
 const MAX_FEE_BPS: u32 = 500;
@@ -99,6 +101,8 @@ export class Shop {
   campaigns: Storage.Map<Uint8Array, shop.campaign>;
   promoClaimed: Storage.Map<Uint8Array, shop.uint64>;
   singleUse: Storage.Map<Uint8Array, shop.uint32>;
+  // (campaign, wallet) pairs that were claimed: one claim per wallet per campaign.
+  campaignClaimed: Storage.Map<Uint8Array, shop.boole>;
   lock: Storage.Obj<shop.boole>;
 
   constructor() {
@@ -176,6 +180,14 @@ export class Shop {
       () => new shop.uint32(0)
     );
 
+    this.campaignClaimed = new Storage.Map(
+      this.contractId,
+      CAMPAIGN_CLAIMED_SPACE_ID,
+      shop.boole.decode,
+      shop.boole.encode,
+      () => new shop.boole(false)
+    );
+
     this.lock = new Storage.Obj(
       this.contractId,
       LOCK_SPACE_ID,
@@ -226,6 +238,13 @@ export class Shop {
   get_promo_claimed(args: shop.get_promo_claimed_arguments): shop.uint64 {
     if (args.account == null || args.account!.length != ADDRESS_LENGTH) return new shop.uint64(0);
     return this.promoClaimed.get(args.account!)!;
+  }
+
+  get_campaign_claimed(args: shop.get_campaign_claimed_arguments): shop.boole {
+    if (args.campaign_id == 0 || args.account == null || args.account!.length != ADDRESS_LENGTH) return new shop.boole(false);
+    // A claim from before per-campaign records counts too (AB-045).
+    if (this.promoClaimed.get(args.account!)!.value == args.campaign_id) return new shop.boole(true);
+    return this.campaignClaimed.get(this.codeKey(args.campaign_id, args.account!))!;
   }
 
   // 0 = never added, 1 = waiting to be claimed, 2 = already claimed.
@@ -474,8 +493,13 @@ export class Shop {
     }
     this.requireLinkSignature(signer, this.promoDigest(args.campaign_id, account), args.signature, "SHOP: promo link rejected");
 
-    const already = this.promoClaimed.get(account)!.value;
-    System.require(already == 0, "SHOP: this wallet has already claimed a promo");
+    const claimKey = this.codeKey(args.campaign_id, account);
+    // A claim made before per-campaign records existed (one claim per wallet,
+    // ever, until October 2026) lives only in promoClaimed. Record it for its
+    // campaign before anything reads or overwrites promoClaimed, so claiming a
+    // newer campaign never reopens the old one (AB-045).
+    this.carryLegacyClaim(account);
+    System.require(!this.campaignClaimed.get(claimKey)!.value, "SHOP: this wallet has already claimed this promo");
 
     const day = now / DAY_SECONDS;
     if (row.day != day) {
@@ -491,6 +515,8 @@ export class Shop {
     }
     row.budget_used = nextBudget;
     this.campaigns.put(key, row);
+    this.campaignClaimed.put(claimKey, new shop.boole(true));
+    // The newest campaign claimed (Stories only asks "ever claimed?").
     this.promoClaimed.put(account, new shop.uint64(args.campaign_id));
 
     const memo = "campaign:" + args.campaign_id.toString();
@@ -541,6 +567,14 @@ export class Shop {
     if (stories.length != 0) this.requireOutside(stories, "SHOP: Stories cannot be the Shop contract");
 
     const cfg = this.loadConfig();
+    // Ink is set once and can never be changed or cleared (AB-050). Every
+    // purchase calls Ink's mint inside the buyer's own signed transaction, so
+    // an "Ink" swapped in by the admin key would act with the buyer's
+    // signature. Moving to a new Ink needs a reviewed code upload with the
+    // Shop contract key. Treasury, founder and Stories stay changeable.
+    const oldInk = cfg.ink;
+    System.require(oldInk == null || oldInk.length == 0 || Arrays.equal(oldInk!, ink),
+      "SHOP: the Ink address is already set and can never be changed");
     cfg.treasury = treasury;
     cfg.founder = founder;
     cfg.ink = ink;
@@ -1060,6 +1094,16 @@ export class Shop {
     memory.copy(key.dataStart, id.dataStart, 8);
     memory.copy(key.dataStart + 8, hash.dataStart, hash.length);
     return key;
+  }
+
+  // promoClaimed holds the newest campaign a wallet claimed. Before October
+  // 2026 it was the only record of a claim, so copy it into campaignClaimed
+  // (once; later calls change nothing).
+  private carryLegacyClaim(account: Uint8Array): void {
+    const legacy = this.promoClaimed.get(account)!.value;
+    if (legacy == 0) return;
+    const key = this.codeKey(legacy, account);
+    if (!this.campaignClaimed.get(key)!.value) this.campaignClaimed.put(key, new shop.boole(true));
   }
 
   private requireCampaign(id: u64): shop.campaign {

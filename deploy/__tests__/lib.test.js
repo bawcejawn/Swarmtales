@@ -498,8 +498,10 @@ test("takedown: a part nobody else changed needs no choice; a changed part does 
   // The finalizer's edit keeps no version: last_edited_by shows who it was.
   who = lib.takedownStrike({ author: ADDR_A, edited_by_others: true, last_edited_by: ADDR_B }, [], "", false);
   assert.deepStrictEqual([who.needsChoice, who.changers], [true, [ADDR_B]]);
-  // Revised before edited_by_others existed: version_count still counts.
-  assert.strictEqual(lib.takedownStrike({ author: ADDR_A, version_count: 2 }, [], "", false).needsChoice, true);
+  // A paid change counts; the writer's own edits (also versions now, AB-033) do not.
+  assert.strictEqual(lib.takedownStrike({ author: ADDR_A, paid_changes: 1 }, [], "", false).needsChoice, true);
+  assert.strictEqual(lib.takedownStrike({ author: ADDR_A, version_count: 3 },
+    [{ version: 1, kind: 1, by: ADDR_A }, { version: 2, kind: 4, by: ADDR_A }, { version: 3, kind: 4, by: ADDR_A }], "", false).needsChoice, false);
   // Once the admin chooses, it may go ahead; both choices at once are refused.
   assert.strictEqual(lib.takedownStrike({ author: ADDR_A, edited_by_others: true }, [], ADDR_B, false).needsChoice, false);
   assert.strictEqual(lib.takedownStrike({ author: ADDR_A, edited_by_others: true }, [], "", true).needsChoice, false);
@@ -509,7 +511,8 @@ test("takedown: a part nobody else changed needs no choice; a changed part does 
   assert.strictEqual(lines.length, 3);
   assert.match(lines[0], /^ {2}v1 original by 1Dde.* at 2023-11-14T22:13:20Z: "original"$/);
   assert.match(lines[2], /v3 changed by 1NRN.*"planted!"$/);
-  assert.match(lib.versionHistory([{ version: 2, kind: 2, by: ADDR_B, text: "x".repeat(200), at: "0" }])[0], /at \?: "x{160}…"$/);
+  // Versions are printed in full (AB-033), never cut at 160 characters.
+  assert.match(lib.versionHistory([{ version: 2, kind: 2, by: ADDR_B, text: "x".repeat(200), at: "0" }])[0], /at \?: "x{200}"$/);
 });
 
 test("takedown --no-strike reaches the operation through the built ABI", async () => {
@@ -522,4 +525,35 @@ test("takedown --no-strike reaches the operation through the built ABI", async (
     const op = await c.encodeOperation({ name: "takedown_segment", args: { story_id: "1", seq: "2", reason: 1, note: "n", strike: "", no_strike: noStrike } });
     assert.strictEqual(!!(await c.decodeOperation(op)).args.no_strike, noStrike);
   }
+});
+
+test("takedown: every wallet the contract recorded is a candidate, citation-only ones too (AB-048, AB-052)", () => {
+  const ADDR_C = "1NRNShd6oHh1JCxfbnWj47PrgqvqeyK7w1";
+  // Only a citation by ADDR_B: no version, last_edited_by is still the writer.
+  let who = lib.takedownStrike({ author: ADDR_A, edited_by_others: true, last_edited_by: ADDR_A }, [], "", false, [ADDR_B]);
+  assert.deepStrictEqual([who.needsChoice, who.changers, who.unseen], [true, [ADDR_B], false]);
+  assert.ok(who.candidates.includes(ADDR_B));
+  // An older contract can't list them: the admin is told someone it can't name exists.
+  who = lib.takedownStrike({ author: ADDR_A, edited_by_others: true, last_edited_by: ADDR_A }, [], "", false);
+  assert.deepStrictEqual([who.unseen, who.candidates[who.candidates.length - 1]], [true, lib.UNSEEN_CHANGER]);
+  // A part revised before edited_by_others existed: the versions show the change.
+  who = lib.takedownStrike({ author: ADDR_A, version_count: 2 },
+    [{ version: 1, kind: 1, by: ADDR_A }, { version: 2, kind: 2, by: ADDR_C }], "", false);
+  assert.deepStrictEqual([who.changed, who.needsChoice, who.changers], [true, true, [ADDR_C]]);
+});
+
+test("wire: set-once addresses refuse a different value, accept the same or an empty one (AB-050)", () => {
+  assert.doesNotThrow(() => lib.requireSetOnce("Shop's Ink address", "", ADDR_A));
+  assert.doesNotThrow(() => lib.requireSetOnce("Shop's Ink address", ADDR_A, ADDR_A));
+  assert.throws(() => lib.requireSetOnce("Shop's Ink address", ADDR_A, ADDR_B), /can never be changed/);
+});
+
+test("legacy-parts: notes old parts the audit-2 upgrade reads differently (AB-052, AB-053)", () => {
+  const ADDR_C = "1NRNShd6oHh1JCxfbnWj47PrgqvqeyK7w1";
+  const old = [{ version: 1, kind: 1, by: ADDR_A }, { version: 2, kind: 2, by: ADDR_C }];
+  assert.strictEqual(lib.legacyPartNotes(3, { author: ADDR_A, version_count: 2 }, old).length, 1);
+  assert.strictEqual(lib.legacyPartNotes(3, { author: ADDR_A, version_count: 2, edited_by_others: true }, old).length, 0);
+  assert.match(lib.legacyPartNotes(4, { author: ADDR_A, hidden: true }, [])[0], /part 4: hidden/);
+  assert.strictEqual(lib.legacyPartNotes(4, { author: ADDR_A, hidden: true, hidden_by_reports: true }, []).length, 0);
+  assert.deepStrictEqual(lib.legacyPartNotes(5, { author: ADDR_A }, [{ version: 2, kind: 4, by: ADDR_A }]), []);
 });

@@ -33,3 +33,17 @@ test("AB-009: on mainnet, wire-stories needs typed payout addresses", () => {
   const onChain = { treasury: "1DdeLhBvZdMJtBUNZBEobkDPJ2jAu9BFCz", founder: "1C72FDL8NV3MHG7urVgXyvLBjMoC2WPJc6", ink: "1DdeLhBvZdMJtBUNZBEobkDPJ2jAu9BFCz" };
   assert.throws(() => lib.shopAddressesForStories(onChain, { ink: onChain.ink, stories: "1C72FDL8NV3MHG7urVgXyvLBjMoC2WPJc6", mainnet: true }), /--treasury/);
 });
+
+// AB-041: the lost-admin runbook (KEY_CUSTODY.md section 6) needs a code
+// re-upload on mainnet. upload may replace existing code only with --upgrade,
+// and on mainnet also with a second explicit flag; a new address needs neither.
+test("AB-041: replacing existing code needs --upgrade, and on mainnet a second explicit flag", () => {
+  const A = "1DdeLhBvZdMJtBUNZBEobkDPJ2jAu9BFCz";
+  assert.strictEqual(lib.checkUpgrade(false, {}, true, A), false);
+  assert.throws(() => lib.checkUpgrade(true, {}, false, A), /--upgrade/);
+  assert.strictEqual(lib.checkUpgrade(true, { upgrade: true }, false, A), true);
+  assert.throws(() => lib.checkUpgrade(true, {}, true, A), /--upgrade/);
+  assert.throws(() => lib.checkUpgrade(true, { upgrade: true }, true, A), /i-understand-this-replaces-mainnet-code/);
+  assert.throws(() => lib.checkUpgrade(true, { upgrade: true, "i-understand-this-replaces-mainnet-code": "yes" }, true, A), /i-understand-this-replaces-mainnet-code/);
+  assert.strictEqual(lib.checkUpgrade(true, { upgrade: true, "i-understand-this-replaces-mainnet-code": true }, true, A), true);
+});

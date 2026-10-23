@@ -237,8 +237,14 @@ function addEditor(id: u64, who: Uint8Array): void {
 
 function edit(as: Uint8Array, id: u64, seq: u64, text: string): void {
   authorize(as);
-  allowCalls(1);
-  new Stories().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length));
+  // Growing the part reads the Writer membership and burns the added letters;
+  // shrinking it mints a refund.
+  const current = segment(id, seq).current_cost;
+  if (<u64>text.length > current) results([writer(), okCall()]);
+  else allowCalls(1);
+  // max_ink: the growth price the page would show (AB-049).
+  const growth: u64 = <u64>text.length > current ? <u64>text.length - current : 0;
+  new Stories().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length, growth));
   checkpoint();
 }
 
@@ -295,7 +301,7 @@ function failContribute(): void {
 function failEdit(): void {
   authorize(fWho);
   results(fResults);
-  new Stories().edit_segment(new stories.edit_segment_arguments(fWho, fId, fSeq, fText, fExpected));
+  new Stories().edit_segment(new stories.edit_segment_arguments(fWho, fId, fSeq, fText, fExpected, u64.MAX_VALUE)); // any price: these edits fail for other reasons
 }
 
 function failLimits(): void {
@@ -522,8 +528,8 @@ describe("Stories: edits, removals and refunds", () => {
     openShort();                       // seq 1, Alice, 17
     writeAsWriter(BOB, 1, chars(100)); // seq 2, Bob, 100
   });
-  it("refuses a light edit that would overflow the story, then locks when the edit fills it", () => {
-    // 117 used. Fill to 9,990 so Bob's 100-character segment (allowance 20) can grow by 10, not 11.
+  it("refuses an edit that would overflow the story, then locks when the edit fills it", () => {
+    // 117 used. Fill to 9,990 so Bob's 100-character segment can grow by 10, not 11.
     writeAsOpener(1, chars(2000));
     writeAsOpener(1, chars(2000));
     writeAsOpener(1, chars(2000));
@@ -540,8 +546,8 @@ describe("Stories: edits, removals and refunds", () => {
     expect(st.status).toBe(stories.story_status.STATUS_LOCKED);
     expect(st.locked_at).toBe(START);
     expect(segment(1, 2).current_cost).toBe(110);
-    // Growth inside the allowance does not charge more Ink, so nothing is minted.
-    expect(segment(1, 2).charged).toBe(100);
+    // Bob pays the normal rate for the 10 added letters; nothing is minted.
+    expect(segment(1, 2).charged).toBe(110);
     expect(st.total_refunded).toBe(0);
   });
 

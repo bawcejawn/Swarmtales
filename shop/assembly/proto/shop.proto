@@ -177,12 +177,20 @@ message get_campaign_arguments {
   uint64 campaign_id = 1 [jstype = JS_STRING];
 }
 
-// @description Campaign id this wallet has claimed, or 0 if it never has.
-// Stories will read this for the trial-writing check.
+// @description The newest campaign id this wallet has claimed, or 0 if it never claimed one.
+// Stories reads this for the trial-writing check.
 // @read-only true
 // @result uint64
 message get_promo_claimed_arguments {
   bytes account = 1 [(koinos.btype) = ADDRESS];
+}
+
+// @description Whether this wallet already claimed this campaign (each wallet may claim each campaign once).
+// @read-only true
+// @result boole
+message get_campaign_claimed_arguments {
+  uint64 campaign_id = 1 [jstype = JS_STRING];
+  bytes account = 2 [(koinos.btype) = ADDRESS];
 }
 
 // @description Single-use link key status: 0 unknown, 1 waiting, 2 already claimed
@@ -298,7 +306,7 @@ message add_single_use_signers_arguments {
   repeated bytes signers = 2 [(koinos.btype) = ADDRESS];
 }
 
-// @description Claim promo Ink with a signed link. One claim per wallet, ever.
+// @description Claim promo Ink with a signed link. Each wallet may claim each campaign once.
 // signature = the link key's signature over
 //   sha256("swarmtales/promo/v1" || shop address || campaign id (8 bytes, big-endian) || account)
 // signer = the link key's address (needed for single-use campaigns, ignored otherwise).

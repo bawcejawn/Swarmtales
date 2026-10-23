@@ -25,21 +25,33 @@
  *   node deploy/deploy.js status   --ink <addr> --shop <addr> --admin <addr> [--user <addr>] [--stories <addr>] [--story <id>]
  *   node deploy/deploy.js upload   ink|shop|stories --expect <contract wallet address> [--expect-sha256 <hex>] [--upgrade]
  *       (--expect-sha256: required on mainnet; the upload stops unless the wasm matches it)
- *       (--upgrade, testnet only: replace the code of a contract that is already there; its stored data is kept)
+ *       (--upgrade: replace the code of a contract that is already there; its stored data is kept. On mainnet
+ *        also add --i-understand-this-replaces-mainnet-code, and follow docs/KEY_CUSTODY.md section 6)
  *   node deploy/deploy.js set-admin ink|shop|stories --contract <addr> --admin <addr>
  *       [--from <current admin>]
  *       (step 1: PROPOSES the new admin, signed by the current admin: the contract wallet the
  *        first time, or --from after that. Nothing moves yet)
  *   node deploy/deploy.js accept-admin ink|shop|stories --contract <addr> --admin <addr>
  *       (step 2: the proposed admin signs to take over, so a mistyped address can never become admin)
- *   node deploy/deploy.js wire     --admin <addr> --ink <addr> --shop <addr> --treasury <addr> --founder <addr> [--replace-shop <old addr>]
- *       (--replace-shop retires an older Shop: it loses its Ink mint rights in the same transaction.
- *        Memberships live in the Shop, so on a new Shop everyone starts without one)
+ *   node deploy/deploy.js pause|unpause ink|shop|stories --contract <addr> --admin <addr>
+ *       (the admin stops or restarts the contract's writes; step one when a contract key leaks, docs/KEY_CUSTODY.md section 6)
+ *   node deploy/deploy.js wire     --admin <addr> --ink <addr> --shop <addr> --treasury <addr> --founder <addr>
+ *       (Shop's Ink address and Stories' Shop address are set once and never change (AB-050). Moving to a
+ *        new Shop needs a reviewed code upload of Stories with its contract key, not this command)
  *   node deploy/deploy.js test-asset --admin <addr> --shop <addr> [--token <addr>] [--symbol tKOIN] [--decimals 8]
  *   node deploy/deploy.js test-buy --user <addr> --shop <addr> [--tier writer|reader] [--token <addr>]
  *   node deploy/deploy.js test-promo --admin <addr> --shop <addr>
  *   node deploy/deploy.js claim-promo --account <addr> --shop <addr> --campaign <id> [--sign-for <addr>]
  *       (testnet only. Asks for the promo link key, the part after k=, at a hidden prompt)
+ *
+ * Promos (testnet and mainnet; on mainnet add --network mainnet --i-understand-this-is-mainnet):
+ *   node deploy/deploy.js promo-new --admin <addr> --shop <addr> --budget <total Ink> --end <day> [--start <day|now>] [--amount 100] [--daily-cap <Ink>] [--site <https url>]
+ *       (creates a shared campaign with a fresh link key: each wallet may claim it once. Days are UTC, like 2026-12-31
+ *        or 2026-12-31T18:00. Prints the share link ONCE, only to a terminal: it holds the campaign's secret key)
+ *   node deploy/deploy.js promo-on  --admin <addr> --shop <addr>      (the global switch: every enabled campaign)
+ *   node deploy/deploy.js promo-off --admin <addr> --shop <addr>      (stops every campaign at once)
+ *   node deploy/deploy.js promo-end <campaign id> --admin <addr> --shop <addr>   (turns one campaign off)
+ *
  *   node deploy/deploy.js user-checks --user <addr> --ink <addr> --shop <addr> --admin <addr>
  *       (dry runs only: each call must be REJECTED; nothing is sent for real, though each dry run is signed)
  *
@@ -78,12 +90,19 @@
  *   node deploy/deploy.js set-moderation --admin <addr> --stories <addr> --moderator <addr|off> [--threshold 3] [--strikes 5]
  *       (--strikes: takedowns before a wallet is blocked, 1 to 20 (default 5). Change it at any time)
  *   node deploy/deploy.js hide --actor <admin or moderator addr> --stories <addr> --story <id> --seq <n> --reason copyright|duplicate|spam|illegal|other [--note "..."] [--unhide]
+ *       (with the admin key, hiding a part that is already hidden makes it an admin hide in one transaction:
+ *        the opener can't restore it and removing it refunds nothing. Only the admin unhides an admin hide)
  *   node deploy/deploy.js takedown --admin <addr> --stories <addr> --story <id> --seq <n> --reason copyright|duplicate|spam|illegal|other --note "notice reference" [--strike <addr> | --no-strike]
  *       (permanent: clears the part's text and its kept versions from contract storage. No Ink refund. It first
- *        prints the writer, who else changed the part and every kept version. A part nobody else changed is one
- *        strike for its writer. Once someone else changed it, it stops until you choose: --strike the writer or
- *        a wallet that changed it, or --no-strike)
+ *        prints the writer, who last edited it, who else changed it, the live text and every kept version in full.
+ *        A part nobody else changed is one strike for its writer. Once someone else changed it, it stops until you
+ *        choose: --strike the writer or a wallet that changed it, or --no-strike)
  *   node deploy/deploy.js block --admin <addr> --stories <addr> --account <addr> [--note "..."] [--unblock]
+ *   node deploy/deploy.js clear-summary --actor <admin or moderator addr> --stories <addr> --story <id>
+ *       (empties a story's "story so far", for copied or abusive text. Works while Stories is paused)
+ *   node deploy/deploy.js legacy-parts --stories <addr> --story <id>
+ *       (read only: before the audit-2 upgrade, lists parts revised by someone else before edited_by_others
+ *        existed, and hidden parts not hidden by reports. See docs/TESTNET_UPGRADE_AUDIT2.md)
  * Common flags: --network testnet|mainnet  --rpc <https url>
  */
 "use strict";
@@ -346,15 +365,22 @@ async function cmdUpload(args) {
   const sha = lib.checkWasmHash(wasm, args.flags["expect-sha256"], net.mainnet);
   console.log("wasm sha256: " + sha + (args.flags["expect-sha256"] === undefined ? "" : "  (matches --expect-sha256)"));
 
-  const meta = await provider.call("contract_meta_store.get_contract_meta", { contract_id: expected }).catch(() => ({}));
-  if (meta && meta.meta) {
-    // Testnet only: --upgrade replaces the code and keeps the contract's stored data
-    // (stories, memberships, settings). Mainnet contracts are never overwritten by this script.
-    if (args.flags.upgrade !== true || net.mainnet) {
-      lib.fail(expected + " already has a contract on this network. This script does not overwrite contracts" +
-        (net.mainnet ? "." : " unless you add --upgrade (testnet only: new code, same address, stored data kept)."));
+  // On mainnet a failed lookup stops: treating it as "no contract here" would
+  // skip the upgrade guard below and replace live code without its flags (AB-054).
+  let meta = {};
+  try {
+    meta = (await provider.call("contract_meta_store.get_contract_meta", { contract_id: expected })) || {};
+  } catch (e) {
+    if (net.mainnet) {
+      lib.fail("Could not check whether a contract is already at " + expected + " (" + (e && e.message ? e.message : String(e)) + ").\n" +
+        "Nothing was sent. Try again, or with another listed node (--rpc).");
     }
-    console.log("UPGRADE (testnet): the code at " + expected + " will be replaced. Its stored data is kept.");
+  }
+  // --upgrade replaces the code and keeps the contract's stored data (stories,
+  // memberships, settings). On mainnet it also needs a second explicit flag; the
+  // sha256 check above already ran (AB-041, docs/KEY_CUSTODY.md section 6).
+  if (lib.checkUpgrade(!!(meta && meta.meta), args.flags, net.mainnet, expected)) {
+    console.log("UPGRADE (" + net.name + "): the code at " + expected + " will be replaced by the build above. Its stored data is kept.");
   }
 
   const signer = await getSigner(provider, expected, "the " + target + " contract wallet");
@@ -395,6 +421,25 @@ async function cmdSetAdmin(args) {
   console.log("Send back: the transaction id (" + txId + ").");
 }
 
+/**
+ * pause | unpause ink|shop|stories: the contract's admin stops (or restarts)
+ * its writes, the first step of KEY_CUSTODY.md section 6 (AB-054).
+ */
+async function cmdPause(args, paused) {
+  const target = args.target;
+  contractFiles(target);
+  const contractAddr = lib.requireAddress(args.flags.contract, "contract");
+  const admin = lib.requireAddress(args.flags.admin, "admin");
+  const { net, provider } = await connect(args.flags);
+  const signer = await getSigner(provider, admin, "the " + target + " admin wallet");
+  const { Contract } = koilib();
+  const contract = new Contract({ id: contractAddr, abi: loadAbiJson(target), provider });
+  const op = await contract.encodeOperation({ name: "set_paused", args: { paused } });
+  const txId = await dryRunThenSend(signer, provider, net, [op],
+    target + ".set_paused(" + paused + "): " + (paused ? "PAUSE " : "UNPAUSE ") + target + " at " + contractAddr);
+  console.log("Send back: the transaction id (" + txId + "). Check it with status.");
+}
+
 /** Step 2 of the admin handover: the proposed admin signs to take over. */
 async function cmdAcceptAdmin(args) {
   const target = args.target;
@@ -419,29 +464,35 @@ async function cmdWire(args) {
   const founder = lib.requireAddress(f.founder, "founder");
   if (ink === shop) lib.fail("Ink and Shop must be different addresses.");
   if (treasury === shop || founder === shop) lib.fail("Treasury and founder cannot be the Shop address.");
+  if (f["replace-shop"] !== undefined) lib.fail(lib.SHOP_MOVE_HELP);
   const { net, provider } = await connect(f);
+  // Shop's Ink address is set once (AB-050), and a Stories link already made is kept.
+  // A failed read stops here: taken as "nothing set", it would skip the check and
+  // send an empty Stories address over the one Shop has (AB-064).
+  let shopCfg;
+  try {
+    shopCfg = await readOnly(provider, "shop", shop, "get_config");
+  } catch (e) {
+    lib.fail("Could not read Shop's settings at " + shop + " (" + (e && e.message ? e.message : String(e)) + ").\n" +
+      "Nothing was sent. Try again, or with another listed node (--rpc).");
+  }
+  lib.requireSetOnce("Shop's Ink address", shopCfg && shopCfg.ink, ink);
+  const stories = (shopCfg && shopCfg.stories) || "";
   const signer = await getSigner(provider, admin, "the admin wallet");
   const { Contract } = koilib();
   const inkC = new Contract({ id: ink, abi: loadAbiJson("ink"), provider });
   const shopC = new Contract({ id: shop, abi: loadAbiJson("shop"), provider });
   const ops = [
     await inkC.encodeOperation({ name: "set_minter", args: { account: shop, reasons_mask: lib.SHOP_MINT_MASK } }),
-    await shopC.encodeOperation({ name: "set_addresses", args: { treasury, founder, ink, stories: "" } }),
+    await shopC.encodeOperation({ name: "set_addresses", args: { treasury, founder, ink, stories } }),
     await shopC.encodeOperation({ name: "set_ink_amounts", args: lib.DEFAULT_INK_AMOUNTS }),
   ];
-  let retiring = "";
-  if (f["replace-shop"] !== undefined) {
-    retiring = lib.requireAddress(f["replace-shop"], "replace-shop");
-    if (retiring === shop) lib.fail("--replace-shop is the OLD Shop address, not the new one.");
-    console.log("Retiring the old Shop " + retiring + ": its Ink mint rights are removed.");
-    ops.push(await inkC.encodeOperation({ name: "set_minter", args: { account: retiring, reasons_mask: 0 } }));
-  }
   const txId = await dryRunThenSend(
     signer,
     provider,
     net,
     ops,
-    "ink.set_minter(Shop, mask 30) + shop.set_addresses + shop.set_ink_amounts" + (retiring ? " + ink.set_minter(old Shop, 0)" : "") + ", in one transaction"
+    "ink.set_minter(Shop, mask 30) + shop.set_addresses + shop.set_ink_amounts, in one transaction"
   );
   console.log("Send back: the transaction id (" + txId + ").");
 }
@@ -543,6 +594,88 @@ async function cmdTestPromo(args) {
   console.log("Share link (replace the host with your site): https://YOUR-SITE/#/promo/" + nextId + "?k=" + linkKey.getPrivateKey("wif"));
   console.log("To claim from the CLI: node deploy/deploy.js claim-promo --account <addr> --shop " + shop + " --campaign " + nextId);
   console.log("  (it asks for the link key at a hidden prompt: paste the part after k=)");
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
+// ---------- promo admin (testnet and mainnet) ----------
+
+/**
+ * promo-new: one shared campaign with a fresh link key. Only the key's PUBLIC
+ * address goes on chain. The share link (which holds the private key) is
+ * printed once, to a terminal only, after the campaign is created; it never
+ * appears in the dry-run summary, an error or a log file.
+ */
+async function cmdPromoNew(args) {
+  const f = args.flags;
+  const admin = lib.requireAddress(f.admin, "admin");
+  const shop = lib.requireAddress(f.shop, "shop");
+  const plan = lib.planPromoCampaign(f, Math.floor(Date.now() / 1000));
+  const site = f.site === undefined ? lib.DEFAULT_SITE : String(f.site);
+  lib.promoShareLink(site, "1", "check"); // stop on a bad --site before anything is signed
+  if (!process.stdout.isTTY) {
+    lib.fail("promo-new prints a share link that contains the campaign's secret link key, so it only runs in a terminal.\n" +
+      "Run it again without redirecting or piping its output (no > file, no | tee).");
+  }
+  const { net, provider } = await connect(f);
+  const signer = await getSigner(provider, admin, "the admin wallet");
+  const { Contract, Signer } = koilib();
+  const shopC = new Contract({ id: shop, abi: loadAbiJson("shop"), provider });
+  const { result: cfg } = await shopC.functions.get_config();
+  const nextId = cfg && cfg.next_campaign_id && cfg.next_campaign_id !== "0" ? String(cfg.next_campaign_id) : "1";
+  const linkKey = new Signer({ privateKey: lib.newLinkKeyHex() });
+  const op = await shopC.encodeOperation({
+    name: "create_campaign",
+    args: { ...plan, link_signer: linkKey.getAddress() },
+  });
+  const day = (sec) => new Date(Number(sec) * 1000).toISOString().replace(".000Z", "Z");
+  const txId = await dryRunThenSend(signer, provider, net, [op],
+    "create promo campaign " + nextId + ": " + plan.amount + " Ink per wallet (each wallet may claim it once), budget " +
+    plan.budget_total + " Ink" + (plan.daily_cap !== "0" ? ", at most " + plan.daily_cap + " Ink a day" : "") +
+    ", from " + day(plan.starts_at) + " to " + day(plan.ends_at));
+  // Make sure the id printed in the link is the campaign this transaction made.
+  const { result: made } = await shopC.functions.get_campaign({ campaign_id: nextId });
+  if (!made || made.link_signer !== linkKey.getAddress()) {
+    lib.fail("The campaign was created (transaction " + txId + "), but campaign " + nextId + " is not the one it made\n" +
+      "(another campaign was created at the same time). Turn it off with promo-end and run promo-new again.");
+  }
+  console.log("");
+  console.log("Campaign id: " + nextId);
+  console.log("Share link (shown once; it holds the campaign's secret key. Copy it now and do not paste it into a log or issue):");
+  console.log("  " + lib.promoShareLink(site, nextId, linkKey.getPrivateKey("wif")));
+  if (!(cfg && cfg.promo_enabled)) console.log("Promos are switched off for everyone. Turn them on with promo-on when you are ready.");
+  console.log("Send back: the transaction id (" + txId + ") and the campaign id. Never the link.");
+}
+
+/** promo-on / promo-off: the global switch for every campaign. */
+async function cmdPromoSwitch(args, enabled) {
+  const f = args.flags;
+  const admin = lib.requireAddress(f.admin, "admin");
+  const shop = lib.requireAddress(f.shop, "shop");
+  const { net, provider } = await connect(f);
+  const signer = await getSigner(provider, admin, "the admin wallet");
+  const { Contract } = koilib();
+  const shopC = new Contract({ id: shop, abi: loadAbiJson("shop"), provider });
+  const op = await shopC.encodeOperation({ name: "set_promo_enabled", args: { enabled } });
+  const txId = await dryRunThenSend(signer, provider, net, [op],
+    enabled ? "turn promos ON (every enabled campaign can be claimed within its dates)" : "turn promos OFF for every campaign");
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
+/** promo-end <id>: switch one campaign off for good (it can be switched on again with set_campaign_enabled). */
+async function cmdPromoEnd(args) {
+  const f = args.flags;
+  const id = lib.requireCampaignId(args.target !== undefined ? args.target : f.campaign);
+  const admin = lib.requireAddress(f.admin, "admin");
+  const shop = lib.requireAddress(f.shop, "shop");
+  const { net, provider } = await connect(f);
+  const { Contract } = koilib();
+  const shopC = new Contract({ id: shop, abi: loadAbiJson("shop"), provider });
+  const { result: row } = await shopC.functions.get_campaign({ campaign_id: id });
+  if (!row || (!row.link_signer && !row.amount)) lib.fail("Shop " + shop + " has no campaign " + id + ".");
+  const signer = await getSigner(provider, admin, "the admin wallet");
+  const op = await shopC.encodeOperation({ name: "set_campaign_enabled", args: { campaign_id: id, enabled: false } });
+  const txId = await dryRunThenSend(signer, provider, net, [op],
+    "turn OFF promo campaign " + id + " (" + (row.amount || "?") + " Ink per wallet, " + (row.budget_used || "0") + " of " + (row.budget_total || "?") + " Ink given)");
   console.log("Send back: the transaction id (" + txId + ").");
 }
 
@@ -693,6 +826,9 @@ async function cmdWireStories(args) {
   if (storiesCfg.admin !== admin) {
     lib.fail("Stories admin is " + (storiesCfg.admin || "(not readable)") + ", not " + admin + ". Run set-admin stories first.");
   }
+  // Stories' Ink and Shop addresses are set once (AB-037, AB-050).
+  lib.requireSetOnce("Stories' Ink address", storiesCfg.ink, ink);
+  lib.requireSetOnce("Stories' Shop address", storiesCfg.shop, shop);
   const haveCategories = storiesCfg.next_category_id && storiesCfg.next_category_id !== 0 && storiesCfg.next_category_id !== 1;
 
   console.log("");
@@ -1057,7 +1193,7 @@ async function cmdNewModeratorKey() {
   const key = new Signer({ privateKey: utils.toHexString(crypto.randomBytes(32)) });
   console.log("");
   console.log("A new key for the automated copy checker (the moderator). It is shown ONCE and saved nowhere.");
-  console.log("It can only hide and unhide story parts. It can't remove text, move Ink, or change settings.");
+  console.log("It can only hide story parts and unhide ones the admin didn't hide. It can't remove text, move Ink, or change settings.");
   console.log("");
   console.log("  Moderator address (safe to share): " + key.getAddress());
   console.log("  Private key (put it in the GitHub secret MODERATOR_WIF, then clear this window):");
@@ -1097,15 +1233,38 @@ async function cmdHide(args) {
   const note = f.note === undefined || f.note === true ? "" : String(f.note);
   if (note.length > 200) lib.fail("--note must be at most 200 characters.");
   const { net, provider } = await connect(f);
-  const signer = await getSigner(provider, actor, "the admin or moderator wallet");
   const { Contract } = koilib();
   const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  // Hiding a part that is already hidden is the admin taking it over, in one
+  // transaction (AB-062); only the admin unhides an admin hide (AB-061).
+  const { result: seg } = await storiesC.functions.get_segment({ story_id: storyId, seq });
+  const { result: cfg } = await storiesC.functions.get_config({});
+  const what = lib.hidePlan(seg, hidden, actor, (cfg && cfg.admin) || "");
+  const signer = await getSigner(provider, actor, "the admin or moderator wallet");
   const op = await storiesC.encodeOperation({
     name: "set_segment_hidden",
     args: { actor, story_id: storyId, seq, hidden, reason, note },
   });
   const txId = await dryRunThenSend(signer, provider, net, [op],
-    (hidden ? "HIDE" : "UNHIDE") + " story " + storyId + " part " + seq + (note ? " (" + note + ")" : ""));
+    what + " story " + storyId + " part " + seq + (note ? " (" + note + ")" : ""));
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
+/** clear-summary: the admin or moderator empties a story's "story so far" (AB-034). Works while paused. */
+async function cmdClearSummary(args) {
+  const f = args.flags;
+  const actor = lib.requireAddress(f.actor, "actor (the admin or moderator address)");
+  const stories = lib.requireAddress(f.stories, "stories");
+  const storyId = lib.requireStoryId(f.story);
+  const { net, provider } = await connect(f);
+  const { Contract } = koilib();
+  const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  const { result: st } = await storiesC.functions.get_story({ story_id: storyId });
+  if (!st || !st.opener) lib.fail("There is no story " + storyId + ".");
+  console.log("Summary now (by " + (st.summary_by || "nobody") + "): " + JSON.stringify(String(st.summary || "")));
+  const signer = await getSigner(provider, actor, "the admin or moderator wallet");
+  const op = await storiesC.encodeOperation({ name: "set_story_summary", args: { account: actor, story_id: storyId, summary: "" } });
+  const txId = await dryRunThenSend(signer, provider, net, [op], "CLEAR the summary of story " + storyId);
   console.log("Send back: the transaction id (" + txId + ").");
 }
 
@@ -1128,27 +1287,61 @@ async function cmdTakedown(args) {
   // takedown wipes the kept versions, so this is the last easy look at them.
   const { result: seg } = await storiesC.functions.get_segment({ story_id: storyId, seq });
   if (!seg || !seg.author) lib.fail("Story " + storyId + " has no part " + seq + ".");
-  const { result: kept } = await storiesC.functions.get_versions({ story_id: storyId, seq });
-  const versions = (kept && kept.values) || [];
-  const who = lib.takedownStrike(seg, versions, strike, noStrike);
+  // A few versions per read (AB-060). If the history can't be read, say so and
+  // carry on: the takedown itself never needs it, and the dry run below still
+  // checks the strike.
+  let versions = [];
+  let historyError = "";
+  try {
+    versions = await lib.readVersions(lib.versionPage(storiesC, storyId, seq), seg.version_count);
+  } catch (e) {
+    historyError = e && e.message ? e.message : String(e);
+  }
+  // Every wallet the contract recorded as a changer, citation-only ones too
+  // (AB-048). A Stories contract older than get_changers can't list them.
+  let recorded;
+  try {
+    const { result: list } = await storiesC.functions.get_changers({ story_id: storyId, seq });
+    recorded = (list && list.values) || [];
+  } catch (e) {
+    recorded = undefined;
+  }
+  const who = lib.takedownStrike(seg, versions, strike, noStrike, recorded);
   console.log("Writer:            " + who.writer);
+  console.log("Last edited by:    " + (seg.last_edited_by || who.writer) + (seg.last_edited_by && seg.last_edited_by !== who.writer ? "" : " (the writer)"));
   console.log("Changed by others: " + (who.changed ? (who.changers.join(", ") || "yes") : "no"));
+  if (who.unseen) console.log("                   " + lib.UNSEEN_CHANGER);
+  console.log("Live text:         " + JSON.stringify(String(seg.text || "")));
+  if (historyError) {
+    console.log("Versions:          could not be read (" + historyError + "). Carrying on without them; the same history is");
+    console.log("                   public on a block explorer (stories.revise_event and stories.segment_changed_event).");
+  }
   if (versions.length) {
+    // Every change to the text is a version naming who made it (AB-033), printed in full.
     console.log("Versions, oldest first:");
-    for (const line of lib.versionHistory(versions)) console.log(line);
+    for (const line of lib.versionHistory(versions, seg)) console.log(line);
   }
   if (who.needsChoice) {
     lib.fail(
       "Someone other than the writer changed this part, so the contract will not pick who gets the strike.\n" +
       "Nothing was sent. Compare the versions above: strike the wallet whose change made the text infringing.\n" +
       "A cut can change the meaning as much as new words, and a typo fix alone is no reason for a strike.\n" +
-      "The same history is public on a block explorer: each stories.revise_event for this part (\"by\" is who\n" +
-      "changed it), and for a change in the final edit, this part's item in the finalizer's submit_final_batch.\n" +
-      "Then run this command again with one of:\n" +
-      [who.writer, ...who.changers].map((a) => "  --strike " + a).join("\n") + "\n" +
+      "The same history is public on a block explorer: each stories.revise_event and stories.segment_changed_event\n" +
+      "for this part (\"by\" is who changed it).\n" +
+      "Then run this command again with one of (whoever last edited the text comes first, even the writer):\n" +
+      who.candidates.filter((a) => lib.isAddress(a)).map((a) => "  --strike " + a + (a === who.writer ? "   (the writer)" : "")).join("\n") + "\n" +
+      (who.unseen ? "  --strike <the wallet you found>   (" + lib.UNSEEN_CHANGER + ")\n" : "") +
       "  --no-strike   (take the part down without striking anyone)");
   }
-  if (strike && strike !== who.writer && !who.changers.includes(strike)) {
+  // A part from before the upgrade that someone else revised shows it only in
+  // its versions, so without them the "no" above may be wrong (AB-069).
+  if (historyError && !strike && !noStrike && Number(seg.version_count || 0) > 0) {
+    lib.fail(
+      "The part's history could not be read, so this tool can't tell whether someone other than the writer changed it.\n" +
+      "Nothing was sent. Check its history on a block explorer (stories.revise_event and stories.segment_changed_event\n" +
+      "for this part), then run this command again with --strike <wallet> or --no-strike.");
+  }
+  if (strike && !who.candidates.includes(strike)) {
     console.log("--strike " + strike + " is not the writer or a wallet seen above. The contract accepts it only if that wallet changed this part; the dry run checks this before anything is sent.");
   }
 
@@ -1161,6 +1354,42 @@ async function cmdTakedown(args) {
     "PERMANENT TAKEDOWN of story " + storyId + " part " + seq + ": its text is cleared, its versions are wiped and no Ink is refunded" +
     (note ? " (" + note + ")" : "") + "; " + (noStrike ? "no strike" : "strike for " + (strike || who.writer)));
   console.log("Send back: the transaction id (" + txId + ").");
+}
+
+/**
+ * legacy-parts: read only, nothing is signed. Before the audit-2 upgrade,
+ * lists the parts of one story that the new code reads differently (AB-052,
+ * AB-053): ones someone else revised before edited_by_others existed, and
+ * hidden ones not hidden by reports (an admin hide must be redone after it).
+ */
+async function cmdLegacyParts(args) {
+  const f = args.flags;
+  const stories = lib.requireAddress(f.stories, "stories");
+  const storyId = lib.requireStoryId(f.story);
+  const { provider } = await connect(f);
+  const { Contract } = koilib();
+  const storiesC = new Contract({ id: stories, abi: loadAbiJson("stories"), provider });
+  const { result: st } = await storiesC.functions.get_story({ story_id: storyId });
+  if (!st || !st.opener) lib.fail("There is no story " + storyId + ".");
+  const count = Number(st.segment_count || 0);
+  let found = 0;
+  for (let seq = 1; seq <= count; seq++) {
+    const { result: seg } = await storiesC.functions.get_segment({ story_id: storyId, seq: String(seq) });
+    // One unreadable history (too long for the node, say) never stops the list (AB-070).
+    let versions = [];
+    try {
+      if (seg) versions = await lib.readVersions(lib.versionPage(storiesC, storyId, seq), seg.version_count);
+    } catch (e) {
+      console.log("part " + seq + ": its versions could not be read (" + (e && e.message ? e.message : String(e)) + "). " +
+        "Check them on a block explorer (stories.revise_event for this part).");
+      found++;
+    }
+    for (const line of lib.legacyPartNotes(seq, seg, versions)) {
+      console.log(line);
+      found++;
+    }
+  }
+  console.log(found ? "Send back: the lines above." : "Story " + storyId + ": nothing to note in its " + count + " parts.");
 }
 
 async function cmdStatus(args) {
@@ -1236,6 +1465,10 @@ async function main() {
       return cmdSetAdmin(args);
     case "accept-admin":
       return cmdAcceptAdmin(args);
+    case "pause":
+      return cmdPause(args, true);
+    case "unpause":
+      return cmdPause(args, false);
     case "wire":
       return cmdWire(args);
     case "test-asset":
@@ -1246,6 +1479,14 @@ async function main() {
       return cmdTestPromo(args);
     case "claim-promo":
       return cmdClaimPromo(args);
+    case "promo-new":
+      return cmdPromoNew(args);
+    case "promo-on":
+      return cmdPromoSwitch(args, true);
+    case "promo-off":
+      return cmdPromoSwitch(args, false);
+    case "promo-end":
+      return cmdPromoEnd(args);
     case "user-checks":
       return cmdUserChecks(args);
     case "wire-stories":
@@ -1272,8 +1513,12 @@ async function main() {
       return cmdHide(args);
     case "takedown":
       return cmdTakedown(args);
+    case "clear-summary":
+      return cmdClearSummary(args);
     case "block":
       return cmdBlock(args);
+    case "legacy-parts":
+      return cmdLegacyParts(args);
     default: {
       const head = fs.readFileSync(__filename, "utf8").split("*/")[0];
       console.log(head.replace(/^#!.*\n/, "").replace(/^\/\*\*?|^ \* ?/gm, ""));

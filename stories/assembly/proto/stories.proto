@@ -207,6 +207,32 @@ message segment {
   // edit), even only by cutting words. A takedown then needs the admin to
   // name who gets the strike, or to choose no strike.
   bool edited_by_others = 29;
+  // Paid changes by others (revise_part). The change price doubles with each
+  // (2x, 4x, 8x...), up to 60. Free edits by the writer do not count.
+  uint32 paid_changes = 30;
+  // In a pool-paid part: Ink the writer paid themselves for letters they added
+  // later (the pool pays only for new parts). Refunds pay this back to the
+  // writer first, then the rest goes back to the pool.
+  uint64 own_paid = 31 [jstype = JS_STRING];
+  // Who hid the part: 0 not hidden (or hidden before this field existed),
+  // 1 writer reports, 2 the moderator (the copy checker), 3 the admin. The
+  // opener or an editor may restore a part hidden by reports or the checker,
+  // never one the admin hid (AB-053), and only the admin unhides an admin
+  // hide (AB-061). The admin may take over any other hide in place (AB-062).
+  uint32 hidden_by = 32;
+  // Someone other than the writer made one of its kept versions (a paid
+  // change or the final edit), so a takedown never reads the versions to
+  // find out (AB-059).
+  bool other_version = 33;
+  // Its opener or an editor restored it after the copy checker hid it: a cut
+  // or removing it gives back no Ink (AB-062).
+  bool refund_forfeited = 34;
+  // Counted among its writer's live parts in the story (AB-066).
+  bool live_counted = 35;
+}
+
+message address_list {
+  repeated bytes values = 1 [(koinos.btype) = ADDRESS];
 }
 
 // One version of a part. Version 1 is the original text.
@@ -216,12 +242,17 @@ message segment_version {
   string text = 3;
   uint64 cost = 4 [jstype = JS_STRING];
   uint64 at = 5 [jstype = JS_STRING];
-  uint32 kind = 6;               // 1 original, 2 changed by someone (paid), 3 removed by someone (paid)
+  uint32 kind = 6;               // 1 original, 2 changed by someone (paid), 3 removed by someone (paid), 4 edited by its writer, 5 final edit
   bytes by = 7 [(koinos.btype) = ADDRESS];      // who made this version
+  string citation = 8;           // what the changer said their words quote (paid changes only)
+  bool ai_assisted = 9;          // the changer said their words are AI-assisted (paid changes only)
 }
 
 message version_list {
   repeated segment_version values = 1;
+  // get_versions: the version to ask for next (from = next), or 0 when there
+  // are no more. A page stops early at a size budget (AB-070).
+  uint32 next = 2;
 }
 
 // A wallet's standing under the repeat-infringer policy.
@@ -575,9 +606,12 @@ message contribute_arguments {
   string citation = 11;          // optional: what this part quotes, e.g. "Pride and Prejudice, Jane Austen" (up to 200 characters)
 }
 
-// @description Change (or, with empty text, remove) a part of an OPEN story. Price: the letters added plus
-// the letters removed (at least 10), times 2, doubling with every change to that part (2x, 4x, 8x...).
-// Removed letters' Ink goes back to whoever paid for them. The part stays its writer's; every version is kept.
+// @description Change (or, with empty text, remove) someone else's part of an OPEN story. Price: the letters
+// added plus the letters removed (at least 10), times 2, doubling with every change to that part (2x, 4x, 8x...).
+// The changer always pays, never the story's pool. A writer never changes their own part this way (edit_segment).
+// A cut refunds the writer only Ink they (or the pool) paid for the part and have not had back, never letters
+// someone else paid for; removing it refunds all of that.
+// The part stays its writer's; every version is kept, with the changer's citation and AI flag.
 // @read-only false
 // @result uint32
 message revise_part_arguments {
@@ -592,15 +626,29 @@ message revise_part_arguments {
   bool ai_assisted = 9;
 }
 
-// @description Every kept version of a part, oldest first (empty if it was never revised).
+// @description A part's kept versions, oldest first, at most 5 per call and only as many as fit about 64 KB of
+// text (always at least one), so a page stays under a node's read limit (empty if its text never changed or it
+// was taken down). Start with from = 1 and continue from the returned next until it is 0 (AB-060, AB-070).
 // @read-only true
 // @result version_list
 message get_versions_arguments {
   uint64 story_id = 1 [jstype = JS_STRING];
   uint64 seq = 2 [jstype = JS_STRING];
+  uint32 from = 3;               // first version to return (0 or 1: the original)
+  uint32 count = 4;              // how many (0 or more than 5: 5)
 }
 
-// @description The opener, an editor or anyone who has written in the story updates "the story so far".
+// @description Every wallet other than the writer that changed a part (a paid change, the final edit or a
+// citation), in the order they first did. The admin may name any of them for a takedown strike.
+// @read-only true
+// @result address_list
+message get_changers_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 seq = 2 [jstype = JS_STRING];
+}
+
+// @description The opener, an editor or a current writer of the story updates "the story so far" while it is
+// open or in its final edit. The admin or the moderator may clear it (empty summary) at any time.
 // @read-only false
 // @result empty_object
 message set_story_summary_arguments {
@@ -609,7 +657,9 @@ message set_story_summary_arguments {
   string summary = 3;            // up to 1,500 characters
 }
 
-// @description Opener or editor lightly edits a segment of an OPEN story. Shortening refunds the author.
+// @description The part's own writer edits it in an OPEN story. Rewording is free; letters beyond the part's
+// current length cost the normal Ink rate (the writer pays, never the pool). Shortening is always allowed and
+// refunds the removed Ink, but only Ink the writer (or the pool) paid for the part and has not had back.
 // @read-only false
 // @result empty_object
 message edit_segment_arguments {
@@ -618,9 +668,13 @@ message edit_segment_arguments {
   uint64 seq = 3 [jstype = JS_STRING];
   string new_text = 4;
   uint64 expected_cost = 5 [jstype = JS_STRING];
+  // The most Ink the writer agrees to pay for added letters (the price the page showed). The edit is
+  // refused if it would cost more, e.g. because someone shortened the part since (AB-049).
+  uint64 max_ink = 6 [jstype = JS_STRING];
 }
 
-// @description Opener or editor removes a segment of an OPEN story. The author is refunded.
+// @description The part's writer removes it from an OPEN story for free (the opener or an editor may remove a hidden part).
+// What the writer paid comes back to them; what the pool paid goes back to the pool.
 // @read-only false
 // @result empty_object
 message remove_segment_arguments {
@@ -833,7 +887,7 @@ message revive_arguments {
 
 // ---------- Admin ----------
 
-// @description Set the Ink and Shop contract addresses
+// @description Set the Ink and Shop contract addresses. Ink can be set once and never changed; Shop can change.
 // @read-only false
 // @result empty_object
 message set_addresses_arguments {

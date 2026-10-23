@@ -57,16 +57,32 @@ export function fingerprint(text) {
   return Array.from(out).sort((a, b) => a - b);
 }
 
+/**
+ * When one hash of an indexed part was first written: `newer` holds the hashes
+ * a later edit or change added, each with its own time; every other hash is as
+ * old as the entry's `at` (AB-076).
+ */
+export function dateOf(entry, h) {
+  return (entry.newer && entry.newer[h]) || entry.at || 0;
+}
+
+/** `at` as a function of a hash: a part's own dated hashes, or one time for all of them. */
+function datesOf(at) {
+  return typeof at === "function" ? at : () => Number(at) || 0;
+}
+
 /** An inverted index: hash -> set of part keys ("story:seq"). */
 export class Index {
   constructor() {
     this.byHash = new Map();
-    this.parts = new Map(); // key -> { author, hashes, at }
+    this.parts = new Map(); // key -> { author, hashes, at, newer?, copyOf?, skip? }
   }
 
   static fromJSON(obj) {
     const idx = new Index();
-    for (const [key, entry] of Object.entries(obj || {})) idx.add(key, entry.author, entry.hashes, entry.at);
+    for (const [key, entry] of Object.entries(obj || {})) {
+      idx.add(key, entry.author, entry.hashes, entry.at, entry.copyOf, { newer: entry.newer, skip: entry.skip });
+    }
     return idx;
   }
 
@@ -76,9 +92,23 @@ export class Index {
     return out;
   }
 
-  /** `at`: when the part was written (segment.created_at); 0 if unknown. */
-  add(key, author, hashes, at = 0) {
-    this.parts.set(key, { author, hashes, at: Number(at) || 0 });
+  /**
+   * `at`: when the text was first written (segment.created_at for a part
+   * nobody edited); 0 if unknown. `newer`: hash -> time, for the hashes a
+   * later edit or change added (AB-076). Adding a key again replaces its text.
+   * `copyOf`: the part this one was found to copy, when it is indexed anyway
+   * (its opener restored it); that part is never flagged for matching it.
+   * `skip`: kept only to remember when its words were written (a copy, or a
+   * part with a source note): never matched against.
+   */
+  add(key, author, hashes, at = 0, copyOf = undefined, { newer = undefined, skip = false } = {}) {
+    this.remove(key);
+    const entry = { author, hashes, at: Number(at) || 0 };
+    if (newer && Object.keys(newer).length) entry.newer = newer;
+    if (copyOf) entry.copyOf = copyOf;
+    if (skip) entry.skip = true;
+    this.parts.set(key, entry);
+    if (skip) return;
     for (const h of hashes) {
       let set = this.byHash.get(h);
       if (!set) this.byHash.set(h, (set = new Set()));
@@ -86,26 +116,49 @@ export class Index {
     }
   }
 
-  /**
-   * The other part that shares the most fingerprint with `hashes`, ignoring
-   * parts by `author` (a writer may reuse their own words). With `at`, only
-   * parts written earlier count (AB-005): the later of two matching parts is
-   * the copy, so the original is never flagged for a copy made after it.
-   * Parts with the same `at` do not count either (AB-024): see tieMatch.
-   * Entries saved before `at` was kept count as earlier.
-   */
-  bestMatch(hashes, author, exceptKey, at) {
-    return this.match(hashes, author, exceptKey, (entry) => !at || !entry.at || entry.at < Number(at));
+  remove(key) {
+    const old = this.parts.get(key);
+    if (!old) return;
+    for (const h of old.hashes) {
+      const set = this.byHash.get(h);
+      if (!set) continue;
+      set.delete(key);
+      if (!set.size) this.byHash.delete(h);
+    }
+    this.parts.delete(key);
   }
 
   /**
-   * The best match among parts written at the same time as this one (same
+   * The other part that shares the most fingerprint with `hashes`, ignoring
+   * parts by `author` (a writer may reuse their own words). With `at`, only
+   * words written earlier count (AB-005): the later of two matching texts is
+   * the copy, so the original is never flagged for a copy made after it. Each
+   * shared hash is dated on both sides (AB-076), so an edit elsewhere in a
+   * part never makes its older words look new. `at` is a time, or a function
+   * giving the time of each of `hashes`. Words with the same time do not
+   * count either (AB-024): see tieMatch. Words saved before `at` was kept
+   * count as earlier.
+   */
+  bestMatch(hashes, author, exceptKey, at) {
+    const mine = datesOf(at);
+    return this.match(hashes, author, exceptKey, (entry, h) => {
+      const m = mine(h);
+      const theirs = dateOf(entry, h);
+      return !m || !theirs || theirs < m;
+    });
+  }
+
+  /**
+   * The best match among words written at the same time as this part's (same
    * block or second, AB-024). Nobody can tell which came first, so such a
    * match only ever gets a source note on both parts, never a hide.
    */
   tieMatch(hashes, author, exceptKey, at) {
-    if (!at) return null;
-    return this.match(hashes, author, exceptKey, (entry) => entry.at === Number(at));
+    const mine = datesOf(at);
+    return this.match(hashes, author, exceptKey, (entry, h) => {
+      const m = mine(h);
+      return !!m && dateOf(entry, h) === m;
+    });
   }
 
   match(hashes, author, exceptKey, include) {
@@ -116,7 +169,7 @@ export class Index {
       for (const key of keys) {
         if (key === exceptKey) continue;
         const entry = this.parts.get(key);
-        if (!entry || entry.author === author || !include(entry)) continue;
+        if (!entry || entry.skip || entry.author === author || entry.copyOf === exceptKey || !include(entry, h)) continue;
         counts.set(key, (counts.get(key) || 0) + 1);
       }
     }

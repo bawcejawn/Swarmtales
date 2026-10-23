@@ -7,9 +7,12 @@ name: Copy checker
 # Settings (repository Settings > Secrets and variables > Actions):
 #   Variables:  STORIES_ADDRESS (required), RPC (optional), EXPECTED_CHAIN_ID
 #               (needed only for a node other than the Foundation testnet or api.koinos.io)
-#   Secrets:    MODERATOR_WIF (the moderator's private key; without it the
-#               checker only reports)
-#               Optional free phrase search (any or all):
+#   Environment "copy-checker" (Settings > Environments), with "Deployment
+#   branches" set to the main branch only:
+#     Secret:   MODERATOR_WIF (the moderator's private key; without it the
+#               checker only reports). Keep it ONLY here, not as a repository
+#               secret, so no other branch can read it.
+#   Secrets (repository or the environment), optional free phrase search (any or all):
 #                 GOOGLE_BOOKS_KEY  searches inside books (Google Books API, free)
 #                 TAVILY_API_KEY    web search (Tavily free plan, 1,000 a month)
 #                 BRAVE_API_KEY     web search (Brave; now needs a card on file)
@@ -39,6 +42,9 @@ concurrency:
 jobs:
   check:
     if: vars.STORIES_ADDRESS != ''
+    # MODERATOR_WIF lives in this environment, limited to the main branch, so a
+    # run dispatched on any other branch never gets the key (AB-041).
+    environment: copy-checker
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

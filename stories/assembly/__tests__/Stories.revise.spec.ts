@@ -235,7 +235,10 @@ function addEditor(id: u64, who: Uint8Array): void {
 
 function edit(as: Uint8Array, id: u64, seq: u64, text: string): void {
   authorize(as);
-  allowCalls(1);
+  // Growing the part reads the Writer membership and burns the added letters;
+  // shrinking it mints a refund.
+  if (<u64>text.length > segment(id, seq).current_cost) results([writer(), okCall()]);
+  else allowCalls(1);
   new Stories().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length));
   checkpoint();
 }
@@ -398,14 +401,14 @@ describe("Stories: changing someone else's part", () => {
     expect(same(versions[1].author, BOB)).toBe(true);
   });
 
-  it("charges for added letters, and doubles with every change to the same part, without limit", () => {
+  it("charges for added letters, and doubles with every paid change to the same part", () => {
     // Add " Cara adds this." (16 letters) at the end: 16 x 2 = 32.
     const t1 = BOB_TEXT + " Cara adds this.";
     reviseAs(CARA, 2, t1, 32);
     expect(contributorTotal(1, CARA)).toBe(16);
     // Next change to the same part: x4. Replace "Cara" with "Dana": 4 removed + 4 added = 8 -> 10 minimum, x4 = 40.
     const t2 = BOB_TEXT + " Dana adds this.";
-    fWho = BOB; fId = 1; fSeq = 2; fText = t2; fPrice = 20; fResults = [writer(), okCall(), okCall()];
+    fWho = MALLORY; fId = 1; fSeq = 2; fText = t2; fPrice = 20; fResults = [writer(), okCall(), okCall()];
     fails(failRevise, "STORIES: the change price does not match expected_ink (2x the letters added and removed, at least 10, doubling each time)");
     reviseAs(MALLORY, 2, t2, 40);
     // Third change: x8.
@@ -457,7 +460,7 @@ describe("Stories: the story so far", () => {
     checkpoint();
     expect(story(1).summary).toBe("");
     fWho = MALLORY; fSummary = "spam";
-    fails(failSummary, "STORIES: only the opener, an editor or a writer of this story may update its summary");
+    fails(failSummary, "STORIES: only the opener, an editor or a current writer of this story may update its summary");
     fWho = BOB; fSummary = "x".repeat(1501);
     fails(failSummary, "STORIES: the summary must be at most 1,500 characters");
   });
