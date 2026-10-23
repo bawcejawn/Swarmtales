@@ -633,6 +633,9 @@ describe("Stories: archive and revive", () => {
     authorize(STORIES);
     new Stories().set_paused(new stories.set_paused_arguments(false));
     checkpoint();
+    // The 90 paused days don't count as inactivity (audit M-1).
+    fails(() => { new Stories().archive_if_stale(new stories.archive_if_stale_arguments(1)); }, "STORIES: story has been active recently");
+    setTime(START + 151 * DAY);
     new Stories().archive_if_stale(new stories.archive_if_stale_arguments(1));
     checkpoint();
     expect(story(1).status).toBe(stories.story_status.STATUS_ARCHIVED);

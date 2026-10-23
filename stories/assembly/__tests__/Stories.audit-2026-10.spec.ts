@@ -106,6 +106,18 @@ function finalize(id: u64): void {
   new Stories().finalize(new stories.finalize_arguments(ALICE, id, "https://swarmtales.example/b/1", new Uint8Array(32)));
   checkpoint();
 }
+// A short story with no fixed size (up to 99,999 characters).
+function openBig(): u64 {
+  authorize(ALICE);
+  allowCalls(2);
+  const opening = "Once upon a time.";
+  const id = new Stories().open_story(new stories.open_story_arguments(
+    ALICE, stories.story_kind.KIND_SHORT, "A Long Tale", 0, 1, 0, stories.visibility.VISIBILITY_PUBLIC, 0, 0, opening,
+    false, <u64>opening.length, USDT, true, 0
+  )).value;
+  checkpoint();
+  return id;
+}
 function ageDays(days: u64): void { setTime(START + days * DAY); }
 function archive(): void {
   allowCalls(1);
@@ -162,11 +174,12 @@ describe("M-1: a pause stops the inactivity clocks", () => {
     expect(new Stories().get_config(new stories.get_config_arguments()).paused_seconds).toBe(70 * DAY);
     expect(archive).toThrow("archived the moment a long pause ended");
     errorIs("STORIES: story has been active recently");
-    ageDays(71 + 59);
+    // Active days so far: day 0-1 before the pause, then every day after day 71.
+    ageDays(71 + 58);
     expect(archive).toThrow();
     errorIs("STORIES: story has been active recently");
-    ageDays(71 + 61);
-    expect(archive).not.toThrow("60 active days after the pause must archive it");
+    ageDays(71 + 59);
+    expect(archive).not.toThrow("60 active days in all must archive it");
     expect(story(gId).status).toBe(stories.story_status.STATUS_ARCHIVED);
   });
 
@@ -286,7 +299,7 @@ describe("M-5: get_segments stops at a byte budget", () => {
 
   it("returns three 18 KB parts, then the rest, and says where to go on", () => {
     limits(6000, 3);
-    gId = openPublic();
+    gId = openBig();
     for (let i = 0; i < 4; i++) write(BOB, gId, cjk(i.toString(), 6000));
     const first = new Stories().get_segments(new stories.get_segments_arguments(gId, 2, 10));
     expect(first.values.length).toBe(3);
@@ -310,14 +323,14 @@ describe("F-03: the same text can't be in one story twice", () => {
 
   it("an edit can't copy another part's text; edited-away text is free again", () => {
     gId = openPublic();
-    gSeq = write(BOB, gId, "Bob's original words here.");
+    gSeq = write(BOB, gId, "Bob's original words here!!");
     write(CARA, gId, "Cara's words for the story.");
     gWho = BOB;
     gText = "Cara's words for the story.";
     expect(editAs).toThrow();
     errorIs("STORIES: this exact text is already in this story");
     ownerEdit(BOB, gId, gSeq, "Bob's new words here, edited.");
-    expect(() => { write(CARA, gId, "Bob's original words here."); }).not.toThrow("text that left the story may be written again");
+    expect(() => { write(CARA, gId, "Bob's original words here!!"); }).not.toThrow("text that left the story may be written again");
   });
 
   it("a paid change can't copy another part's text either", () => {

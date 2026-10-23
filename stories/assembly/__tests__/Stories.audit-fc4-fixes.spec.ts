@@ -61,10 +61,10 @@ let gId: u64 = 0;
 let gSeq: u64 = 0;
 
 describe("get_versions stops at a size budget and says where to go on (AB-070)", () => {
-  it("returns two 30,000-byte versions per page, then the rest", () => {
+  it("returns three 18,000-byte versions per page, then the rest", () => {
     reset(); configure();
     authorize(STORIES);
-    new Stories().set_limits(new stories.set_limits_arguments(10000, 1000, 3, 60, 30));
+    new Stories().set_limits(new stories.set_limits_arguments(6000, 1000, 3, 60, 30));
     checkpoint();
     authorize(ALICE);
     allowCalls(3);
@@ -73,8 +73,8 @@ describe("get_versions stops at a size budget and says where to go on (AB-070)",
       ALICE, SHORT, "A Long Tale", 50000, 1, 0, PUBLIC, 0, 0, opening, false, <u64>opening.length, USDT, true, 0, 0
     )).value;
     checkpoint();
-    // 10,000 three-byte characters: the most bytes a part can hold.
-    const base = "中".repeat(9999);
+    // 6,000 three-byte characters: the most bytes a part can hold.
+    const base = "中".repeat(5999);
     gSeq = write(BOB, gId, base + "a");
     ownerEdit(BOB, gId, gSeq, base + "b");
     ownerEdit(BOB, gId, gSeq, base + "c");
@@ -82,12 +82,12 @@ describe("get_versions stops at a size budget and says where to go on (AB-070)",
     expect(segment(gId, gSeq).version_count).toBe(4);
     const c = new Stories();
     const first = c.get_versions(new stories.get_versions_arguments(gId, gSeq, 1, 5));
-    expect(first.values.length).toBe(2, "60,000 bytes fit, a third version would not");
+    expect(first.values.length).toBe(3, "54,000 bytes fit, a fourth version would not");
     expect(first.values[0].version).toBe(1);
-    expect(first.next).toBe(3);
+    expect(first.next).toBe(4);
     const rest = c.get_versions(new stories.get_versions_arguments(gId, gSeq, first.next, 5));
-    expect(rest.values.length).toBe(2);
-    expect(rest.values[1].version).toBe(4);
+    expect(rest.values.length).toBe(1);
+    expect(rest.values[0].version).toBe(4);
     expect(rest.next).toBe(0, "nothing left");
   });
 
