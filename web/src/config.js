@@ -3,7 +3,8 @@
  *
  * Testnet is selected. To point this page at mainnet later:
  *   1. Set ACTIVE to "mainnet".
- *   2. Replace every address in `contracts` with the mainnet contract.
+ *   2. Replace every address in `contracts` with the mainnet contract
+ *      (`sponsor` may be "" if there is no mana sponsor yet).
  *      Do not leave a testnet address in the list. Those addresses can
  *      belong to someone else on mainnet.
  *   3. Set paymentSymbol to the token you enabled in the Shop (KOIN, vUSDT, …)
@@ -50,6 +51,9 @@ export const TESTNET_ADDRESSES = {
   stories: "1Ebsy7ERirZWZwAio8Jz1zueuxQwNfKisR",
   treasury: "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6",
   paymentToken: "1FaSvLjQJsCJKq5ybmGsMMQs8RQYyVv8ju",
+  // The mana sponsor (sponsor/): pays users' mana for SwarmTales transactions
+  // only. "" = no sponsor; everyone pays their own mana.
+  sponsor: "12eQDZUBAaoScqFTW4zSy4ziAoxctnCxyS",
 };
 
 export const contracts = {
@@ -58,6 +62,7 @@ export const contracts = {
   stories: TESTNET_ADDRESSES.stories,
   treasury: TESTNET_ADDRESSES.treasury,
   paymentToken: TESTNET_ADDRESSES.paymentToken,
+  sponsor: TESTNET_ADDRESSES.sponsor,
   paymentSymbol: "tKOIN",
   paymentDecimals: 8,
 };
@@ -80,6 +85,7 @@ export function configProblems() {
   for (const key of ["ink", "shop", "stories", "treasury", "paymentToken"]) {
     if (!isAddress(contracts[key])) problems.push(key + " is not a Koinos address.");
   }
+  if (contracts.sponsor !== "" && !isAddress(contracts.sponsor)) problems.push('sponsor must be a Koinos address or "" (no sponsor).');
   if (!Number.isInteger(contracts.paymentDecimals) || contracts.paymentDecimals < 0 || contracts.paymentDecimals > 18) {
     problems.push("paymentDecimals must be a whole number from 0 to 18.");
   }
@@ -90,7 +96,7 @@ export function configProblems() {
   }
   if (network.mainnet) {
     for (const key of Object.keys(TESTNET_ADDRESSES)) {
-      if (contracts[key] === TESTNET_ADDRESSES[key]) {
+      if (TESTNET_ADDRESSES[key] && contracts[key] === TESTNET_ADDRESSES[key]) {
         problems.push(key + " is still the testnet address. Replace it before using mainnet.");
       }
     }

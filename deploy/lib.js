@@ -17,9 +17,10 @@ const MAINNET_PINNED = {
   shop: "",
   stories: "",
   token: "",
+  sponsor: "",
 };
-const PINNED_ROLES = ["ink", "shop", "stories", "token"];
-const CONTRACT_ROLES = ["ink", "shop", "stories"];
+const PINNED_ROLES = ["ink", "shop", "stories", "token", "sponsor"];
+const CONTRACT_ROLES = ["ink", "shop", "stories", "sponsor"];
 const PIN_OVERRIDE_FLAG = "--i-understand-this-address-is-not-pinned";
 const HASH_OVERRIDE_FLAG = "--i-understand-the-code-hash-is-not-verified";
 
@@ -809,7 +810,7 @@ function checkPinnedFlags(net, flags, target) {
   for (const role of PINNED_ROLES) warnings.push(checkPinned(net, role, flags[role], flags, false));
   for (const name of ["contract", "expect"]) {
     if (flags[name] === undefined || !net.mainnet) continue;
-    if (!CONTRACT_ROLES.includes(target)) fail("Say which contract --" + name + " is: ink, shop or stories.");
+    if (!CONTRACT_ROLES.includes(target)) fail("Say which contract --" + name + " is: ink, shop, stories or sponsor.");
     warnings.push(checkPinned(net, target, flags[name], flags, name === "expect"));
   }
   return warnings.filter(Boolean);
@@ -1059,6 +1060,47 @@ function formatMana(rc) {
   const whole = n / 100000000n;
   const frac = (n % 100000000n).toString().padStart(8, "0").slice(0, 4);
   return whole.toString() + "." + frac;
+}
+
+// ---- Mana sponsor (sponsor/) ----
+const SPONSOR_MAX_TOKENS = 4;
+const SPONSOR_CAP_LIMIT = 100000000000n; // 1,000 mana, the contract's own limit
+
+/**
+ * The set_config arguments for the sponsor, checked the same way the
+ * contract checks them, so a mistake stops here with a plain message.
+ * `f` holds the command's flags; mana caps are typed like "10" or "2.5".
+ */
+function planSponsorConfig(f, sponsorAddress) {
+  const ink = requireAddress(f.ink, "ink");
+  const shop = requireAddress(f.shop, "shop");
+  const stories = requireAddress(f.stories, "stories");
+  if (new Set([ink, shop, stories, sponsorAddress]).size !== 4) fail("--ink, --shop, --stories and --sponsor must be four different addresses.");
+  const tokens = f.tokens === undefined || f.tokens === "" ? [] : String(f.tokens).split(",").map((t) => requireAddress(t.trim(), "tokens"));
+  if (tokens.length > SPONSOR_MAX_TOKENS) fail("--tokens takes at most " + SPONSOR_MAX_TOKENS + " payment tokens.");
+  if (new Set(tokens).size !== tokens.length) fail("--tokens lists the same token twice.");
+  for (const t of tokens) {
+    if ([ink, shop, stories, sponsorAddress].includes(t)) fail("--tokens can't include a SwarmTales contract or the sponsor.");
+  }
+  const enabled = f.disable !== true;
+  const perTx = parseMana(f["per-tx"], "--per-tx");
+  const perAccount = parseMana(f["per-account"], "--per-account");
+  const perDay = parseMana(f["per-day"], "--per-day");
+  if (BigInt(perTx) > BigInt(perAccount) || BigInt(perAccount) > BigInt(perDay)) {
+    fail("Caps must be --per-tx <= --per-account <= --per-day.");
+  }
+  if (BigInt(perDay) > SPONSOR_CAP_LIMIT) fail("--per-day can't be above 1000 mana (the contract's limit).");
+  const config = {
+    enabled, ink, shop, stories, tokens,
+    max_mana_per_tx: perTx,
+    max_mana_per_account_day: perAccount,
+    max_mana_per_day: perDay,
+  };
+  const summary = "sponsor " + (enabled ? "ON" : "OFF") + ": pays for Ink " + ink + ", Shop " + shop + ", Stories " + stories +
+    (tokens.length ? " and approve(spender = Shop) on " + tokens.join(", ") : "") +
+    "; caps " + formatMana(perTx) + " mana per transaction, " + formatMana(perAccount) + " per account per day, " +
+    formatMana(perDay) + " for everyone per day";
+  return { args: { config }, summary };
 }
 
 /** A mana amount typed as KOIN-style decimals ("5", "0.25") in rc. */
@@ -1339,6 +1381,7 @@ module.exports = {
   parseReleaseHashes,
   sha256Hex,
   checkWasmHash,
+  planSponsorConfig,
   codeHashFromMeta,
   checkCodeHash,
   planModeration,

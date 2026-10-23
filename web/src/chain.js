@@ -4,10 +4,11 @@
  */
 import { Contract, Provider, utils } from "koilib";
 import { abis } from "./generated/abis.js";
-import { assertExpectedChain, contracts, network } from "./config.js";
+import { assertExpectedChain, contracts, isAddress, network } from "./config.js";
 import { headTimeSeconds } from "./lib/money.js";
 import { confirmTransaction } from "./lib/confirm.js";
 import { readAllSegments } from "./lib/segments.js";
+import { sponsorableOperations, sponsorRcEstimate, sponsorRcLimit } from "./lib/sponsor.js";
 
 let provider;
 let verifiedChainId = "";
@@ -35,7 +36,7 @@ export async function verifyChain() {
 }
 
 function abiContract(name, signer) {
-  const ids = { ink: contracts.ink, shop: contracts.shop, stories: contracts.stories };
+  const ids = { ink: contracts.ink, shop: contracts.shop, stories: contracts.stories, sponsor: contracts.sponsor };
   if (!ids[name]) throw new Error("Unknown contract " + name);
   return new Contract({
     id: ids[name],
@@ -102,6 +103,39 @@ export async function freeMana(address) {
     reserved = 0n;
   }
   return { total, reserved, free: total > reserved ? total - reserved : 0n };
+}
+
+/**
+ * Whether the mana sponsor should pay for these operations, and with which
+ * mana limit: { payer, payee, rcLimit } or null (pay with the user's own
+ * mana). Any failure to read the sponsor means null: the user pays, as before.
+ */
+export async function sponsorFunding(address, operations) {
+  if (!contracts.sponsor || !isAddress(contracts.sponsor)) return null;
+  const ids = { ink: contracts.ink, shop: contracts.shop, stories: contracts.stories };
+  if (!sponsorableOperations(operations, ids, [contracts.paymentToken])) return null;
+  try {
+    const [cfg, mine, total, head, free] = await Promise.all([
+      read("sponsor", "get_config", {}),
+      read("sponsor", "get_usage", { account: address }),
+      read("sponsor", "get_total_usage", {}),
+      getProvider().getHeadInfo(),
+      freeMana(contracts.sponsor),
+    ]);
+    if (!cfg) return null;
+    const tokenListed = (cfg.tokens || []).includes(contracts.paymentToken);
+    if (!tokenListed && operations.some((op) => op.call_contract.contract_id === contracts.paymentToken)) return null;
+    const room = sponsorRcLimit({
+      cfg, mine, total, ids,
+      headMs: head && head.head_block_time,
+      sponsorFree: free.free,
+    });
+    // Ask only when the sponsor can cover a realistic limit for these calls.
+    const want = sponsorRcEstimate(operations);
+    return room >= want ? { payer: contracts.sponsor, payee: address, rcLimit: want } : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function getMana(address) {

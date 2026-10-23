@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+// =====================================================================
+// SwarmTales mana sponsor — interface definition
+//
+// Uploaded onto ONE fresh Koinos account (the sponsor address) with only
+// the "transaction application" authority override on. That account is
+// loaded with KOIN; its mana then pays for SwarmTales transactions so
+// users don't need KOIN of their own.
+//
+// The site sets payer = sponsor and payee = the user. The chain then asks
+// this contract whether to pay. It says yes only when ALL of these hold:
+//   - the sponsor is switched on;
+//   - the transaction is signed by the payee (the user);
+//   - every operation calls Ink, Shop or Stories, or is a payment-token
+//     `approve` with spender = Shop and owner = the payee;
+//   - the transaction's mana limit is within the per-transaction cap, and
+//     today's total for this user and for everyone stays within the caps.
+// A transaction signed by the sponsor account's own key is always paid
+// (that is the owner topping up, changing settings or moving KOIN out).
+//
+// Settings change only with the sponsor account's own key (its call
+// authority is NOT overridden). The KOIN can always be moved out with that
+// key, like any wallet. Mana amounts use the chain's units: 100000000 = 1.
+// "Day" is the UTC day of the head block.
+// =====================================================================
+
+package sponsor;
+
+import "koinos/options.proto";
+
+message config {
+  bool enabled = 1;
+  bytes ink = 2 [(koinos.btype) = ADDRESS];
+  bytes shop = 3 [(koinos.btype) = ADDRESS];
+  bytes stories = 4 [(koinos.btype) = ADDRESS];
+  // Payment tokens whose approve(spender = Shop) is paid for. At most 4.
+  repeated bytes tokens = 5 [(koinos.btype) = ADDRESS];
+  // Most mana one transaction may reserve (its rc_limit).
+  uint64 max_mana_per_tx = 6 [jstype = JS_STRING];
+  // Most mana one user may reserve per day (sum of rc_limits).
+  uint64 max_mana_per_account_day = 7 [jstype = JS_STRING];
+  // Most mana everyone together may reserve per day.
+  uint64 max_mana_per_day = 8 [jstype = JS_STRING];
+}
+
+message usage {
+  // UTC day number (head block time / 86400000). 0 = never used.
+  uint64 day = 1 [jstype = JS_STRING];
+  // Mana reserved that day.
+  uint64 used = 2 [jstype = JS_STRING];
+}
+
+message empty_object {}
+
+// @description Settings: on/off, the SwarmTales contracts, tokens and caps
+// @read-only true
+// @result config
+message get_config_arguments {}
+
+// @description Mana this account has used today
+// @read-only true
+// @result usage
+message get_usage_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+}
+
+// @description Mana everyone has used today
+// @read-only true
+// @result usage
+message get_total_usage_arguments {}
+
+// @description Change the settings. Needs the sponsor account's own key.
+// @read-only false
+// @result empty_object
+message set_config_arguments {
+  config config = 1;
+}
+
+// Emitted by set_config.
+message config_event {
+  config config = 1;
+}
+
+// The KCS-4 approve arguments, read from a payment-token operation.
+message approve_args {
+  bytes owner = 1 [(koinos.btype) = ADDRESS];
+  bytes spender = 2 [(koinos.btype) = ADDRESS];
+  uint64 value = 3 [jstype = JS_STRING];
+}

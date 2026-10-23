@@ -14,6 +14,7 @@ Last checked against the code: October 2026, after the 2026-10 mainnet audit fix
 | Admin (one per contract) | 2-of-3 multisig wallet on mainnet | Runs day-to-day settings |
 | Moderator | The automated copy checker | Hides parts, unhides parts the admin didn't hide, writes source notes, clears summaries (details below) |
 | Treasury, founder | Founder | Only receive payments. They have no powers in the contracts |
+| Mana sponsor | Founder, offline | The wallet that pays users' mana (details below). It has no powers in Ink, Shop or Stories |
 
 One key per contract **per network**: a contract key used on testnet is never used on mainnet. The deploy tool refuses to reuse one.
 
@@ -78,6 +79,10 @@ The Stories admin **cannot** mint or burn Ink, refund outside the rules, or fina
 The moderator key can hide parts, take over a hide writer reports made for copying (it then counts as the checker's hide: removing the part refunds nothing and restoring it gives up the refund), unhide any part the admin didn't hide, add, replace or clear a part's public "this text also appears in…" note, and clear any story's summary, even while paused. It can't take a part down, delete text, touch Ink, or change any setting.
 
 How the checker uses it: it hides a part only when a book that is provably older than the part contains its text; matches found only on the web get a note, never a hide. It never hides a part its opener restored. It signs in a separate step that re-checks every action on the chain; the step that searches the web never holds the key. It runs in GitHub Actions and signs only for the chain id it expects.
+
+## The mana sponsor
+
+The sponsor wallet holds KOIN, and its mana pays for users' SwarmTales transactions (`sponsor/`). Its contract decides only one thing: whether this wallet pays for a given transaction. It pays only when the user signed it, every call is to Ink, Shop or Stories (or approves the Shop to take the user's own payment tokens), and the daily caps aren't used up. It can't sign anything for a user, move anyone's tokens or Ink, or change anything in the three contracts. Its key can change its settings (on/off, caps, which contracts and tokens) and move its own KOIN, like any wallet. If it is switched off or empty, everyone simply pays their own mana again.
 
 ## What works at each stage
 

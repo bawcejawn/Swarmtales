@@ -231,7 +231,7 @@ yarn build:debug
 yarn test
 ```
 
-Success means `shop/build/debug/contract.wasm` exists and the test files together report **97 pass** and **0 fail**.
+Success means `shop/build/debug/contract.wasm` exists and the test files together report **98 pass** and **0 fail**.
 
 ### Stories
 
@@ -244,7 +244,18 @@ yarn test
 
 Success means `stories/build/release/contract.wasm` exists and the test files together report **417 pass** and **0 fail**.
 
-`yarn build:release` in any of the three folders makes the smaller wasm used for an upload. Tests use the debug build.
+### Mana sponsor and multisig wallet
+
+```bash
+cd sponsor     # then the same in multisig/
+yarn install
+yarn build:release
+yarn test
+```
+
+Success means **33 pass** (sponsor) and **23 pass** (multisig), with **0 fail**. See `sponsor/README.md` and `multisig/README.md`.
+
+`yarn build:release` in any contract folder makes the smaller wasm used for an upload. Tests use the debug build.
 
 ### Website, copy checker and deploy tool
 
@@ -258,7 +269,7 @@ cd ..
 node --test "checker/__tests__/*.test.mjs" "deploy/__tests__/*.test.js"
 ```
 
-Success means the website reports **162 pass** and the checker and deploy tool **220 pass**, both with **0 fail**. (`yarn test:deploy` in the root `package.json` runs the deploy tool's tests.)
+Success means the website reports **168 pass** and the checker and deploy tool **227 pass**, both with **0 fail**. (`yarn test:deploy` in the root `package.json` runs the deploy tool's tests.)
 
 ## Testnet
 

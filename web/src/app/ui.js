@@ -2,7 +2,7 @@
  * Small shared widgets: notices, form fields, status boxes, the rights
  * confirmation, the source and AI-help boxes, and the wallet note.
  */
-import { network } from "../config.js";
+import { contracts, network } from "../config.js";
 import { explainFailure } from "../lib/errors.js";
 import { kondorManaNote, VAULT_MANA_CEILING } from "../lib/money.js";
 import { kondorHint, VAULT_MANA_EXPLANATION } from "../wallet.js";
@@ -86,14 +86,21 @@ export function aiToggle() {
   return { input, node };
 }
 
+/** Shown when a mana sponsor is set up (config.js contracts.sponsor). */
+export const SPONSOR_NOTE = "SwarmTales pays the mana for this when it can (up to a daily limit). Otherwise your wallet's own mana is used.";
+
 export function walletNote() {
+  const sponsored = !!contracts.sponsor;
   if (state.wallet && state.wallet.id === "testwallet") {
-    return h("p", { class: "meta small" }, ["Signed by the test wallet in this browser. It needs tKOIN for mana."]);
+    return h("p", { class: "meta small" }, [sponsored
+      ? "Signed by the test wallet in this browser. " + SPONSOR_NOTE
+      : "Signed by the test wallet in this browser. It needs tKOIN for mana."]);
   }
   if (state.wallet && state.wallet.id === "koinvault") {
     const decision = state.account ? vaultManaDecision(state.account.mana, VAULT_MANA_CEILING) : null;
     return h("p", { class: "meta small" }, [decision && decision.blocked ? decision.message : VAULT_MANA_EXPLANATION]);
   }
+  if (sponsored) return h("p", { class: "meta small" }, [SPONSOR_NOTE]);
   const low = state.account ? kondorManaNote(state.account.mana, network.mainnet) : "";
   return h("p", { class: "meta small" }, [low || kondorHint(network.mainnet)]);
 }

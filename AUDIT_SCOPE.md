@@ -25,6 +25,8 @@ moderator key. Deploy and moderation tooling runs from the owner's computer.
 | `assembly/` (`Ink.ts`, `proto/ink.proto`), root `package.json`, `yarn.lock` | **Ink** contract and its tests |
 | `shop/` | **Shop** contract (`shop/assembly/Shop.ts`), its proto and tests |
 | `stories/` | **Stories** contract: `stories/assembly/Stories.ts` (reads, opening, writing, final edit, archive), `StoriesAdmin.ts` (moderation, settings), `StoriesBase.ts` (storage, helpers), `lib/` (rules, keys, text checks); its proto and tests |
+| `sponsor/` | **Mana sponsor** (added 23 Oct 2026, after the audit): `sponsor/assembly/Sponsor.ts` and its proto and tests. An `authorize()` contract on one wallet that pays mana only for SwarmTales transactions, with caps |
+| `multisig/` | **Multisig wallet** (added 23 Oct 2026, after the audit; not deployed yet): `multisig/assembly/Multisig.ts`, proto and tests. An `authorize()` contract that makes one wallet m-of-n, meant as the admin of the three contracts |
 | `koinos/`, `google/` | Vendored Koinos and protobuf `.proto` definitions used by the build |
 | `abi/` | ABI output folder for Ink (generated at build time) |
 | `checker/` | Copy checker: `check.mjs` (plan, no key), `apply.mjs` (signs with the moderator key), `state.mjs` (sealed state), `chain.mjs`, `lib.mjs`, and tests |
@@ -41,6 +43,12 @@ The whole repository. The most security-sensitive parts:
 
 - **The three contracts:** `assembly/Ink.ts`, `shop/assembly/Shop.ts`, `stories/assembly/` (all files):
   authority checks, Ink minting and burning, payments, refunds, takedowns and strikes, upgrades.
+- **New since the audit (please review in full):** `sponsor/assembly/Sponsor.ts` (pays mana for
+  other people's transactions: which transactions, caps, signature recovery) and
+  `multisig/assembly/Multisig.ts` (m-of-n `authorize()` for calls, payments and uploads; setup and
+  signer changes). The site's use of the sponsor is `web/src/lib/sponsor.js`, `sponsorFunding()` in
+  `web/src/chain.js`, and the fallback in `web/src/wallet.js` / `web/src/testWallet.js`; the tool's
+  is `upload sponsor` and `sponsor-config` in `deploy/deploy.js`.
 - **The copy checker** (`checker/`): signs hides and unhides with the moderator key, unattended.
 - **Deploy and takedown tooling** (`deploy/`): uploads, admin actions, takedowns, chain-id checks.
 - **The site's wallet handling** (`web/src/wallet.js`, `web/src/testWallet.js`, `web/src/chain.js`,
@@ -62,8 +70,10 @@ npx yarn@1.22.22 build:release
 npx yarn@1.22.22 test
 sha256sum build/release/contract.wasm
 
-cd stories   # same four commands; hash stories/build/release/contract.wasm
-cd ../shop   # same four commands; hash shop/build/release/contract.wasm
+cd stories     # same four commands; hash stories/build/release/contract.wasm
+cd ../shop     # same four commands; hash shop/build/release/contract.wasm
+cd ../sponsor  # same four commands; hash sponsor/build/release/contract.wasm
+cd ../multisig # same four commands; hash multisig/build/release/contract.wasm
 
 # Website (npm test first generates the ABIs the checker also imports)
 cd ../web && npm ci && npm test
@@ -79,11 +89,14 @@ Expected release sha256 (verified from a fresh clone of this branch):
 | Ink | `537f523396c1e195c0262e10dd574c28492b269d247a6025a10f30461b2308dc` |
 | Stories | `4b146f3b68658ce06b4eb43e7152a8194099a9512b181129ae59edb0b7162f40` |
 | Shop | `f0e0622082bf5e13ed1eb6578457fa28450d28bfe5c7ff5c79499b2184b4bcce` |
+| Sponsor | `ed36d0bfc49a52a687489be4f46373b8c12bea52551785582223d66c219f4ad0` |
+| Multisig | `c4867a75bb90afa9b27a64a0452c093e38843764f8171aac0516d8fd2738ddb8` |
 
 (Built with Node.js 22.22.0. These are copied into `deploy/release-hashes.json` once reproduced
 by a second person; the deploy tool refuses a mainnet upload or wiring that doesn't match.)
 
-Expected test totals: Ink 53, Stories 417, Shop 98, web 162, checker 105, deploy 115; 0 failing.
+Expected test totals: Ink 53, Stories 417, Shop 98, Sponsor 33, Multisig 23, web 168, checker 105,
+deploy 122; 0 failing.
 The Stories suite takes about an hour on a two-core machine.
 
 ## Deployments
@@ -95,6 +108,12 @@ The Stories suite takes about an hour on a two-core machine.
   deploy of exactly these hashes (Ink `1E6NEt6XdP6UeB7uZzQFQ5ovWie9mJtuy`, Shop
   `14oJ1fQEyFUXR3S3oknYhMXWrSDj38twFY`, Stories `1EzAZTf58wajDKnZPKtTASp62CTNtAP4iv`) was used
   for the end-to-end checks.
+- **Testnet mana sponsor:** `12eQDZUBAaoScqFTW4zSy4ziAoxctnCxyS` (a throwaway test key), set up for
+  the testnet contracts above. Checked live on 23 Oct 2026: a wallet with no KOIN saved a bookmark
+  and the site's test wallet did too (sponsor paid); a Reader month bought with approve + buy was
+  paid; a token transfer, an approve for another spender, a payee who didn't sign, a mana limit over
+  the cap and a call to another contract were all refused with the contract's message; the
+  per-account daily cap stopped the third 2-mana bookmark.
 - **Mainnet:** not deployed.
 
 ## Keys and roles

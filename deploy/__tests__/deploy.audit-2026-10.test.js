@@ -156,7 +156,7 @@ test("M-6: with nothing pinned yet, mainnet refuses every contract address excep
   // Testnet never checks pins.
   assert.deepStrictEqual(lib.checkPinnedFlags(lib.resolveNetwork({}), { stories: OTHER, contract: OTHER }, "ink"), []);
   // The table itself only takes "" or an address.
-  assert.ok(Object.keys(lib.MAINNET_PINNED).sort().join() === "ink,shop,stories,token");
+  assert.ok(Object.keys(lib.MAINNET_PINNED).sort().join() === "ink,shop,sponsor,stories,token");
 });
 
 test("M-6: wire-stories checks each contract's code hash against the release hashes on mainnet", async () => {

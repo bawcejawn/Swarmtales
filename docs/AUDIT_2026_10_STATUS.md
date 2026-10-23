@@ -4,7 +4,7 @@ Audit: "SwarmTales Mainnet Audit — audit-2026-10 (16de9dc)". Fixes on branch `
 Status: **Fixed** (code changed and tested), **Doc** (documented, no code change needed),
 **Owner** (an action only the owner can take), **Live** (a check on a real network).
 
-Tests after the fixes: Ink 53, Shop 98, Stories 417, website 162, copy checker 105, deploy tool 115; 0 failing.
+Tests after the fixes: Ink 53, Shop 98, Stories 417, Sponsor 33, Multisig 23, website 168, copy checker 105, deploy tool 122; 0 failing.
 Live checks were run on a throwaway testnet deploy of these exact builds (Ink `1E6NEt…`, Shop `14oJ1f…`, Stories `1EzAZT…`).
 
 ## Medium
@@ -92,3 +92,12 @@ Live checks were run on a throwaway testnet deploy of these exact builds (Ink `1
 | Split the large files | Fixed: Stories in 3 files + `lib/`; website `main.js` in 32 modules |
 
 Also closed from earlier rounds: AB-079 (removed with the legacy code) and AB-081 (invites stop working once their opener is blocked); the two version-paging mutation survivors now have tests.
+
+## Added after the audit (23 Oct 2026): please review in full
+
+| Item | What it is | Proof |
+|---|---|---|
+| Mana sponsor (`sponsor/`) | One wallet whose `authorize()` pays mana only for transactions the user signed that call Ink, Shop or Stories (or approve the Shop to take the user's own payment token), within per-transaction, per-account-per-day and per-day caps. The owner's own transactions are always paid. Only the transaction-application flag is on. | `Sponsor.spec.ts` (33); live on testnet: sponsored bookmark from a wallet with no KOIN, sponsored approve + buy, five kinds of refusal with the contract's message, the per-account cap |
+| Site uses the sponsor (`web/src/lib/sponsor.js`, `chain.js`, `wallet.js`, `testWallet.js`) | Asks the sponsor only when it would say yes; on a sponsor refusal, the same action runs again with the user's mana (same nonce, so at most one is included). KOIN Vault always pays its own. | `sponsor.test.js`; live: the site's new test wallet (no tKOIN) saved a bookmark, paid by the sponsor |
+| Deploy tool | `upload sponsor` (only the transaction-application flag), `sponsor-config` (checks the same rules as the contract), `status --sponsor` | `deploy.sponsor.test.js` |
+| Multisig wallet (`multisig/`) | m-of-n `authorize()` for calls, payments and uploads; setup once by the wallet's own key (sent in the upload transaction); `set_signers` by quorum. Not deployed yet. | `Multisig.spec.ts` (23) |

@@ -52,6 +52,13 @@ These keys can replace a contract's code, so they are the most valuable keys.
 - [ ] Set the `EXPECTED_CHAIN_ID` variable if the checker uses a node other than the Foundation testnet or api.koinos.io.
 - [ ] If it leaks: set a new moderator with `set-moderation` (admin), then replace the secret.
 
+## 5b. Mana sponsor
+
+- [ ] A fresh wallet used for nothing else, its recovery phrase on paper (like the contract keys). Per network: never the same sponsor key on testnet and mainnet.
+- [ ] Uploaded with `node deploy/deploy.js upload sponsor --expect <addr>`, which turns on only the "decides when this wallet pays" flag. `status --sponsor <addr>` must show `call false, pay true, upload false`.
+- [ ] Settings only with `sponsor-config` and that wallet's key. Keep KOIN in it only for mana; it isn't a treasury.
+- [ ] If it leaks: move its KOIN out at once (Kondor, like any wallet), switch it off (`sponsor-config ... --disable`), remove its address from `web/src/config.js`, and set up a new one. The leaked key can't touch Ink, Shop or Stories or anyone's tokens.
+
 ## 6. If a key is lost or leaks
 
 | Key | Do this |

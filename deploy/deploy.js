@@ -28,8 +28,8 @@
  *    (--unhide x) or a repeated flag stops the run.
  *
  * Commands (run from the repository root, after building the contracts):
- *   node deploy/deploy.js status   --ink <addr> --shop <addr> --admin <addr> [--user <addr>] [--stories <addr>] [--story <id>] [--token <addr>]
- *   node deploy/deploy.js upload   ink|shop|stories --expect <contract wallet address> [--upgrade]
+ *   node deploy/deploy.js status   --ink <addr> --shop <addr> --admin <addr> [--user <addr>] [--stories <addr>] [--story <id>] [--token <addr>] [--sponsor <addr>]
+ *   node deploy/deploy.js upload   ink|shop|stories|sponsor --expect <contract wallet address> [--upgrade]
  *       (mainnet: only the release build pinned in deploy/release-hashes.json is uploaded)
  *       (--upgrade: replace the code of a contract that is already there; its stored data is kept. On mainnet
  *        also add --i-understand-this-replaces-mainnet-code, and follow docs/KEY_CUSTODY.md section 6)
@@ -109,6 +109,14 @@
  *   node deploy/deploy.js clear-summary --actor <admin or moderator addr> --stories <addr> --story <id>
  *       (empties a story's "story so far", for copied or abusive text. Works while Stories is paused)
  *
+ * Mana sponsor (pays users' mana for SwarmTales transactions only; sponsor/):
+ *   node deploy/deploy.js upload sponsor --expect <sponsor wallet address>
+ *       (uploads with ONLY the "decides when this account pays" flag on; calls and uploads stay with its key)
+ *   node deploy/deploy.js sponsor-config --sponsor <addr> --ink <addr> --shop <addr> --stories <addr> [--tokens <addr>,<addr>]
+ *       --per-tx <mana> --per-account <mana> --per-day <mana> [--disable]
+ *       (signed by the sponsor wallet's own key. --tokens: payment tokens whose approve(spender = Shop) it pays for.
+ *        Caps: per transaction <= per account per day <= everyone per day <= 1000 mana. --disable switches it off)
+ *
  * Multisig admin (any admin command above, when the admin is a multisig wallet):
  *   node deploy/deploy.js <admin command> <its usual flags> --prepare <file.json> [--payer <addr>] [--payee <addr>] [--rc-limit <mana>]
  *       (builds the transaction WITHOUT signing it and writes it to a new file. No key is asked. --payer pays the
@@ -148,6 +156,15 @@ const CONTRACTS = {
     abi: path.join(root, "stories", "abi", "stories.abi"),
     buildHint: "cd stories; npx yarn@1.22.22 build:release; cd ..",
   },
+  // The mana sponsor has an authorize() that answers ONLY "may this account
+  // pay for this transaction" (sponsor/assembly/proto/sponsor.proto). Calls
+  // and code uploads stay with the sponsor wallet's own key.
+  sponsor: {
+    wasm: path.join(root, "sponsor", "build", "release", "contract.wasm"),
+    abi: path.join(root, "sponsor", "abi", "sponsor.abi"),
+    buildHint: "cd sponsor; npx yarn@1.22.22 build:release; cd ..",
+    authorizesTransactionApplication: true,
+  },
 };
 
 // What this run is doing: its arguments, its network once connected, and
@@ -178,7 +195,7 @@ function readFileOrFail(file, hint) {
 
 function contractFiles(target) {
   const c = CONTRACTS[target];
-  if (!c) lib.fail("Say which contract: ink, shop or stories.");
+  if (!c) lib.fail("Say which contract: ink, shop, stories or sponsor.");
   return c;
 }
 
@@ -679,12 +696,16 @@ async function cmdUpload(args) {
   const signer = await getSigner(provider, expected, "the " + target + " contract wallet");
   const { Contract } = koilib();
   const contract = new Contract({ id: expected, signer, provider, bytecode: new Uint8Array(wasm) });
-  // The three authorizes* flags stay false: no SwarmTales contract has an
-  // authorize() function, so the wallet key keeps full control.
+  // Ink, Shop and Stories have no authorize() function, so all three flags stay
+  // false and the wallet key keeps full control. The sponsor turns on only
+  // "transaction application" (who may make it pay); calls and uploads stay
+  // with its key.
+  const payFlag = c.authorizesTransactionApplication === true;
+  if (payFlag) console.log("Authority: this contract decides when " + expected + " pays for a transaction. Calls and code uploads stay with its own key.");
   const { operation } = await contract.deploy({
     abi: abiText,
     authorizesCallContract: false,
-    authorizesTransactionApplication: false,
+    authorizesTransactionApplication: payFlag,
     authorizesUploadContract: false,
     signTransaction: false,
     sendTransaction: false,
@@ -694,6 +715,28 @@ async function cmdUpload(args) {
   console.log("Contract address: " + expected);
   if (net.mainnet) console.log("Next: pin it in deploy/lib.js (MAINNET_PINNED." + target + ") and have that one-line change reviewed.");
   console.log("Send back: the transaction id above (" + txId + ") and the block number.");
+}
+
+/**
+ * Settings of the mana sponsor: on/off, the SwarmTales contracts it pays
+ * for, the payment tokens whose approve(spender = Shop) it pays for, and
+ * its caps. Signed (and paid) by the sponsor wallet's own key.
+ */
+async function cmdSponsorConfig(args) {
+  const f = args.flags;
+  const sponsorAddr = lib.requireAddress(f.sponsor, "sponsor");
+  const plan = lib.planSponsorConfig(f, sponsorAddr);
+  const { net, provider } = await connect(f, "sponsor");
+  const meta = await provider.invokeGetContractMetadata(sponsorAddr).catch(() => null);
+  const m = meta && meta.value;
+  if (!m || !m.hash) lib.fail("No contract at " + sponsorAddr + " yet. Upload it first: node deploy/deploy.js upload sponsor --expect " + sponsorAddr);
+  if (m.authorizes_transaction_application !== true || m.authorizes_call_contract === true || m.authorizes_upload_contract === true) {
+    lib.fail("The contract at " + sponsorAddr + " was not uploaded with exactly the 'pays for transactions' flag (and no other). Re-upload it with this tool.");
+  }
+  const signer = await getSigner(provider, sponsorAddr, "the sponsor wallet");
+  const op = await contractOf("sponsor", sponsorAddr, provider).encodeOperation({ name: "set_config", args: plan.args });
+  const txId = await dryRunThenSend(signer, provider, net, [op], plan.summary);
+  console.log("Send back: the transaction id (" + txId + "). Check it with: node deploy/deploy.js status --sponsor " + sponsorAddr);
 }
 
 async function cmdSetAdmin(args) {
@@ -1682,6 +1725,7 @@ async function cmdStatus(args) {
   await show("shop", f.shop);
   await show("stories", f.stories);
   await show("user", f.buyer);
+  await show("sponsor", f.sponsor);
   const read = async (target, addr, name, a) => {
     try {
       return await readOnly(provider, target, addr, name, a);
@@ -1724,6 +1768,16 @@ async function cmdStatus(args) {
     if (f.story) console.log("story " + f.story + ": " + JSON.stringify(await read("stories", f.stories, "get_story", { story_id: f.story })));
     if (f.buyer) console.log("open projects of user: " + JSON.stringify(await read("stories", f.stories, "get_open_count", { account: f.buyer })));
   }
+  if (f.sponsor) {
+    console.log("");
+    const meta = await provider.invokeGetContractMetadata(f.sponsor).catch(() => null);
+    const m = meta && meta.value;
+    console.log("sponsor authority flags (want call false, pay true, upload false): " +
+      (m && m.hash ? "call " + !!m.authorizes_call_contract + ", pay " + !!m.authorizes_transaction_application + ", upload " + !!m.authorizes_upload_contract : "(no contract)"));
+    console.log("sponsor.get_config: " + JSON.stringify(await read("sponsor", f.sponsor, "get_config")));
+    console.log("sponsor.get_total_usage: " + JSON.stringify(await read("sponsor", f.sponsor, "get_total_usage")));
+    if (f.buyer) console.log("sponsor usage of user: " + JSON.stringify(await read("sponsor", f.sponsor, "get_usage", { account: f.buyer })));
+  }
 }
 
 // Each command: what it runs, the flags it takes, how many positional values
@@ -1732,7 +1786,8 @@ async function cmdStatus(args) {
 const COMMON_FLAGS = ["network", "rpc", "i-understand-this-is-mainnet", lib.PIN_OVERRIDE_FLAG.slice(2)];
 const PREPARE_FLAGS = ["prepare", "payer", "payee", "rc-limit"];
 const COMMANDS = {
-  "status": { run: cmdStatus, flags: "ink shop admin user buyer stories story token" },
+  "status": { run: cmdStatus, flags: "ink shop admin user buyer stories story token sponsor" },
+  "sponsor-config": { run: cmdSponsorConfig, flags: "sponsor ink shop stories tokens per-tx per-account per-day disable" },
   "upload": { run: cmdUpload, positionals: 1, flags: "expect upgrade i-understand-this-replaces-mainnet-code" },
   "set-admin": { run: cmdSetAdmin, positionals: 1, prepare: true, flags: "contract admin from" },
   "accept-admin": { run: cmdAcceptAdmin, positionals: 1, prepare: true, flags: "contract admin" },

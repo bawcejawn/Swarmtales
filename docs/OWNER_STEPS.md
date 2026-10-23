@@ -126,17 +126,27 @@ vUSDT is `12VoHz41a4HtfiyhTWbg9RXqGMRbYk6pXh` (confirmed by the owner, 23 Oct 20
 README). Whether its `transfer` needs an earlier `approve` doesn't matter for the site, which
 always sends one. The launch-day test purchase in vUSDT proves Shop can take payment with it.
 
-### C3. Multisig emergency pause (audit M-12) — once you've chosen the multisig wallet
-1. Create the 2-of-3 multisig wallet on **testnet** first, with the same three signers you'll use on
-   mainnet.
-2. Make it the admin of the testnet Stories:
-   `node deploy/deploy.js set-admin stories --contract $STORIES --admin <multisig address> --from $ADMIN`
-   then `node deploy/deploy.js accept-admin stories --contract $STORIES --admin <multisig address> --prepare accept.json`,
-   and have two signers each run `node deploy/deploy.js cosign accept.json`, then
-   `node deploy/deploy.js submit accept.json`.
-3. Rehearse a pause the same way: `pause stories ... --prepare pause.json` → two `cosign` → `submit`.
-   Then the unpause.
-4. Send me the transaction ids.
+### C3. Multisig emergency pause (audit M-12) — after you make the signer wallets
+Our own multisig contract (`multisig/`, 23 tests) is written; there is no audited ready-made one on
+Koinos. When you're ready, make **3 signer wallets** (each on its own seed, one kept offline as the
+spare) and **1 fresh wallet** to become the multisig, and send me the four **public** addresses.
+I then add the one-transaction upload + setup command and the rehearsal steps: handover of the
+testnet Stories admin to the multisig, a pause and unpause with two signers, and replacing a signer.
+
+### C5. Mana sponsor (pays users' mana)
+Live on testnet now with a test sponsor wallet (`12eQDZUBAaoScqFTW4zSy4ziAoxctnCxyS`). To see it:
+in the local site (C1), use **Create a test wallet** and don't send it any tKOIN; open a story,
+press **Bookmark**, then **Save to my wallet**. It works because the sponsor pays the mana.
+
+For mainnet you make your **own** sponsor wallet (a fresh Kondor account, recovery phrase on
+paper), then on upload day:
+```powershell
+node deploy/deploy.js upload sponsor --expect <sponsor address> --network mainnet --i-understand-this-is-mainnet
+node deploy/deploy.js sponsor-config --sponsor <sponsor address> --ink <ink> --shop <shop> --stories <stories> --tokens 12VoHz41a4HtfiyhTWbg9RXqGMRbYk6pXh --per-tx 4 --per-account 20 --per-day 300 --network mainnet --i-understand-this-is-mainnet
+```
+Send it KOIN with Kondor (its mana is its KOIN balance and refills over about 5 days). Switch it
+off with the same `sponsor-config` line plus `--disable`. Its key can only change its settings and
+move its own KOIN.
 
 ### C4. KOIN Vault (audit W1-04, W1-05) — on mainnet, after launch
 Rex (KOIN Vault) said Vault should work with the site (23 Oct 2026); the launch-day purchase confirms it. Vault works only on mainnet. On launch day, make one small purchase with Vault on your phone and
@@ -178,15 +188,18 @@ Mainnet goes ahead only when **every** box is ticked:
       `STORIES_ADDRESS` is set to `1Ebsy7ERirZWZwAio8Jz1zueuxQwNfKisR` (section B).
 - [ ] **Separate keys on hardware wallets**: the Ink, Shop and Stories contract keys (new, mainnet
       only), treasury, founder; recovery phrases on paper in two places (`docs/KEY_CUSTODY.md`).
-- [ ] **2-of-3 multisig admin** chosen and rehearsed on testnet (C3).
-- [ ] **Release fingerprints**: two people build the merged commit and get the same three hashes;
+- [ ] **2-of-3 multisig admin**: the multisig contract re-audited, then rehearsed on testnet (C3).
+- [ ] **Mana sponsor** re-audited; your mainnet sponsor wallet made and loaded with KOIN (C5).
+- [ ] **A working mainnet node** for the site, the deploy tool and the checker (api.koinos.io is
+      down): a public node someone else runs, or one of yours behind a tunnel. Send me the URL.
+- [ ] **Release fingerprints**: two people build the merged commit and get the same hash for every contract (Ink, Shop, Stories, sponsor, multisig);
       I put them in `deploy/release-hashes.json` and the README (published).
 - [ ] **Domain** bought and set up (M-7): DNS, Settings → Pages → custom domain + Enforce HTTPS, then
       `SITE.url` in `web/src/config.js`.
 - [ ] **Copyright contact email** on the new domain (for reports on finished books and the DMCA
       agent registration, $6, which you planned before mainnet).
 - [ ] **Mainnet payment token** confirmed (vUSDT address, C2).
-- [ ] Live checks C1 and C3 done.
+- [ ] Live checks C1, C3 and C5 done.
 - [ ] On upload day (I'll walk you through each command): upload the three contracts, fill
       `MAINNET_PINNED` in `deploy/lib.js`, hand admin to the multisig, wire, enable vUSDT and set
       prices **before** the first sale (so it's usable at once), set Terms and the moderator, then
