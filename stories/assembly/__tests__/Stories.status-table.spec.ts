@@ -178,7 +178,7 @@ function act(): void {
     s.create_invite(new stories.create_invite_arguments(ALICE, id, CARA, 5, now + 30 * DAY));
   } else if (gAction == JOIN) {
     authorize(CARA);
-    s.join_with_invite(new stories.join_with_invite_arguments(CARA, id, 1, new Uint8Array(65)));
+    s.join_with_invite(new stories.join_with_invite_arguments(CARA, id, 99, new Uint8Array(65)));
   } else if (gAction == REVOKE) {
     authorize(ALICE);
     s.revoke_invite(new stories.revoke_invite_arguments(ALICE, id, 1));
@@ -275,8 +275,8 @@ describe("docs/ADMIN_POWERS.md: what works at each stage", () => {
   it("allow-list", () => { row(ALLOW, [Y, Y, Y, N, Y], "STORIES: a finalized story cannot be changed", ""); });
   it("summary", () => { row(SUMMARY, [Y, Y, Y, N, N], "STORIES: the summary can't change once the story is finalized or archived", ""); });
   it("create an invite", () => { row(INVITE, [Y, Y, Y, N, N], "STORIES: story is not accepting new writers", ""); });
-  it("join with an invite (a blank signature stops at the next check)", () => {
-    row(JOIN, [Y, Y, Y, N, N], "STORIES: story is not accepting new writers", "STORIES: invite link rejected");
+  it("join with an invite (an unknown invite stops at the next check)", () => {
+    row(JOIN, [Y, Y, Y, N, N], "STORIES: story is not accepting new writers", "STORIES: unknown invite");
   });
   it("revoke an invite", () => { row(REVOKE, [Y, Y, Y, Y, Y], "", ""); });
   it("ask the admin to finish", () => { row(REQUEST, [Y, Y, Y, N, N], "STORIES: story is not active", ""); });

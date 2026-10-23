@@ -574,7 +574,7 @@ describe("Stories: opening", () => {
       authorize(ALICE);
       allowCalls(2);
       new Stories().open_story(new stories.open_story_arguments(ALICE, SHORT, "T", 10000, 1, 0, <stories.visibility>9, 0, 0, "Hi", false, 2, USDT, true, 0));
-    }, "STORIES: visibility must be Public, Unlisted or Private");
+    }, "STORIES: visibility must be Public or Private");
     fails(() => {
       authorize(ALICE);
       allowCalls(2);
