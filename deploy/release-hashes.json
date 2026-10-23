@@ -1,0 +1,6 @@
+{
+  "about": "sha256 (64 lowercase hex characters) of each reviewed release build: build/release/contract.wasm (ink), shop/build/release/contract.wasm (shop), stories/build/release/contract.wasm (stories). Fill each in from the published, reproduced release hashes (AUDIT_SCOPE.md), never from a hash this tool or a build printed. \"\" means not pinned yet: mainnet upload, wire and wire-stories refuse until it is filled in. Changing a value needs review like any contract change.",
+  "ink": "",
+  "shop": "",
+  "stories": ""
+}

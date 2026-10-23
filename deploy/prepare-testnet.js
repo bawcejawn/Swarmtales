@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 /**
- * Build Ink and Shop and print the testnet steps.
+ * Build Ink, Shop and Stories and print the testnet steps, as deploy.js commands.
  * This does not upload, does not connect to a wallet, and does not ask for a key.
  *
  *   node deploy/prepare-testnet.js
  *   node deploy/prepare-testnet.js --no-build
+ *
+ * Every step goes through deploy/deploy.js: the key is pasted at its hidden
+ * prompt, the node's chain id is checked, and each write is dry run before
+ * you type SEND. Never paste a key into the Koinos CLI or any other tool for
+ * these steps.
  */
 
 const { spawnSync } = require("child_process");
@@ -43,7 +48,7 @@ function parseEnv(text) {
 function requireAddress(values, key) {
   const value = values[key] || "";
   if (!value) return "";
-  if (!/^1[1-9A-HJ-NP-Za-km-z]{20,40}$/.test(value)) {
+  if (!/^1[1-9A-HJ-NP-Za-km-z]{25,34}$/.test(value)) {
     fail(key + " does not look like a Koinos address: " + value);
   }
   return value;
@@ -54,76 +59,63 @@ const sourceName = path.relative(root, sourcePath);
 const values = parseEnv(fs.readFileSync(sourcePath, "utf8"));
 
 for (const name of Object.keys(values)) {
-  if (secretNames.indexOf(name) !== -1) {
-    fail(
-      "Remove " +
-        name +
-        " from " +
-        sourceName +
-        ". This script never accepts a private key, seed, or password."
-    );
+  if (secretNames.some((secret) => name.toUpperCase().includes(secret))) {
+    fail("Remove " + name + " from " + sourceName + ". This script never accepts a private key, seed, or password.");
   }
 }
 
 const admin = requireAddress(values, "ADMIN_ADDRESS");
-const inkAddress = requireAddress(values, "INK_CONTRACT_ADDRESS");
-const shopAddress = requireAddress(values, "SHOP_CONTRACT_ADDRESS");
-const treasury = requireAddress(values, "TREASURY_ADDRESS");
-const founder = requireAddress(values, "FOUNDER_ADDRESS");
-const rpc = values.TESTNET_RPC || "https://testnet.koinosfoundation.org";
-const chainId = values.TESTNET_CHAIN_ID || "(read this from the node)";
+const ink = requireAddress(values, "INK_CONTRACT_ADDRESS") || "<ink-address>";
+const shop = requireAddress(values, "SHOP_CONTRACT_ADDRESS") || "<shop-address>";
+const stories = requireAddress(values, "STORIES_CONTRACT_ADDRESS") || "<stories-address>";
+const treasury = requireAddress(values, "TREASURY_ADDRESS") || admin;
+const founder = requireAddress(values, "FOUNDER_ADDRESS") || admin;
 
 if (!admin) fail("ADMIN_ADDRESS is empty.");
+for (const [name, value] of [["INK", ink], ["SHOP", shop], ["STORIES", stories]]) {
+  if (value === admin) fail(name + "_CONTRACT_ADDRESS must be its own new wallet, not the admin wallet.");
+}
 
 if (!process.argv.includes("--no-build")) {
-  for (const dir of [root, path.join(root, "shop")]) {
-    const result = spawnSync(
-      "yarn",
-      ["build:release"],
-      { cwd: dir, stdio: "inherit", shell: process.platform === "win32" }
-    );
+  for (const dir of [root, path.join(root, "shop"), path.join(root, "stories")]) {
+    const result = spawnSync("yarn", ["build:release"], { cwd: dir, stdio: "inherit", shell: process.platform === "win32" });
     if (result.status !== 0) fail("Release build failed in " + dir);
   }
 }
 
-const blank = "(create a new wallet, then paste its public address into deploy/testnet.env)";
-const ink = inkAddress || blank;
-const shop = shopAddress || blank;
+const run = (line) => console.log("   node deploy/deploy.js " + line);
 
 console.log("");
 console.log("SwarmTales testnet sheet");
 console.log("Settings file: " + sourceName);
 console.log("Nothing was uploaded. No wallet was opened.");
 console.log("");
-console.log("Network: " + rpc);
-console.log("Chain id in the settings file: " + chainId);
-console.log("Admin wallet: " + admin);
-console.log("Ink contract address: " + ink);
-console.log("Shop contract address: " + shop);
-console.log("Treasury: " + (treasury || blank));
-console.log("Founder: " + (founder || blank));
+console.log("Admin wallet:   " + admin);
+console.log("Ink contract:   " + ink);
+console.log("Shop contract:  " + shop);
+console.log("Stories:        " + stories);
+console.log("Treasury:       " + treasury);
+console.log("Founder:        " + founder);
 console.log("");
-console.log("Files to upload, after a release build:");
-console.log("  Ink wasm:  build/release/contract.wasm");
-console.log("  Ink abi:   abi/ink.abi");
-console.log("  Shop wasm: shop/build/release/contract.wasm");
-console.log("  Shop abi:  shop/abi/shop.abi");
+console.log("Run these from the repository folder. Each one checks the node's chain id, asks for the key at a");
+console.log("hidden prompt (nothing shows while you paste), dry runs, and sends only after you type SEND.");
+console.log("Use a NEW wallet for each contract, made for testnet only. Never reuse a testnet contract key on");
+console.log("mainnet, or a mainnet key on testnet. Never paste a seed or key into the repo, a chat, or another tool.");
 console.log("");
-console.log("Do these yourself. Never paste a seed or private key into the repo or into chat.");
-console.log("1. Fund the Ink wallet from the faucet. Upload spends mana from that wallet, not from the admin wallet.");
-console.log("2. In Koinos CLI, open the Ink wallet and connect to " + rpc);
-console.log("   Confirm the chain id matches the node. Then:");
-console.log("   upload build/release/contract.wasm abi/ink.abi false false false");
-console.log("   The three false values leave contract-call, transaction, and upload authority with the key.");
-console.log("3. register ink <ink-address> abi/ink.abi");
-console.log("   ink.set_admin " + admin);
-console.log("4. The next day, fund the Shop wallet, open that wallet, and:");
-console.log("   upload shop/build/release/contract.wasm shop/abi/shop.abi false false false");
-console.log("   register shop <shop-address> shop/abi/shop.abi");
-console.log("   shop.set_admin " + admin);
-console.log("5. Fund " + admin + " and open that wallet. Then, with both ABIs registered:");
-console.log("   ink.set_minter <shop-address> 30");
-console.log("   shop.set_addresses " + (treasury || "<treasury>") + " " + (founder || "<founder>") + " <ink-address> ");
-console.log("   The last argument is the Stories address. Leave it empty until Stories exists.");
-console.log("   shop.set_ink_amounts 15000 5000 15000 45000 20000 10000");
-console.log("Mask 30 is PURCHASE + MEMBERSHIP + STARTER + PROMO. It does not include REFUND.");
+console.log("1. Fund each contract wallet from the faucet (an upload spends that wallet's mana), then upload:");
+run("upload ink --expect " + ink);
+run("upload shop --expect " + shop);
+run("upload stories --expect " + stories);
+console.log("2. Hand each contract to the admin (the contract wallet's key proposes, then the admin's key accepts):");
+for (const [name, addr] of [["ink", ink], ["shop", shop], ["stories", stories]]) {
+  run("set-admin " + name + " --contract " + addr + " --admin " + admin);
+  run("accept-admin " + name + " --contract " + addr + " --admin " + admin);
+}
+console.log("3. Fund the admin wallet, then wire everything (admin key):");
+run("wire --admin " + admin + " --ink " + ink + " --shop " + shop + " --treasury " + treasury + " --founder " + founder);
+run("wire-stories --admin " + admin + " --ink " + ink + " --shop " + shop + " --stories " + stories);
+console.log("4. Turn on the test payment token. The Shop makes everyone wait 7 days before a new token can be used:");
+run("test-asset --admin " + admin + " --shop " + shop);
+console.log("5. Check:");
+run("status --admin " + admin + " --ink " + ink + " --shop " + shop + " --stories " + stories);
+console.log("The rest of the rehearsal is in docs/TESTNET_DEPLOY.md.");

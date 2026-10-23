@@ -14,6 +14,7 @@ import {
   ALICE, BOB, CARA, COPYRIGHT, MALLORY, STORIES, USDT, allowCalls, authorize, changePrice, checkpoint, configure, mintsTo,
   okCall, openPublic, ownerEdit, ownerRemove, reset, results, revise, segment, story, takedown, versions, write, writerMonth,
 } from "./auditFixHelpers";
+import { ownEditArgs } from "./reviewed";
 
 const SEGMENTS_SPACE_ID: u32 = 3;
 const BOT = Base58.decode("1KTTsD354hZMEuZkYvVoEevDV6xuPaoEtt"); // moderator (copy checker)
@@ -69,7 +70,7 @@ function caraRevises(): void {
 function bobEdits(): void {
   authorize(BOB);
   results([writerMonth(), okCall()]);
-  new Stories().edit_segment(new stories.edit_segment_arguments(BOB, gId, gSeq, gText, <u64>gText.length, gMax));
+  new Stories().edit_segment(ownEditArgs(BOB, gId, gSeq, gText, <u64>gText.length, gMax));
 }
 function aliceWrites(id: u64, text: string): void {
   authorize(ALICE);
@@ -83,7 +84,7 @@ function fillAndClose(id: u64): void {
   aliceWrites(id, letters(<i32>(st.max_chars - st.used_chars)));
   expect(story(id).status).toBe(stories.story_status.STATUS_LOCKED);
   authorize(ALICE);
-  new Stories().close_story(new stories.close_story_arguments(ALICE, id, USDT));
+  new Stories().close_story(new stories.close_story_arguments(ALICE, id));
   checkpoint();
 }
 function finalEdit(): void {

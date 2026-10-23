@@ -44,6 +44,14 @@ function okCall(): system_calls.exit_arguments { return new system_calls.exit_ar
 function balCall(value: u64): system_calls.exit_arguments {
   return new system_calls.exit_arguments(0, new chain.result(Protobuf.encode(new token.balance_of_result(value), token.balance_of_result.encode)));
 }
+
+// Payment tokens wait 7 days after they are enabled (C1-01): enable them
+// 8 days before START so purchases at START work.
+function setAssetEarly(token: Uint8Array, decimals: u32, symbol: string): void {
+  setTime(START - 8 * 86400);
+  new Shop().set_asset(new shop.set_asset_arguments(token, true, decimals, symbol));
+  setTime(START);
+}
 // treasury balance, founder balance, two transfers, both balances again, then the Ink mint.
 function payAndMint(price: u64): void {
   const fee = <u64>new Shop().get_config(new shop.get_config_arguments()).fee_bps;
@@ -57,7 +65,7 @@ function configure(): void {
   const c = new Shop();
   c.set_addresses(new shop.set_addresses_arguments(TREASURY, FOUNDER, INK, STORIES));
   c.set_ink_amounts(new shop.set_ink_amounts_arguments(15000, 5000, 15000, 45000, 20000, 10000));
-  c.set_asset(new shop.set_asset_arguments(USDT, true, 6, "USDT"));
+  setAssetEarly(USDT, 6, "USDT");
   c.set_price(new shop.set_price_arguments(shop.item.ITEM_WRITER_MONTH, USDT, ONE_6 * 5));
   c.set_price(new shop.set_price_arguments(shop.item.ITEM_PACK_S, USDT, ONE_6 * 2));
   checkpoint();

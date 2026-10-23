@@ -15,11 +15,6 @@
 // Attack 2 (editor = writer): Bob writes the copied part in Alice's story;
 //   Alice makes Bob an editor (set_editor). Bob restores his own
 //   checker-hidden part and removes it for a full refund.
-// Attack 3 (legacy hide): a part the admin hid before the upgrade has
-//   hidden_by 0 (field absent), so restore_segment lets the opener undo
-//   that admin hide. The runbook (docs/TESTNET_UPGRADE_AUDIT2.md) asks the
-//   admin to unhide+rehide every such part by hand; the contract could
-//   treat "hidden, hidden_by 0, not by reports" as an admin hide instead.
 //
 // Each test asserts the SAFE behaviour and FAILS while the attack works.
 // If the fix is "restore_segment refuses a writer restoring their own
@@ -118,20 +113,5 @@ describe("RT-IMP modrestore: the writer acts as their own moderator", () => {
     removeAs(BOB);
     expect(mintsTo(BOB) - before).toBe(0,
       "RT-IMP modrestore 2: editor Bob undid the checker's hide on his own part and removed it for a full refund");
-  });
-
-  it("a part the admin hid before the upgrade (hidden_by 0) cannot be restored by its opener", () => {
-    gSeq = aliceWrites(gId, COPIED);
-    hideAs(STORIES);
-    // What the pre-upgrade record looks like: hidden, no hidden_by, not by reports.
-    const segs = new Storage.Map<Uint8Array, stories.segment>(STORIES, SEGMENTS_SPACE_ID, stories.segment.decode, stories.segment.encode, null);
-    const seg = segs.get(pairKey(gId, gSeq))!;
-    seg.hidden_by = 0;
-    seg.hidden_by_reports = false;
-    segs.put(pairKey(gId, gSeq), seg);
-    checkpoint();
-    expect(aliceRestores).toThrow("RT-IMP modrestore 3: the opener undid a pre-upgrade admin hide (hidden_by 0)");
-    MockVM.rollbackTransaction();
-    expect(segment(gId, gSeq).hidden).toBe(true, "RT-IMP modrestore 3: the admin-hidden part is visible again");
   });
 });

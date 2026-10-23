@@ -1,15 +1,8 @@
 // Audit Bot red-team (Web attacker) tests, fix check @ 00eec36: page prices vs.
 // Stories.ts for inputs the earlier parity fuzzers never generate.
 //
-// 1) LEGACY charged > current_cost. Before 867b025, cutRefund returned 0 when
-//    paid_changes > 0 (git show 26c17e9~5:stories/assembly/Stories.ts ~1977),
-//    so a part cut after someone else's change kept charged > current_cost.
-//    Those parts are still on testnet after the upgrade. edit_segment now does
-//    growth = newCost - current_cost AND refund = cutRefund = charged - newCost
-//    in the SAME call (Stories.ts ~847-858). editPrice (change.js ~95) sets
-//    refund = 0 whenever cost > 0, so the page shows "costs N Ink" and hides
-//    the refund the contract mints (and toWriter/toPool split).
-//    SAFE: editPrice's refund equals the contract's for such a part.
+// (The pre-upgrade "charged > current_cost" case that was test 1 here went
+// with the October 2026 testnet reset: no such parts exist any more.)
 //
 // 2) Multiplier label above 2^53. changeMultiplier returns a Number; main.js
 //    prints it with "×" + p.multiplier and "×" + p.multiplier * 2
@@ -30,41 +23,9 @@
 // Copy into web/test/ and run: node --test
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
-import { changeMultiplier, changePrice, editPrice } from "../src/lib/change.js";
+import { changeMultiplier, changePrice } from "../src/lib/change.js";
 import { normalizePasted } from "../src/lib/text.js";
-
-// Contract port (Stories.ts edit_segment + cutRefund + settleRefund), BigInt.
-function contractEdit(seg, newText) {
-  const newCost = BigInt(newText.length);
-  const oldCost = BigInt(seg.current_cost);
-  const charged = BigInt(seg.charged);
-  const growth = newCost > oldCost ? newCost - oldCost : 0n;
-  const refund = charged > newCost ? charged - newCost : 0n;
-  let toWriter = refund;
-  if (seg.fund_paid) {
-    const own = BigInt(seg.own_paid || 0);
-    toWriter = refund < own ? refund : own;
-  }
-  return { cost: growth, refund, toWriter, toPool: refund - toWriter };
-}
-
-test("RT-WEB: a pre-upgrade part (charged > current_cost) shows the refund edit_segment mints when the writer grows it", () => {
-  const cases = [
-    { charged: "100", current_cost: "50", paid_changes: "1" },
-    { charged: "300", current_cost: "120", paid_changes: "2", fund_paid: true, own_paid: "40" },
-  ];
-  for (const seg of cases) {
-    const text = "w".repeat(Number(seg.current_cost) + 30); // grows by 30, still below charged
-    const page = editPrice(seg, text);
-    const chain = contractEdit(seg, text);
-    assert.equal(BigInt(page.cost), chain.cost, "growth cost");
-    assert.equal(BigInt(page.refund), chain.refund,
-      "LEGACY-EDIT: page shows refund " + page.refund + " but edit_segment burns " + chain.cost + " and mints back " +
-      chain.refund + " (charged " + seg.charged + " > current " + seg.current_cost + ")");
-    assert.equal(BigInt(page.toPool), chain.toPool, "pool share");
-  }
-});
+import { appSource, fnBody } from "./helpers/appSource.js";
 
 test("RT-WEB: the shown change multiplier (and the next one) print as the exact contract integer", () => {
   for (let paid = 0; paid < 60; paid++) {
@@ -82,9 +43,7 @@ test("RT-WEB: the shown change multiplier (and the next one) print as the exact 
 });
 
 test("RT-WEB: a one-letter fix to a part stored with edge whitespace is not priced as rewriting the whole part", () => {
-  const src = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
-  const a = src.indexOf("function changePanel(");
-  const panel = src.slice(a, src.indexOf("function refundLine(", a));
+  const panel = fnBody(appSource(), "changePanel");
   // The page's own pipeline: what it prices and sends.
   const trims = /const current = \(\) => normalizePasted\(area\.value\)\.trim\(\)/.test(panel);
   const pipeline = (box) => (trims ? normalizePasted(box).trim() : normalizePasted(box));

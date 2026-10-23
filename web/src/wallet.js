@@ -9,7 +9,7 @@
  */
 import { Transaction } from "koilib";
 import { getSigner, getAccounts } from "kondor-js";
-import { freeMana, getProvider, read as chainRead, verifiedChain } from "./chain.js";
+import { abisFor, freeMana, getProvider, lookupTransaction, read as chainRead, verifiedChain } from "./chain.js";
 import { VAULT_MANA_CEILING } from "./lib/money.js";
 import {
   VAULT_MANA_EXPLANATION,
@@ -23,6 +23,7 @@ import {
   vaultRequest,
   vaultRequestStatus,
   vaultStatus,
+  vaultTransactionMismatch,
 } from "./lib/vaultApi.js";
 
 export { VAULT_MANA_EXPLANATION };
@@ -127,6 +128,10 @@ export function createKondorWallet() {
       const ceiling = 3000000000n;
       const rcLimit = mana.free < ceiling ? mana.free : ceiling;
       const signer = getSigner(address, { provider: getProvider() });
+      // The contracts' ABIs go to Kondor, so its confirm window can show each
+      // call by name with its arguments (the price cap, the Ink amount, the
+      // recipient) instead of raw bytes (audit M-9).
+      const abis = abisFor(operations);
       const tx = new Transaction({
         signer,
         provider: getProvider(),
@@ -134,13 +139,13 @@ export function createKondorWallet() {
           chainId,
           payer: address,
           rcLimit: rcLimit.toString(),
-          sendAbis: false,
+          sendAbis: true,
           broadcast: true,
         },
       });
       for (const op of operations) await tx.pushOperation(op);
       const prepared = await tx.prepare();
-      const sent = await signer.sendTransaction(prepared, { broadcast: true, sendAbis: false });
+      const sent = await signer.sendTransaction(prepared, { broadcast: true, sendAbis: true, abis });
       const transaction = sent.transaction || prepared;
       return {
         transactionId: transaction.id,
@@ -148,6 +153,37 @@ export function createKondorWallet() {
       };
     },
   };
+}
+
+/**
+ * Before the page reports a KOIN Vault request as sent, read the transaction
+ * Vault named back from the Koinos node and check it is the one this page
+ * asked for: same id, chain and contract calls (audit W1-04). Throws if it
+ * differs, or if the node doesn't have it within `waitMs`.
+ */
+export async function verifyVaultTransaction(txid, operations, chainId, deps = {}) {
+  const lookup = deps.lookup || lookupTransaction;
+  const wait = deps.sleep || sleep;
+  const waitMs = deps.waitMs == null ? 90000 : deps.waitMs;
+  const now = deps.now || Date.now;
+  const until = now() + waitMs;
+  for (;;) {
+    const row = await lookup(txid).catch(() => null);
+    const transaction = row && row.transaction;
+    if (transaction) {
+      const why = vaultTransactionMismatch(transaction, operations, { txid, chainId });
+      if (why) {
+        throw new Error("KOIN Vault reported transaction " + txid + " as sent, but it is not what this page asked for (" + why +
+          "). This page does not count it as done. Check your account on a block explorer.");
+      }
+      return transaction;
+    }
+    if (now() >= until) {
+      throw new Error("KOIN Vault says it sent transaction " + txid + ", but the network doesn't show it yet, so this page can't check it. " +
+        "Look it up on a block explorer before you try again, so nothing is sent twice.");
+    }
+    await wait(3000);
+  }
 }
 
 export function createVaultWallet(pageNetwork) {
@@ -218,7 +254,9 @@ export function createVaultWallet(pageNetwork) {
       }
       onChange({ phase: "degraded", address, expiresAt });
     }
-    if (credentials) pollTimer = setTimeout(poll, 2000);
+    // Every status call carries the session secret: ask every 2 seconds
+    // while pairing, then every 10 seconds once connected (W1-05).
+    if (credentials) pollTimer = setTimeout(poll, address ? 10000 : 2000);
   }
 
   return {
@@ -323,6 +361,8 @@ export function createVaultWallet(pageNetwork) {
           if (hooks && hooks.onProgress) hooks.onProgress({ phase: "submitting" });
         } else if (status.status === "approved") {
           if (!status.txid) throw new Error("KOIN Vault approved the request but did not return a transaction id.");
+          if (hooks && hooks.onProgress) hooks.onProgress({ phase: "verifying" });
+          await verifyVaultTransaction(status.txid, operations, chainId);
           return { transactionId: status.txid, receipt: null };
         } else if (status.status === "rejected") {
           throw new Error("You declined this in KOIN Vault. Nothing was sent.");

@@ -4,6 +4,7 @@
 import { Base58, MockVM, System, authority, chain, Protobuf, system_calls } from "@koinos/sdk-as";
 import { Stories } from "../Stories";
 import { stories } from "../proto/stories";
+import { reviewedTakedown, ownEditArgs } from "./reviewed";
 
 export const STORIES = Base58.decode("16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt");
 export const INK = Base58.decode("13Qrdvv3cXys9aryjZho6vHxDW3PRgX5pm");
@@ -132,7 +133,7 @@ export function ownerEdit(as: Uint8Array, id: u64, seq: u64, text: string): void
   else allowCalls(1);
   // max_ink: the growth price the page would show (AB-049).
   const growth: u64 = <u64>text.length > current ? <u64>text.length - current : 0;
-  new Stories().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length, growth));
+  new Stories().edit_segment(ownEditArgs(as, id, seq, text, <u64>text.length, growth));
   checkpoint();
 }
 export function ownerRemove(as: Uint8Array, id: u64, seq: u64): void {
@@ -143,7 +144,7 @@ export function ownerRemove(as: Uint8Array, id: u64, seq: u64): void {
 }
 export function takedown(id: u64, seq: u64, who: Uint8Array): void {
   authorize(STORIES);
-  new Stories().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-010", who));
+  new Stories().takedown_segment(reviewedTakedown(id, seq, COPYRIGHT, "notice 2026-010", who));
   checkpoint();
 }
 export function mintsTo(who: Uint8Array): u64 {

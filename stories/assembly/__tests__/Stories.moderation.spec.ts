@@ -17,6 +17,7 @@
 import { Base58, MockVM, System, authority, chain, Protobuf, system_calls } from "@koinos/sdk-as";
 import { Stories } from "../Stories";
 import { stories } from "../proto/stories";
+import { reviewedTakedown, ownEditArgs } from "./reviewed";
 
 const STORIES = Base58.decode("16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt");
 const INK = Base58.decode("13Qrdvv3cXys9aryjZho6vHxDW3PRgX5pm");
@@ -174,7 +175,7 @@ function report(who: Uint8Array, id: u64, seq: u64): void {
 
 function takedown(id: u64, seq: u64): void {
   directly(); authorize(STORIES);
-  c().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-001"));
+  c().takedown_segment(reviewedTakedown(id, seq, COPYRIGHT, "notice 2026-001"));
   checkpoint();
 }
 
@@ -201,7 +202,7 @@ function fillAndLock(id: u64): void {
 
 function closeStory(id: u64): void {
   directly(); authorize(ALICE); allowCalls(1);
-  c().close_story(new stories.close_story_arguments(ALICE, id, USDT));
+  c().close_story(new stories.close_story_arguments(ALICE, id));
   checkpoint();
 }
 
@@ -490,13 +491,13 @@ describe("Moderation: admin takedown", () => {
   it("is admin-only, direct-only, needs a reason, and happens once", () => {
     open(OPENING);
     setModerator();
-    fails(() => { authorize(BOT); c().takedown_segment(new stories.takedown_segment_arguments(1, 1, COPYRIGHT, "")); }, "STORIES: admin authority required");
-    fails(() => { authorize(ALICE); c().takedown_segment(new stories.takedown_segment_arguments(1, 1, COPYRIGHT, "")); }, "STORIES: admin authority required");
-    fails(() => { viaOtherContract(); authorize(STORIES); c().takedown_segment(new stories.takedown_segment_arguments(1, 1, COPYRIGHT, "")); }, DIRECT_ONLY);
-    fails(() => { directly(); authorize(STORIES); c().takedown_segment(new stories.takedown_segment_arguments(1, 1, NO_REASON, "")); }, "STORIES: give a reason");
-    fails(() => { directly(); authorize(STORIES); c().takedown_segment(new stories.takedown_segment_arguments(1, 9, COPYRIGHT, "")); }, "STORIES: unknown segment");
+    fails(() => { authorize(BOT); c().takedown_segment(reviewedTakedown(1, 1, COPYRIGHT, "")); }, "STORIES: admin authority required");
+    fails(() => { authorize(ALICE); c().takedown_segment(reviewedTakedown(1, 1, COPYRIGHT, "")); }, "STORIES: admin authority required");
+    fails(() => { viaOtherContract(); authorize(STORIES); c().takedown_segment(reviewedTakedown(1, 1, COPYRIGHT, "")); }, DIRECT_ONLY);
+    fails(() => { directly(); authorize(STORIES); c().takedown_segment(reviewedTakedown(1, 1, NO_REASON, "")); }, "STORIES: give a reason");
+    fails(() => { directly(); authorize(STORIES); c().takedown_segment(reviewedTakedown(1, 9, COPYRIGHT, "")); }, "STORIES: unknown segment");
     takedown(1, 1);
-    fails(() => { directly(); authorize(STORIES); c().takedown_segment(new stories.takedown_segment_arguments(1, 1, COPYRIGHT, "")); }, "STORIES: part was already taken down");
+    fails(() => { directly(); authorize(STORIES); c().takedown_segment(reviewedTakedown(1, 1, COPYRIGHT, "")); }, "STORIES: part was already taken down");
   });
 
   it("reopens a locked story when a takedown frees space", () => {
@@ -696,7 +697,7 @@ function ownEdit(as: Uint8Array, id: u64, seq: u64, text: string): void {
   // Growing the part reads the Writer membership and burns the added letters.
   if (<u64>text.length > seg(id, seq).current_cost) MockVM.setCallContractResults([writerAnswer(), okCall()]);
   else allowCalls(1);
-  c().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length));
+  c().edit_segment(ownEditArgs(as, id, seq, text, <u64>text.length));
   checkpoint();
 }
 
@@ -731,13 +732,13 @@ function strikes(who: Uint8Array): u32 {
 
 function takedownStriking(id: u64, seq: u64, who: Uint8Array): void {
   directly(); authorize(STORIES);
-  c().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-002", who));
+  c().takedown_segment(reviewedTakedown(id, seq, COPYRIGHT, "notice 2026-002", who));
   checkpoint();
 }
 
 function takedownNoStrike(id: u64, seq: u64): void {
   directly(); authorize(STORIES);
-  c().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-003", new Uint8Array(0), true));
+  c().takedown_segment(reviewedTakedown(id, seq, COPYRIGHT, "notice 2026-003", new Uint8Array(0), true));
   checkpoint();
 }
 
@@ -747,7 +748,7 @@ let TD_WHO: Uint8Array = new Uint8Array(0);
 let TD_NO_STRIKE = false;
 function takedownAs(): void {
   directly(); authorize(STORIES);
-  c().takedown_segment(new stories.takedown_segment_arguments(1, TD_SEQ, COPYRIGHT, "notice 2026-004", TD_WHO, TD_NO_STRIKE));
+  c().takedown_segment(reviewedTakedown(1, TD_SEQ, COPYRIGHT, "notice 2026-004", TD_WHO, TD_NO_STRIKE));
 }
 function aim(seq: u64, who: Uint8Array, noStrike: bool): void {
   TD_SEQ = seq; TD_WHO = who; TD_NO_STRIKE = noStrike;

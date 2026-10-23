@@ -24,120 +24,21 @@
 //   before the run) is marked checked and skipped for good. The opener then
 //   restores it (allowed: hidden_by 1) and the copied text is never checked.
 //
-// The real check.mjs is run in a child process with koilib and fetch
-// replaced by in-memory fakes (no network, no chain). Each attack test
+// Runs the real checker (load, plan, apply) through the shared harness
+// (harness.mjs: fake koilib and fetch, no network). Each attack test
 // asserts the SAFE behaviour and FAILS while the attack works. The
 // "control" tests show the harness works (they pass on the current code).
-// Copy into checker/__tests__/ and run: node --test checker/__tests__/
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import test from "node:test";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { BOOKPAGE, MOD, WRITER, run as runChecker, workdir, writeState } from "./harness.mjs";
 
-const CHECK = fileURLToPath(new URL("../check.mjs", import.meta.url));
-const MOD = "1KTTsD354hZMEuZkYvVoEevDV6xuPaoEtt";
-const WRITER = "1NJrBLUNiGRU66FNu1VmaTNsm8qs7ADXyf";
-const STORIES = "16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt";
-const TESTNET_CHAIN = "EiAIKVvm6-V2qmsmUvPJy09vCCLbtn9lHFpwrJbcTIEWRQ==";
-const BOOK = { title: "The Night Circus", author: "Erin Morgenstern" };
+const BOOK = { title: "The Night Circus", author: "Erin Morgenstern", published: "1960" };
 const CITATION = "From The Night Circus by Erin Morgenstern";
-const COPIED =
-  "The circus arrives without warning. No announcements precede it, no paper notices on downtown posts and billboards, " +
-  "no mentions or advertisements in local newspapers. It is simply there, when yesterday it was not. The towering tents " +
-  "are striped in white and black, no golds and crimsons to be seen. No color at all, save for the neighboring trees and " +
-  "the grass of the surrounding fields. Black and white stripes on grey sky; countless tents of varying shapes and sizes, " +
-  "with an elaborate wrought iron fence encasing them in a colorless world. Even what little ground is visible from outside " +
-  "is black or white, painted or powdered, or treated with some other circus trick.";
+const COPIED = BOOKPAGE;
 
-// Fake koilib + fetch, loaded with --import before check.mjs.
-const PRELOAD = String.raw`
-import Module from "node:module";
-import fs from "node:fs";
-const sc = JSON.parse(fs.readFileSync(process.env.RT_SCENARIO, "utf8"));
-const log = (e) => fs.appendFileSync(process.env.RT_LOG, JSON.stringify(e) + "\n");
-function read(name, args) {
-  if (name === "get_config") return sc.config;
-  if (name === "get_story") return sc.stories[String(args.story_id)] || {};
-  if (name === "get_segment") return sc.segments[args.story_id + ":" + args.seq] || {};
-  if (name === "get_segments") {
-    const st = sc.stories[String(args.story_id)] || {};
-    const out = [];
-    for (let s = Number(args.start); s < Number(args.start) + Number(args.limit) && s <= Number(st.segment_count || 0); s++)
-      out.push(sc.segments[args.story_id + ":" + s] || {});
-    return { values: out };
-  }
-  return {};
-}
-class Provider {
-  async getChainId() { return sc.chainId; }
-  async getAccountRc() { return sc.rc; }
-}
-class Signer {
-  static fromWif() { return new Signer(); }
-  getAddress() { return sc.config.moderator; }
-}
-class Contract {
-  constructor() {
-    this.functions = new Proxy({}, { get: (_, name) => async (args) => ({ result: read(String(name), args || {}) }) });
-  }
-  async encodeOperation(op) { return op; }
-}
-class Transaction {
-  constructor() { this.ops = []; }
-  async pushOperation(op) { this.ops.push(op); }
-  async prepare() {}
-  async sign() {}
-  async send() { for (const op of this.ops) log({ op: op.name, args: op.args }); return { reverted: false }; }
-  async wait() {}
-}
-const fake = { Provider, Signer, Contract, Transaction };
-const load = Module._load;
-Module._load = function (request) {
-  if (request === "koilib") return fake;
-  return load.apply(this, arguments);
-};
-globalThis.fetch = async (url) => {
-  const q = new URL(String(url)).searchParams.get("q") || "";
-  const phrase = q.replace(/^"|"$/g, "");
-  const items = sc.book ? [{ id: "nc", volumeInfo: { title: sc.book.title, authors: [sc.book.author],
-    infoLink: "https://books.google.com/books?id=nc" }, searchInfo: { textSnippet: phrase } }] : [];
-  return { ok: true, status: 200, json: async () => ({ items }) };
-};
-`;
-
-function workdir() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rt-imp-checker-"));
-  fs.writeFileSync(path.join(dir, "preload.mjs"), PRELOAD);
-  return dir;
-}
-
-/** Runs check.mjs once against the scenario; returns { ops, state }. */
+/** One run (load, plan, apply); { wif, books }: whether the moderator key and the Google Books key are set. */
 function run(dir, scenario, { wif = true, books = false } = {}) {
-  const scen = path.join(dir, "scenario.json");
-  const logFile = path.join(dir, "ops.log");
-  const stateFile = path.join(dir, "state.json");
-  fs.writeFileSync(scen, JSON.stringify({ chainId: TESTNET_CHAIN, rc: "100000000", book: null, ...scenario }));
-  fs.writeFileSync(logFile, "");
-  const env = {
-    ...process.env,
-    STORIES_ADDRESS: STORIES, RPC: "", EXPECTED_CHAIN_ID: "", DRY_RUN: "", TEST_PHRASE: "", GITHUB_STEP_SUMMARY: "",
-    MODERATOR_WIF: wif ? "5Kfake-moderator-wif" : "",
-    GOOGLE_BOOKS_KEY: books ? "fake-key" : "", TAVILY_API_KEY: "", BRAVE_API_KEY: "",
-    STATE_FILE: stateFile, RT_SCENARIO: scen, RT_LOG: logFile,
-  };
-  const r = spawnSync(process.execPath, ["--import", pathToFileURL(path.join(dir, "preload.mjs")).href, CHECK],
-    { env, cwd: dir, encoding: "utf8", timeout: 60000 });
-  assert.equal(r.status, 0, "check.mjs did not finish: " + r.stdout + r.stderr);
-  const ops = fs.readFileSync(logFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
-  const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
-  return { ops, state, out: r.stdout };
-}
-
-function writeState(dir, state) {
-  fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ checked: {}, swept: {}, index: {}, ...state }));
+  return runChecker(dir, { book: null, copiedText: COPIED, ...scenario }, { MODERATOR_WIF: wif ? "5Kfake-moderator-wif" : "", GOOGLE_BOOKS_KEY: books ? "fake-key" : "" });
 }
 
 const config = { moderator: MOD, next_story_id: "2" };
@@ -187,7 +88,7 @@ test("RT-IMP B: a part hidden (by reports) when the checker reads it is still ch
   // Run 1: three sybil writer reports hid the copied part just before the run.
   run(dir, {
     config, stories: story, book: BOOK,
-    segments: { "1:1": { status: 1, hidden: true, hidden_by: 1, hidden_by_reports: true, citation: "", author: WRITER, text: COPIED, created_at: "1000" } },
+    segments: { "1:1": { status: 1, hidden: true, hidden_by: 1, citation: "", author: WRITER, text: COPIED, created_at: "1000" } },
   }, { books: true });
   // Run 2: the opener (who wrote it) restored it; the copied text is visible.
   const { ops } = run(dir, {

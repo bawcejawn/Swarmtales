@@ -95,11 +95,8 @@ test("versionPage asks get_versions for the part and returns its result (M1009, 
   assert.deepStrictEqual(await lib.readVersions(lib.versionPage(empty, "4", 7), 2), []);
 });
 
-test("takedown and legacy-parts read the history with versionPage", () => {
+test("takedown reads the history with versionPage", () => {
   assert.match(functionSource("cmdTakedown"), /lib\.readVersions\(lib\.versionPage\(storiesC, storyId, seq\)/);
-  const legacy = functionSource("cmdLegacyParts");
-  assert.match(legacy, /lib\.readVersions\(lib\.versionPage\(storiesC, storyId, seq\)/);
-  assert.match(legacy, /try \{[\s\S]{0,200}lib\.readVersions[\s\S]{0,200}\} catch \(e\)/, "a failed history read doesn't stop the list (AB-070)");
 });
 
 test("takedown stops for a strike choice when a part's history can't be read (AB-069)", () => {
@@ -115,20 +112,19 @@ test("hide: a missing part is refused with a clear message (M1188)", () => {
 });
 
 test("hide: the moderator key takes over a writer-reports hide, nothing else (AB-071)", () => {
-  const reports = { author: BOB, status: 1, hidden: true, hidden_by: 1, hidden_by_reports: true };
+  const reports = { author: BOB, status: 1, hidden: true, hidden_by: 1 };
   assert.match(lib.hidePlan(reports, true, MOD, ADMIN), /^HIDE AS THE CHECKER/);
-  const oldReports = { author: BOB, status: 1, hidden: true, hidden_by: 0, hidden_by_reports: true };
-  assert.match(lib.hidePlan(oldReports, true, MOD, ADMIN), /^HIDE AS THE CHECKER/);
-  const legacy = { author: BOB, status: 1, hidden: true, hidden_by: 0, hidden_by_reports: false };
-  assert.throws(() => lib.hidePlan(legacy, true, MOD, ADMIN), /Only the admin key can take over/);
+  assert.throws(() => lib.hidePlan({ ...reports, hidden_by: 2 }, true, MOD, ADMIN), /Only the admin key can take over/);
   assert.match(lib.hidePlan(reports, true, ADMIN, ADMIN), /^HIDE AS THE ADMIN/);
 });
 
-test("hide: only the admin unhides a pre-upgrade hide reports didn't make (AB-074)", () => {
-  const legacy = { author: BOB, status: 1, hidden: true, hidden_by: 0, hidden_by_reports: false };
-  assert.throws(() => lib.hidePlan(legacy, false, MOD, ADMIN), /only the admin key can unhide/);
-  assert.match(lib.hidePlan(legacy, false, ADMIN, ADMIN), /^UNHIDE/);
-  assert.match(lib.hidePlan({ ...legacy, hidden_by: 2 }, false, MOD, ADMIN), /^UNHIDE/);
+test("hide: a hidden part that names nobody as its hider is refused for every key (fresh contracts always set hidden_by)", () => {
+  const odd = { author: BOB, status: 1, hidden: true, hidden_by: 0 };
+  for (const actor of [MOD, ADMIN]) {
+    assert.throws(() => lib.hidePlan(odd, false, actor, ADMIN), /says nobody hid it/);
+    assert.throws(() => lib.hidePlan(odd, true, actor, ADMIN), /says nobody hid it/);
+  }
+  assert.match(lib.hidePlan({ ...odd, hidden_by: 2 }, false, MOD, ADMIN), /^UNHIDE/);
 });
 
 test("hide: deploy.js hands hidePlan the contract's admin address, not the config (M1111)", () => {

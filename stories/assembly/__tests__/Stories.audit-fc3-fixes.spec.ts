@@ -1,7 +1,6 @@
 // Fixes for the third October fix check (AB-059 to AB-066, AB-046 residual) that the
 // audit's proof tests don't cover in MockVM. Each `it` asserts the new rule.
-//   AB-059: a takedown decides the strike first and reads no version text, except on
-//           parts small enough to be from before other_version (61 versions or fewer).
+//   AB-059: a takedown decides the strike first and reads no version text.
 //   AB-060: get_versions returns at most 5 versions per call (from / count).
 //   AB-061/062: only the admin unhides an admin hide; the admin takes over other hides
 //           in place; a checker hide the checker undoes itself is refundable again.
@@ -53,8 +52,8 @@ function draft(i: i32): string {
 function bobEdits(id: u64, seq: u64, count: i32): void {
   for (let i = 1; i <= count; i++) ownerEdit(BOB, id, seq, draft(i));
 }
-// A kept version by someone else that no flag knows about: what a part revised
-// by the code before edited_by_others and other_version looks like (AB-052).
+// A kept version by someone else that no flag knows about (the takedown must
+// decide from the flags alone and never read versions, AB-059).
 function plantVersion(id: u64, seq: u64, v: u32, by: Uint8Array): void {
   const kept = new Storage.Map<Uint8Array, stories.segment_version>(STORIES, VERSIONS_SPACE_ID,
     stories.segment_version.decode, stories.segment_version.encode, null);
@@ -108,28 +107,6 @@ describe("AUDIT fix check 3 fixes", () => {
     plantVersion(gId, gSeq, 2, CARA);
     expect(autoTakedown).not.toThrow("AB-059: the takedown read the writer's versions");
     expect(strikes(BOB)).toBe(1, "the writer of a part nobody else changed gets the strike");
-  });
-
-  it("AB-059: a part small enough to be from the old code is still checked version by version", () => {
-    gId = openPublic();
-    gSeq = write(BOB, gId, BOB_TEXT);
-    bobEdits(gId, gSeq, 2);
-    plantVersion(gId, gSeq, 2, CARA);
-    expect(autoTakedown).toThrow("AB-052: an old change by someone else must stop the automatic strike");
-    MockVM.rollbackTransaction();
-    gWho = CARA;
-    expect(strikeWho).not.toThrow("AB-052: the wallet an old version names can be struck");
-    expect(strikes(CARA)).toBe(1);
-    expect(strikes(BOB)).toBe(0);
-  });
-
-  it("AB-059: a paid change sets other_version; the writer's own edits don't", () => {
-    gId = openPublic();
-    gSeq = write(BOB, gId, BOB_TEXT);
-    bobEdits(gId, gSeq, 3);
-    expect(segment(gId, gSeq).other_version).toBe(false);
-    revise(CARA, gId, gSeq, draft(3) + " and Cara adds a line.");
-    expect(segment(gId, gSeq).other_version).toBe(true);
   });
 
   it("AB-059: past the old limit a named changer is checked against the changer records alone", () => {
@@ -231,7 +208,6 @@ describe("AUDIT fix check 3 fixes", () => {
     expect(segment(gId, gSeq).hidden_by).toBe(1, "precondition: writer reports hid it");
     hide(STORIES, true);
     expect(segment(gId, gSeq).hidden_by).toBe(3);
-    expect(segment(gId, gSeq).hidden_by_reports).toBe(false);
     const before = mintsTo(BOB);
     ownerRemove(BOB, gId, gSeq);
     expect(mintsTo(BOB) - before).toBe(0);
@@ -266,20 +242,5 @@ describe("AUDIT fix check 3 fixes", () => {
     ownerRemove(BOB, gId, gSeq);
     expect(bobSummary).toThrow("AB-066: no part of Bob's is left in the story");
     MockVM.rollbackTransaction();
-  });
-
-  it("AB-066: a wallet that wrote before parts were counted goes by its Ink total", () => {
-    gId = openPublic();
-    gSeq = write(BOB, gId, BOB_TEXT);
-    const live = new Storage.Map<Uint8Array, stories.uint32>(STORIES, LIVE_PARTS_SPACE_ID, stories.uint32.decode, stories.uint32.encode, null);
-    live.remove(join(u64Key(gId), BOB));
-    const segs = new Storage.Map<Uint8Array, stories.segment>(STORIES, SEGMENTS_SPACE_ID, stories.segment.decode, stories.segment.encode, null);
-    const key = join(u64Key(gId), u64Key(gSeq));
-    const seg = segs.get(key)!;
-    seg.live_counted = false;
-    segs.put(key, seg);
-    checkpoint();
-    expect(bobSummary).not.toThrow("a pre-upgrade writer keeps the summary right their Ink total gives");
-    checkpoint();
   });
 });

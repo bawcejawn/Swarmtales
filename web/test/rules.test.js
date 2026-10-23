@@ -30,7 +30,6 @@ test("writing is refused for cost, space, membership, and privacy", () => {
   assert.match(assessWrite({ ...openStory, balance: "2" }).problems.join(" "), /balance/);
   assert.match(assessWrite({ ...openStory, writerActive: false, promoClaimed: false }).problems.join(" "), /Writer/);
   assert.match(assessWrite({ ...openStory, visibility: 3, writerActive: true }).problems.join(" "), /invites/);
-  assert.match(assessWrite({ ...openStory, visibility: 2, writerActive: true }).problems.join(" "), /invites/);
   // Opener: no Writer month needed. Editor: needs one (no trial here).
   assert.equal(assessWrite({ ...openStory, visibility: 3, privileged: true, isOpener: true }).ok, true);
   assert.match(assessWrite({ ...openStory, visibility: 3, privileged: true, writerActive: false, promoClaimed: true }).problems.join(" "), /Writer month/);

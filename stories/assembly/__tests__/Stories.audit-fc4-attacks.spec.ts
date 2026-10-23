@@ -4,12 +4,7 @@
 // sides. Each `it` asserts the SAFE behaviour; a failing `it` is a finding.
 //   forfeit-bypass  AB-062: after a restored checker hide, a trim keeps
 //                   `charged`; a sock's paid removal then refunds all of it.
-//   legacy-grown    AB-059 edge: an old part revised by someone else before
-//                   edited_by_others, then edited by its writer past 61
-//                   versions, loses the version scan.
 //   invite          AB-046: a blocked opener still creates invites.
-//   legacy-writer   AB-066: a pre-upgrade writer who writes one new part and
-//                   removes it loses summary rights though their old part lives.
 //   takeover/*      AB-061/062 controls (expected to pass).
 // Copy into stories/assembly/__tests__/ (uses the repo's auditFixHelpers.ts).
 // =====================================================================
@@ -80,23 +75,6 @@ function bobSummary(): void {
   authorize(BOB);
   new Stories().set_story_summary(new stories.set_story_summary_arguments(BOB, gId, "Bob sums it up."));
 }
-// What the revise_part-era code (before edited_by_others, partEditors, other_version and
-// live parts) left for a part someone else revised.
-function asOlderCodeLeftIt(id: u64, seq: u64, changer: Uint8Array): void {
-  const segs = new Storage.Map<Uint8Array, stories.segment>(STORIES, SEGMENTS_SPACE_ID, stories.segment.decode, stories.segment.encode, null);
-  const key = join(u64Key(id), u64Key(seq));
-  const seg = segs.get(key)!;
-  seg.edited_by_others = false;
-  seg.paid_changes = 0;
-  seg.other_version = false;
-  seg.live_counted = false;
-  segs.put(key, seg);
-  new Storage.Map<Uint8Array, stories.boole>(STORIES, PART_EDITORS_SPACE_ID, stories.boole.decode, stories.boole.encode, null).remove(join(key, changer));
-  new Storage.Map<Uint8Array, stories.address_list>(STORIES, PART_CHANGERS_SPACE_ID, stories.address_list.decode, stories.address_list.encode, null).remove(key);
-  new Storage.Map<Uint8Array, stories.uint32>(STORIES, LIVE_PARTS_SPACE_ID, stories.uint32.decode, stories.uint32.encode, null).remove(join(u64Key(id), BOB));
-  checkpoint();
-}
-
 describe("AUDIT fc4: attacks on the AB-059..066 fixes", () => {
   beforeEach(() => { reset(); configure(); });
 
@@ -116,29 +94,6 @@ describe("AUDIT fc4: attacks on the AB-059..066 fixes", () => {
     expect(mintsTo(BOB) - before).toBe(0, "AB-062 bypass: a 20-Ink paid removal refunded the forfeited part's 1,000 Ink to its writer");
   });
 
-  it("legacy-grown: an old part someone else revised is still 'changed' after its writer edits it past 61 versions", () => {
-    gId = openPublic();
-    gSeq = write(BOB, gId, BOB_TEXT);
-    revise(CARA, gId, gSeq, BOB_TEXT + " Then Cara pasted a copied page here.");
-    asOlderCodeLeftIt(gId, gSeq, CARA);
-    for (let i = 1; i <= 60; i++) ownerEdit(BOB, gId, gSeq, draft(i));
-    expect(segment(gId, gSeq).version_count).toBe(62);
-    expect(autoTakedown).toThrow("AB-052/059 edge: the writer was struck automatically for an old change by Cara");
-    MockVM.rollbackTransaction();
-  });
-
-  it("legacy-grown: the admin can still strike the wallet an old version names, past 61 versions", () => {
-    gId = openPublic();
-    gSeq = write(BOB, gId, BOB_TEXT);
-    revise(CARA, gId, gSeq, BOB_TEXT + " Then Cara pasted a copied page here.");
-    asOlderCodeLeftIt(gId, gSeq, CARA);
-    for (let i = 1; i <= 60; i++) ownerEdit(BOB, gId, gSeq, draft(i));
-    gWho = CARA;
-    expect(strikeWho).not.toThrow("AB-052/059 edge: the old changer can no longer be struck");
-    expect(strikes(CARA)).toBe(1);
-    expect(strikes(BOB)).toBe(0);
-  });
-
   it("invite: a blocked opener can't create invites (another way to change who may write, AB-046)", () => {
     gId = openAs(PRIVATE, 10000);
     authorize(STORIES);
@@ -146,16 +101,6 @@ describe("AUDIT fc4: attacks on the AB-059..066 fixes", () => {
     checkpoint();
     expect(blockedOpenerInvites).toThrow("AB-046 residual: a blocked opener created a 1,000-use invite");
     MockVM.rollbackTransaction();
-  });
-
-  it("legacy-writer: a pre-upgrade writer keeps summary rights while their old part is live", () => {
-    gId = openPublic();
-    gSeq = write(BOB, gId, BOB_TEXT);
-    asOlderCodeLeftIt(gId, gSeq, CARA);           // Bob's part 1 is from before parts were counted
-    const second = write(BOB, gId, "Bob adds a second part after the upgrade.");
-    ownerRemove(BOB, gId, second);
-    expect(segment(gId, gSeq).status).toBe(stories.segment_status.SEGMENT_ACTIVE);
-    expect(bobSummary).not.toThrow("AB-066 edge: Bob's old part is live, but removing his new one took his summary right");
   });
 
   it("takeover control: the admin takes over a checker hide in place; the opener then can't restore; hidden_count unchanged", () => {

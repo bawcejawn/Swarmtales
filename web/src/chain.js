@@ -7,6 +7,7 @@ import { abis } from "./generated/abis.js";
 import { assertExpectedChain, contracts, network } from "./config.js";
 import { headTimeSeconds } from "./lib/money.js";
 import { confirmTransaction } from "./lib/confirm.js";
+import { readAllSegments } from "./lib/segments.js";
 
 let provider;
 let verifiedChainId = "";
@@ -68,6 +69,26 @@ export async function encode(name, method, args) {
 }
 
 /**
+ * The ABIs of the contracts these operations call, keyed by contract id, so
+ * a wallet that can decode them (Kondor) shows the function and its
+ * arguments (max_price, min_ink, ...) in its confirm window (audit M-9).
+ */
+export function abisFor(operations) {
+  const known = {
+    [contracts.ink]: abis.ink,
+    [contracts.shop]: abis.shop,
+    [contracts.stories]: abis.stories,
+    [contracts.paymentToken]: utils.tokenAbi,
+  };
+  const out = {};
+  for (const op of operations || []) {
+    const id = op && op.call_contract && op.call_contract.contract_id;
+    if (id && known[id]) out[id] = known[id];
+  }
+  return out;
+}
+
+/**
  * Mana a wallet can use right now. After a transaction, the node keeps its
  * whole mana limit set aside for a few minutes, even once it is in a block.
  */
@@ -83,13 +104,6 @@ export async function freeMana(address) {
   return { total, reserved, free: total > reserved ? total - reserved : 0n };
 }
 
-/** Ask for what an action measured, plus a quarter, and never more than is free. */
-export function manaLimit(used, free) {
-  let limit = (BigInt(used) * 125n) / 100n + 1000000n;
-  if (limit > free) limit = free;
-  return limit;
-}
-
 export async function getMana(address) {
   return getProvider().getAccountRc(address);
 }
@@ -100,7 +114,7 @@ export async function getHeadSeconds() {
 }
 
 export async function loadAccount(address) {
-  const [mana, token, ink, membership, promo, openCount, trial, now] = await Promise.all([
+  const [mana, token, ink, membership, promo, openCount, trial, now, status, mult] = await Promise.all([
     getMana(address),
     read("token", "balanceOf", { owner: address }),
     read("ink", "balance_of", { owner: address }),
@@ -109,11 +123,9 @@ export async function loadAccount(address) {
     read("stories", "get_open_count", { account: address }),
     read("stories", "get_trial_used", { account: address }),
     getHeadSeconds(),
+    read("stories", "get_account_status", { account: address }),
+    read("stories", "get_open_multiplier", { account: address }),
   ]);
-  // Older Stories contracts have no account status: treat as not blocked.
-  const status = await read("stories", "get_account_status", { account: address }).catch(() => null);
-  // Older Stories contracts have no doubling price: treat as normal price.
-  const mult = await read("stories", "get_open_multiplier", { account: address }).catch(() => null);
   return {
     blocked: !!(status && status.blocked),
     strikes: status && status.strikes ? Number(status.strikes) : 0,
@@ -147,7 +159,7 @@ async function mapPool(items, limit, fn) {
 }
 
 export async function loadOverview() {
-  const [storiesCfg, shopCfg, asset, writerPrice, shortPrice, bookPrice, packS, packM, packL] = await Promise.all([
+  const [storiesCfg, shopCfg, asset, writerPrice, shortPrice, bookPrice, packS, packM, packL, tokenDecimals, now] = await Promise.all([
     read("stories", "get_config", {}),
     read("shop", "get_config", {}),
     read("shop", "get_asset", { token: contracts.paymentToken }),
@@ -157,6 +169,9 @@ export async function loadOverview() {
     read("shop", "get_price", { item: 3, token: contracts.paymentToken }),
     read("shop", "get_price", { item: 4, token: contracts.paymentToken }),
     read("shop", "get_price", { item: 5, token: contracts.paymentToken }),
+    // The token's own decimals, checked against config.js before any price is shown (M-8).
+    read("token", "decimals", {}).catch(() => null),
+    getHeadSeconds(),
   ]);
   const price = (r) => (r && r.value ? r.value : "0");
   const nextCat = Number((storiesCfg && storiesCfg.next_category_id) || 0);
@@ -179,6 +194,8 @@ export async function loadOverview() {
       { item: 5, name: "Large", price: price(packL), ink: (shopCfg && shopCfg.pack_l_ink) || "0" },
     ],
     categories,
+    tokenDecimals: tokenDecimals && tokenDecimals.value != null ? Number(tokenDecimals.value) : null,
+    now: Number(now || 0),
   };
 }
 
@@ -195,27 +212,36 @@ export async function listStories(nextStoryId) {
   return { stories: rows.filter((row) => Number(row.story.status || 0) !== 0), truncated: last > cap };
 }
 
+/** One part, read on its own. */
+export async function loadSegment(storyId, seq) {
+  return read("stories", "get_segment", { story_id: String(storyId), seq: String(seq) });
+}
+
+/** A page of parts from `start` (at most `limit`): { values, next }. */
+export async function loadSegmentPage(storyId, start, limit) {
+  return read("stories", "get_segments", { story_id: String(storyId), start: String(start), limit });
+}
+
+/**
+ * A story and all its parts. Parts are read a few at a time, following the
+ * contract's `next`, and one by one where a page can't be read (M-5).
+ */
 export async function loadStory(id) {
   const story = await read("stories", "get_story", { story_id: String(id) });
   const count = Number((story && story.segment_count) || 0);
-  const segments = [];
-  if (Number(story && story.status) !== 0 && count > 0) {
-    for (let start = 1; start <= count; start += 10) {
-      const page = await read("stories", "get_segments", {
-        story_id: String(id),
-        start: String(start),
-        limit: 10,
-      });
-      const values = page && Array.isArray(page.values) ? page.values : [];
-      segments.push(...values);
-    }
-  }
+  const segments = Number(story && story.status) !== 0 && count > 0
+    ? await readAllSegments({
+      readPage: (start, limit) => loadSegmentPage(id, start, limit),
+      readOne: (seq) => loadSegment(id, seq),
+      count,
+    })
+    : [];
   return { story: story || {}, segments };
 }
 
-/** Whether this wallet already reported a part (false on older contracts). */
+/** Whether this wallet already reported a part. */
 export async function hasReported(storyId, seq, address) {
-  const r = await read("stories", "has_reported", { story_id: String(storyId), seq: String(seq), account: address }).catch(() => null);
+  const r = await read("stories", "has_reported", { story_id: String(storyId), seq: String(seq), account: address });
   return !!(r && r.value);
 }
 

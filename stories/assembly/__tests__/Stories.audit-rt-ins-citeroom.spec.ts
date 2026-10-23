@@ -24,6 +24,7 @@ import { stories } from "../proto/stories";
 import {
   ALICE, BOB, COPYRIGHT, STORIES, authorize, checkpoint, configure, openPublic, reset, strikes, write,
 } from "./auditFixHelpers";
+import { reviewedTakedown } from "./reviewed";
 
 const BASE = Base58.decode("1PJLazQ9eg25WRsBbcgVfc9ng2cR1cRT52");
 let gId: u64 = 0;
@@ -51,7 +52,7 @@ function cite(who: Uint8Array, text: string): void {
 }
 function strikeAlice(): void {
   authorize(STORIES);
-  new Stories().takedown_segment(new stories.takedown_segment_arguments(gId, gSeq, COPYRIGHT, "notice 2026-777", ALICE, false));
+  new Stories().takedown_segment(reviewedTakedown(gId, gSeq, COPYRIGHT, "notice 2026-777", ALICE, false));
 }
 function inList(list: Uint8Array[], who: Uint8Array): bool {
   for (let i = 0; i < list.length; i++) {

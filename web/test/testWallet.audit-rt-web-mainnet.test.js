@@ -87,3 +87,21 @@ test("RT-WEB: createTestWallet refuses mainnet and missing networks", () => {
 // design. It was left out of the suite on purpose; the three tests above guard
 // what the fix does promise (no mainnet signing, testnet chain id only, the key
 // never sent).
+
+// Audit 2026-10 W1-08: the dry run must not hand the node a second, different
+// signed transaction. The dry run (broadcast false) and the real send are the
+// very same signed transaction.
+test("W1-08: the dry run and the real send are one and the same signed transaction", async () => {
+  calls.length = 0;
+  chainIdAnswer = NETWORKS.testnet.chainId;
+  await verifyChain();
+  const w = createTestWallet(NETWORKS.testnet);
+  await w.connect();
+  await w.signAndSend([op]);
+  const submitted = calls.filter((c) => c.method === "chain.submit_transaction");
+  assert.equal(submitted.length, 2, "one dry run, one send");
+  assert.equal(submitted[0].params.broadcast, false);
+  assert.equal(submitted[1].params.broadcast, true);
+  const signed = new Set(submitted.map((s) => JSON.stringify([s.params.transaction.id, s.params.transaction.signatures])));
+  assert.equal(signed.size, 1, "the node saw two different signed transactions");
+});

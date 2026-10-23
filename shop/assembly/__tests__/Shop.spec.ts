@@ -156,6 +156,14 @@ function setTime(at: u64): void {
   MockVM.setHeadInfo(new chain.head_info(null, at * 1000, 0));
 }
 
+// Payment tokens wait 7 days after they are enabled (C1-01): enable them
+// 8 days before START so purchases at START work.
+function setAssetEarly(token: Uint8Array, decimals: u32, symbol: string): void {
+  setTime(START - 8 * 86400);
+  new Shop().set_asset(new shop.set_asset_arguments(token, true, decimals, symbol));
+  setTime(START);
+}
+
 function okCall(): system_calls.exit_arguments {
   return new system_calls.exit_arguments(0, new chain.result(new Uint8Array(0)));
 }
@@ -310,8 +318,8 @@ function configure(): void {
   const c = new Shop();
   c.set_addresses(new shop.set_addresses_arguments(TREASURY, FOUNDER, INK, STORIES));
   c.set_ink_amounts(new shop.set_ink_amounts_arguments(15000, 5000, 15000, 45000, 20000, 10000));
-  c.set_asset(new shop.set_asset_arguments(USDT, true, 6, "USDT"));
-  c.set_asset(new shop.set_asset_arguments(EIGHT, true, 8, "EIGHT"));
+  setAssetEarly(USDT, 6, "USDT");
+  setAssetEarly(EIGHT, 8, "EIGHT");
   c.set_price(new shop.set_price_arguments(shop.item.ITEM_READER_MONTH, USDT, ONE_6));
   c.set_price(new shop.set_price_arguments(shop.item.ITEM_WRITER_MONTH, USDT, ONE_6 * 5));
   c.set_price(new shop.set_price_arguments(shop.item.ITEM_PACK_S, USDT, ONE_6 * 2));
@@ -319,8 +327,6 @@ function configure(): void {
   c.set_price(new shop.set_price_arguments(shop.item.ITEM_PACK_L, USDT, ONE_6 * 12));
   c.set_price(new shop.set_price_arguments(shop.item.ITEM_OPEN_BOOK, USDT, ONE_6 * 20));
   c.set_price(new shop.set_price_arguments(shop.item.ITEM_OPEN_SHORT, USDT, ONE_6 * 10));
-  c.set_price(new shop.set_price_arguments(shop.item.ITEM_CLOSE_BOOK, USDT, ONE_6 * 5));
-  c.set_price(new shop.set_price_arguments(shop.item.ITEM_CLOSE_SHORT, USDT, ONE_6 * 2));
   c.set_price(new shop.set_price_arguments(shop.item.ITEM_READER_MONTH, EIGHT, ONE_8));
   checkpoint();
 }
@@ -655,7 +661,7 @@ describe("Shop: stablecoin payments", () => {
     }).toThrow();
 
     authorize(SHOP);
-    new Shop().set_asset(new shop.set_asset_arguments(USDT, true, 6, "USDT"));
+    setAssetEarly(USDT, 6, "USDT");
     new Shop().set_price(new shop.set_price_arguments(shop.item.ITEM_READER_MONTH, USDT, 0));
     checkpoint();
     expect(() => {
@@ -688,7 +694,7 @@ describe("Shop: stablecoin payments", () => {
     authorize(SHOP);
     const c = new Shop();
     c.set_addresses(new shop.set_addresses_arguments(TREASURY, FOUNDER, new Uint8Array(0), STORIES));
-    c.set_asset(new shop.set_asset_arguments(USDT, true, 6, "USDT"));
+    setAssetEarly(USDT, 6, "USDT");
     c.set_price(new shop.set_price_arguments(shop.item.ITEM_READER_MONTH, USDT, ONE_6));
     checkpoint();
     allowPay(USDT, ONE_6, 0);
@@ -900,28 +906,7 @@ describe("Shop: story fees", () => {
     expect(getBal(USDT, ALICE)).toBe(0);
   });
 
-  it("collects the short-story close fee with no Ink", () => {
-    authorize(ALICE);
-    callAs(MALLORY);
-    expect(() => {
-      new Shop().pay_close_fee(new shop.pay_close_fee_arguments(ALICE, shop.story_kind.KIND_SHORT, USDT));
-    }).toThrow();
-
-    callAs(STORIES);
-    fund(USDT, ALICE, ONE_6 * 2);
-    allowPay(USDT, ONE_6 * 2, 0);
-    new Shop().pay_close_fee(new shop.pay_close_fee_arguments(ALICE, shop.story_kind.KIND_SHORT, USDT));
-    applyTransfers();
-    const pay = lastPayment();
-    expect(pay.item).toBe(shop.item.ITEM_CLOSE_SHORT);
-    expect(pay.price).toBe(ONE_6 * 2);
-    expect(pay.ink_amount).toBe(0);
-    expect(mints().length).toBe(0);
-    expect(getBal(USDT, TREASURY)).toBe(1980000);
-    expect(getBal(USDT, FOUNDER)).toBe(20000);
-  });
-
-  it("mints short-story starter Ink and the book close fee separately", () => {
+  it("mints short-story starter Ink", () => {
     authorize(ALICE);
     callAs(STORIES);
     allowPay(USDT, ONE_6 * 10, 1);
@@ -929,12 +914,6 @@ describe("Shop: story fees", () => {
     expect(decodeMint(mints()[0]).memo).toBe("open:short");
     expect(decodeMint(mints()[0]).value).toBe(10000);
     expect(lastPayment().price).toBe(ONE_6 * 10);
-
-    checkpoint();
-    allowPay(USDT, ONE_6 * 5, 0);
-    new Shop().pay_close_fee(new shop.pay_close_fee_arguments(ALICE, shop.story_kind.KIND_BOOK, USDT));
-    expect(lastPayment().item).toBe(shop.item.ITEM_CLOSE_BOOK);
-    expect(lastPayment().price).toBe(ONE_6 * 5);
   });
 });
 
@@ -1623,12 +1602,12 @@ describe("Shop: only direct calls (fix H1)", () => {
     expect(same(cfg.admin, SHOP)).toBe(true);
   });
 
-  it("still lets Stories, and only Stories, collect story fees", () => {
+  it("still lets Stories, and only Stories, collect the open fee", () => {
     callAs(STORIES);
     authorize(ALICE);
-    allowPay(USDT, ONE_6 * 2, 0);
-    new Shop().pay_close_fee(new shop.pay_close_fee_arguments(ALICE, shop.story_kind.KIND_SHORT, USDT));
-    expect(lastPayment().item).toBe(shop.item.ITEM_CLOSE_SHORT);
+    allowPay(USDT, ONE_6 * 10, 1);
+    new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_SHORT, USDT, 0, ANY_PRICE));
+    expect(lastPayment().item).toBe(shop.item.ITEM_OPEN_SHORT);
   });
 });
 
@@ -1922,5 +1901,292 @@ describe("Shop: mutation gaps (AB-058) and the set-once Ink address (AB-050)", (
     const cfg = new Shop().get_config(new shop.get_config_arguments());
     expect(same(cfg.ink, INK)).toBe(true);
     expect(same(cfg.treasury, CARA)).toBe(true);
+  });
+});
+
+// ---------- audit 2026-10 ----------
+
+function eventCount(name: string): i32 {
+  System.setSystemBufferSize(65536);
+  const events = MockVM.getEvents();
+  let n = 0;
+  for (let i = 0; i < events.length; i++) if (events[i].name == name) n++;
+  return n;
+}
+
+let minInk: u64 = 0;
+function buyPackWithMin(): void {
+  authorize(ALICE);
+  allowPay(USDT, ONE_6 * 2, 1);
+  new Shop().buy_pack(new shop.buy_pack_arguments(ALICE, shop.item.ITEM_PACK_S, USDT, ANY_PRICE, minInk));
+}
+function buyWriterWithMin(): void {
+  authorize(ALICE);
+  allowPay(USDT, ONE_6 * 5, 1);
+  new Shop().buy_membership(new shop.buy_membership_arguments(ALICE, shop.tier.TIER_WRITER, 1, USDT, null, ANY_PRICE, minInk));
+}
+function openFeeWithMin(): void {
+  callAs(STORIES);
+  authorize(ALICE);
+  allowPay(USDT, ONE_6 * 10, 1);
+  new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_SHORT, USDT, 0, ANY_PRICE, minInk));
+}
+function lowerInk(): void {
+  authorize(SHOP);
+  // Every amount drops to 1 between the quote and the purchase.
+  new Shop().set_ink_amounts(new shop.set_ink_amounts_arguments(1, 1, 1, 1, 1, 1));
+  checkpoint();
+}
+
+describe("Shop: purchases carry the buyer's minimum Ink (audit M-2)", () => {
+  beforeEach(() => {
+    MockVM.reset();
+    MockVM.setContractId(SHOP);
+    setTime(START);
+    callAs(new Uint8Array(0));
+    resetLedger();
+    checkpoint();
+    configure();
+  });
+
+  it("set_ink_amounts is a public event", () => {
+    const before = eventCount("shop.ink_amounts_event");
+    lowerInk();
+    expect(eventCount("shop.ink_amounts_event")).toBe(before + 1);
+  });
+
+  it("refuses a pack, a new Writer month and an open fee when the Ink was lowered after the quote", () => {
+    // The quotes the page showed: pack S 5,000, Writer month 15,000, short open 10,000.
+    allowPay(USDT, ONE_6 * 5, 1);
+    buyWriter(1);
+    checkpoint();
+    lowerInk();
+    minInk = 5000;
+    expect(() => { buyPackWithMin(); }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: this now brings 1 Ink, less than the 5000 you agreed to. Nothing was charged.");
+    MockVM.rollbackTransaction();
+    minInk = 10000;
+    expect(() => { openFeeWithMin(); }).toThrow();
+    MockVM.rollbackTransaction();
+    callAs(new Uint8Array(0));
+    // More months of ALICE's running term still bring her locked 15,000 a month,
+    // so the same quote goes through.
+    minInk = 15000;
+    buyWriterWithMin();
+    expect(membershipOf(ALICE).ink_per_month).toBe(15000);
+  });
+
+  it("refuses a new Writer term below the agreed Ink, and accepts the exact amount", () => {
+    minInk = 15001;
+    expect(() => { buyWriterWithMin(); }).toThrow();
+    MockVM.rollbackTransaction();
+    minInk = 15000;
+    buyWriterWithMin();
+    expect(decodeMint(mints()[0]).value).toBe(15000);
+  });
+
+  it("accepts the exact Ink on a pack and an open fee", () => {
+    allowPay(USDT, ONE_6 * 5, 1);
+    buyWriter(1);
+    checkpoint();
+    minInk = 5000;
+    buyPackWithMin();
+    checkpoint();
+    minInk = 10000;
+    openFeeWithMin();
+    expect(lastPayment().ink_amount).toBe(10000);
+  });
+});
+
+let assetDecimals: u32 = 6;
+function reEnableUsdt(): void {
+  authorize(SHOP);
+  new Shop().set_asset(new shop.set_asset_arguments(USDT, true, assetDecimals, "USDT"));
+}
+
+describe("Shop: a new payment token waits 7 days (audit C1-01)", () => {
+  beforeEach(() => {
+    MockVM.reset();
+    MockVM.setContractId(SHOP);
+    setTime(START);
+    callAs(new Uint8Array(0));
+    resetLedger();
+    checkpoint();
+    configure();
+  });
+
+  it("enabling announces the token and starts a 7-day wait; disabling is immediate", () => {
+    const before = eventCount("shop.asset_event");
+    authorize(SHOP);
+    new Shop().set_asset(new shop.set_asset_arguments(USDT, false, 6, "USDT"));
+    checkpoint();
+    expect(eventCount("shop.asset_event")).toBe(before + 1);
+    expect(new Shop().get_asset(new shop.get_asset_arguments(USDT)).usable_from).toBe(0);
+    expect(() => { buyReader(1, USDT); }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: asset is not accepted");
+    MockVM.rollbackTransaction();
+
+    authorize(SHOP);
+    new Shop().set_asset(new shop.set_asset_arguments(USDT, true, 6, "USDT"));
+    checkpoint();
+    expect(new Shop().get_asset(new shop.get_asset_arguments(USDT)).usable_from).toBe(START + 7 * DAY);
+    expect(() => { buyReader(1, USDT); }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: this token was enabled recently and can't be used yet");
+    MockVM.rollbackTransaction();
+
+    setTime(START + 7 * DAY - 1);
+    expect(() => { buyReader(1, USDT); }).toThrow();
+    MockVM.rollbackTransaction();
+    setTime(START + 7 * DAY);
+    allowPay(USDT, ONE_6, 0);
+    buyReader(1, USDT);
+    expect(lastPayment().price).toBe(ONE_6);
+  });
+
+  it("an enabled token keeps its wait and can't change decimals or symbol until it is turned off", () => {
+    assetDecimals = 6;
+    reEnableUsdt();   // same values: allowed, and the old usable_from stays
+    checkpoint();
+    expect(new Shop().get_asset(new shop.get_asset_arguments(USDT)).usable_from).toBe(START - 8 * DAY + 7 * DAY);
+    assetDecimals = 8;
+    expect(() => { reEnableUsdt(); }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: turn the token off before changing its decimals or symbol");
+  });
+});
+
+let giftTo: Uint8Array = new Uint8Array(0);
+function giftWriter(): void {
+  authorize(BOB);
+  allowPay(USDT, ONE_6 * 5, 1);
+  new Shop().buy_membership(new shop.buy_membership_arguments(BOB, shop.tier.TIER_WRITER, 1, USDT, giftTo, ANY_PRICE, 15000));
+}
+
+describe("Shop: a Writer gift keeps the recipient's Reader months (audit C1-03)", () => {
+  beforeEach(() => {
+    MockVM.reset();
+    MockVM.setContractId(SHOP);
+    setTime(START);
+    callAs(new Uint8Array(0));
+    resetLedger();
+    checkpoint();
+    configure();
+  });
+
+  it("saves the Reader time left and resumes it after the Writer term", () => {
+    allowPay(USDT, ONE_6 * 3, 0);
+    buyReader(3, USDT);                     // Reader until START + 3 periods
+    checkpoint();
+    setTime(START + DAY);
+    giftTo = ALICE;
+    giftWriter();
+    checkpoint();
+    let m = membershipOf(ALICE);
+    expect(m.tier).toBe(shop.tier.TIER_WRITER);
+    expect(m.paid_until).toBe(START + DAY + PERIOD);
+    expect(m.reader_left).toBe(PERIOD * 3 - DAY);
+
+    setTime(START + DAY + PERIOD);           // the Writer term ends
+    m = membershipOf(ALICE);
+    expect(m.tier).toBe(shop.tier.TIER_READER);
+    expect(m.paid_until).toBe(START + DAY + PERIOD + PERIOD * 3 - DAY);
+    expect(m.reader_left).toBe(0);
+    expect(m.ink_per_month).toBe(0);
+
+    // More Reader months extend the resumed term, and a pack is refused.
+    allowPay(USDT, ONE_6, 0);
+    buyReader(1, USDT);
+    expect(membershipOf(ALICE).paid_until).toBe(START + PERIOD * 5);
+  });
+
+  it("a Writer without saved Reader time simply ends", () => {
+    giftTo = ALICE;
+    giftWriter();
+    checkpoint();
+    setTime(START + PERIOD);
+    const m = membershipOf(ALICE);
+    expect(m.tier).toBe(shop.tier.TIER_WRITER);
+    expect(m.paid_until).toBe(START + PERIOD);
+  });
+});
+
+describe("Shop: a daily cap set mid-day counts that day's claims (audit C1-04)", () => {
+  beforeEach(() => {
+    MockVM.reset();
+    MockVM.setContractId(SHOP);
+    setTime(START);
+    callAs(new Uint8Array(0));
+    resetLedger();
+    checkpoint();
+    configure();
+  });
+
+  it("refuses the next claim when the new cap is already used up today", () => {
+    const id = openPromo(0, 1000, 10000, 0, START, START + DAY * 3);
+    claim(ALICE, id, 0);
+    checkpoint();
+    claim(BOB, id, 0);
+    checkpoint();
+    expect(new Shop().get_campaign(new shop.get_campaign_arguments(id)).used_today).toBe(2000);
+    authorize(SHOP);
+    new Shop().set_campaign_limits(new shop.set_campaign_limits_arguments(id, 10000, 2000, START + DAY * 3));
+    checkpoint();
+    failAccount = CARA; failId = id; failKey = 0;
+    expect(() => { failClaim(); }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: promo daily cap reached");
+    MockVM.rollbackTransaction();
+    setTime(START + DAY);
+    claim(CARA, id, 0);
+    expect(new Shop().get_campaign(new shop.get_campaign_arguments(id)).used_today).toBe(1000);
+  });
+});
+
+describe("Shop: the Stories address is set once (audit C1-07)", () => {
+  beforeEach(() => {
+    MockVM.reset();
+    MockVM.setContractId(SHOP);
+    setTime(START);
+    callAs(new Uint8Array(0));
+    resetLedger();
+    checkpoint();
+    configure();
+  });
+
+  it("refuses a new or cleared Stories address, and Ink equal to Stories", () => {
+    authorize(SHOP);
+    expect(() => {
+      new Shop().set_addresses(new shop.set_addresses_arguments(TREASURY, FOUNDER, INK, MALLORY));
+    }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: the Stories address is already set and can never be changed");
+    MockVM.rollbackTransaction();
+    authorize(SHOP);
+    expect(() => {
+      new Shop().set_addresses(new shop.set_addresses_arguments(TREASURY, FOUNDER, INK, new Uint8Array(0)));
+    }).toThrow();
+    MockVM.rollbackTransaction();
+    const before = eventCount("shop.addresses_event");
+    authorize(SHOP);
+    new Shop().set_addresses(new shop.set_addresses_arguments(CARA, FOUNDER, INK, STORIES));
+    checkpoint();
+    expect(eventCount("shop.addresses_event")).toBe(before + 1);
+  });
+
+  it("a fresh Shop refuses Ink and Stories at the same address", () => {
+    MockVM.reset();
+    MockVM.setContractId(SHOP);
+    setTime(START);
+    callAs(new Uint8Array(0));
+    checkpoint();
+    authorize(SHOP);
+    expect(() => {
+      new Shop().set_addresses(new shop.set_addresses_arguments(TREASURY, FOUNDER, INK, INK));
+    }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: Ink and Stories must be different contracts");
+  });
+
+  it("checks the direct call before writing the lock (Info: lock order)", () => {
+    callAs(MALLORY);
+    authorize(SHOP);
+    expect(() => { new Shop().set_paused(new shop.set_paused_arguments(true)); }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: call SwarmTales directly from your wallet, not through another contract");
   });
 });

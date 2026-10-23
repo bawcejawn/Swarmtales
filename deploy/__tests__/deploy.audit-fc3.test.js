@@ -47,12 +47,6 @@ test("readVersions reads nothing for a part that never changed", async () => {
   assert.deepStrictEqual(got, []);
 });
 
-test("takedown: a part with other_version set needs a choice even without its versions (AB-059)", () => {
-  const who = lib.takedownStrike({ author: BOB, other_version: true }, [], "", false, []);
-  assert.strictEqual(who.changed, true);
-  assert.strictEqual(who.needsChoice, true);
-});
-
 test("takedown carries on when the history can't be read, and says so (AB-060)", () => {
   const body = functionSource("cmdTakedown");
   assert.match(body, /lib\.readVersions\(/, "the takedown reads the history a few versions at a time");
@@ -66,8 +60,7 @@ test("hide: hiding an already-hidden part is the admin taking it over in one ste
   assert.match(lib.hidePlan(checker, true, ADMIN, ADMIN), /HIDE AS THE ADMIN/);
   assert.throws(() => lib.hidePlan(checker, true, MOD, ADMIN), /Only the admin key can take over/);
   assert.throws(() => lib.hidePlan({ ...checker, hidden_by: 3 }, true, ADMIN, ADMIN), /already hid/);
-  const legacy = { author: BOB, status: 1, hidden: true, hidden_by: 0, hidden_by_reports: false };
-  assert.match(lib.hidePlan(legacy, true, ADMIN, ADMIN), /before hidden_by existed/);
+  assert.match(lib.hidePlan({ ...checker, hidden_by: 1 }, true, ADMIN, ADMIN), /HIDE AS THE ADMIN \(now hidden by writer reports/);
   assert.strictEqual(lib.hidePlan({ author: BOB, status: 1, hidden: false }, true, MOD, ADMIN), "HIDE");
 });
 

@@ -148,3 +148,28 @@ export function hashWithoutSecret(hash) {
   const rest = params.toString();
   return hash.slice(0, q) + (rest ? "?" + rest : "");
 }
+
+/**
+ * Take a link key out of the address bar as soon as the page sees it
+ * (audit W1-06, AB-013). Called once at startup, before anything is drawn,
+ * and on every hash change. The key is kept in `store` (route -> key) for
+ * this page visit only, and the current history entry is rewritten without
+ * it, so Back/Forward, "copy link" and session restore never bring it back.
+ * (A browser may still have recorded the first visit to the full link in
+ * its own history list; no page can erase that.)
+ * win: { location, history }. Returns the key for the current route, or "".
+ */
+export function captureLinkSecret(win, store) {
+  const hash = (win && win.location && win.location.hash) || "";
+  const route = hash.split("?")[0];
+  const fromUrl = linkSecretFromHash(hash);
+  if (fromUrl) {
+    store.set(route, fromUrl);
+    try {
+      win.history.replaceState(win.history.state, "", win.location.pathname + win.location.search + hashWithoutSecret(hash));
+    } catch {
+      /* the key stays in the address bar; the page still works */
+    }
+  }
+  return store.get(route) || "";
+}

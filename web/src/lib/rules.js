@@ -9,13 +9,10 @@ import { asWhole } from "./money.js";
 
 export const STORY_STATUS_OPEN = 1;
 export const VIS_PUBLIC = 1;
-export const VIS_UNLISTED = 2;
 export const VIS_PRIVATE = 3;
 export const KIND_BOOK = 1;
 export const KIND_SHORT = 2;
 export const TIER_WRITER = 2;
-export const ITEM_WRITER_MONTH = 2;
-export const ITEM_OPEN_SHORT = 7;
 
 export function isActiveWriter(membership, nowSeconds) {
   const tier = Number(membership && membership.tier ? membership.tier : 0);
@@ -81,9 +78,8 @@ export function assessWrite(input) {
   }
   const privileged = !!input.privileged;
   const visibility = Number(input.visibility || 0);
-  // Private stories (and older "unlisted" ones, which work the same way) are invite-only, and paid from the
-  // writers' pool while it has enough.
-  const inviteOnly = visibility === VIS_PRIVATE || visibility === VIS_UNLISTED;
+  // Private stories are invite-only, and paid from the writers' pool while it has enough.
+  const inviteOnly = visibility === VIS_PRIVATE;
   const fund = whole(input.fund, "writers' pool", 0n);
   const fundPays = inviteOnly && textCheck.ok && fund >= cost;
   if (textCheck.ok && !fundPays && balance != null && cost > balance) {
@@ -169,7 +165,7 @@ export function assessOpen(input) {
   if (c2 && c2 === c1) problems.push("The two categories must be different.");
 
   const visibility = Number(input.visibility || 0);
-  if (visibility !== VIS_PUBLIC && visibility !== VIS_UNLISTED && visibility !== VIS_PRIVATE) {
+  if (visibility !== VIS_PUBLIC && visibility !== VIS_PRIVATE) {
     problems.push("Pick Public or Private.");
   }
 
@@ -192,7 +188,7 @@ export function assessOpen(input) {
     problems.push("You already have the maximum number of open projects (" + openLimit + ").");
   }
 
-  const inviteOnly = visibility === VIS_UNLISTED || visibility === VIS_PRIVATE;
+  const inviteOnly = visibility === VIS_PRIVATE;
   let fund = 0n;
   try {
     fund = inviteOnly ? asWhole(input.fund == null || input.fund === "" ? "0" : input.fund, "writers' pool") : 0n;
@@ -252,4 +248,19 @@ export function assessPromo(input) {
   if (input.paused) problems.push("The Shop is paused.");
   if (input.promoEnabled === false) problems.push("Promo claims are turned off.");
   return { ok: problems.length === 0, problems };
+}
+
+/**
+ * The least Ink per month a Writer purchase must bring (buy_membership's
+ * min_ink, audit M-2): what the page shows. A beneficiary already in a
+ * Writer term keeps that term's ink_per_month; otherwise the catalog's
+ * writer_ink applies. Returned as a whole-number string.
+ */
+export function writerMinInk(beneficiaryMembership, nowSeconds, shopCfg) {
+  if (isActiveWriter(beneficiaryMembership, nowSeconds)) {
+    const term = String((beneficiaryMembership && beneficiaryMembership.ink_per_month) || "0");
+    if (/^[1-9][0-9]*$/.test(term)) return term;
+  }
+  const catalog = String((shopCfg && shopCfg.writer_ink) || "0");
+  return /^(0|[1-9][0-9]*)$/.test(catalog) ? catalog : "0";
 }

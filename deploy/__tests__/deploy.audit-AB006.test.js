@@ -14,13 +14,15 @@ const WASM = Buffer.from("release build bytes");
 const SHA = crypto.createHash("sha256").update(WASM).digest("hex");
 const MAINNET = { network: "mainnet", "i-understand-this-is-mainnet": true };
 
-test("AB-006: mainnet refuses an upload with no expected hash, a wrong one, or a malformed one", () => {
-  assert.throws(() => lib.checkWasmHash(WASM, undefined, true));
-  assert.throws(() => lib.checkWasmHash(Buffer.from("debug build bytes"), SHA, true), /does not match/);
-  for (const bad of ["", " " + SHA, SHA + "00", SHA.slice(0, 63), "0x" + SHA.slice(2), null, 123, {}]) {
-    assert.throws(() => lib.checkWasmHash(WASM, bad, true), undefined, "accepted " + JSON.stringify(bad));
+test("AB-006 / O1-13: mainnet uploads only the release build pinned in release-hashes.json", () => {
+  const pinned = { ink: SHA, shop: "", stories: "" };
+  assert.throws(() => lib.checkWasmHash(WASM, "shop", pinned, true), /No release hash is pinned/);
+  assert.throws(() => lib.checkWasmHash(Buffer.from("debug build bytes"), "ink", pinned, true), /NOT the reviewed release build/);
+  assert.strictEqual(lib.checkWasmHash(WASM, "ink", pinned, true), true);
+  // A malformed pinned hash never loads.
+  for (const bad of [" " + SHA, SHA + "00", SHA.slice(0, 63), "0x" + SHA.slice(2), SHA.toUpperCase(), null, 123, {}]) {
+    assert.throws(() => lib.parseReleaseHashes(JSON.stringify({ ink: bad, shop: "", stories: "" })), /64 lowercase hex/, "accepted " + JSON.stringify(bad));
   }
-  assert.strictEqual(lib.checkWasmHash(WASM, SHA, true), SHA);
 });
 
 test("AB-009: mainnet trusts only listed nodes, whatever the spelling", () => {

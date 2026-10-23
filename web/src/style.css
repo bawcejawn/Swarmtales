@@ -492,6 +492,7 @@ dialog.sheet::backdrop { background: rgba(27, 31, 42, 0.45); }
 .hidden-help > * + * { margin-top: 8px; }
 .citation-box { margin-top: 12px; }
 .listen-tip { flex-basis: 100%; margin: 4px 0 0; }
+.listen-privacy { flex-basis: 100%; margin: 0; }
 
 /* Bookmarks and "continue reading". */
 .resume-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; margin: 0 0 18px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
@@ -506,6 +507,10 @@ dialog.sheet::backdrop { background: rgba(27, 31, 42, 0.45); }
 .reading-item .meta { display: block; }
 
 .sync-note:empty { display: none; }
+.wallet-places > * + * { margin-top: 8px; }
+.story-clocks { margin-top: 10px; }
+.story-clocks > * + * { margin-top: 4px; }
+.finished-report { margin: 16px 0 0; }
 /* Finishing and the book page. */
 .finish-panel { margin-bottom: 16px; }
 .finish-panel > * + * { margin-top: 10px; }
@@ -595,6 +600,7 @@ details.chapter[open] .chapter-number { color: var(--page-accent); }
 .version-list li + li { margin-top: 10px; }
 .version-text { margin: 2px 0 0; font-family: var(--serif); font-size: 15px; white-space: pre-wrap; }
 .grammar-tool { margin-top: 8px; }
+.grammar-privacy { margin: 4px 0 0; }
 .grammar-list { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
 .grammar-found { text-decoration: underline wavy #c0392b 1px; text-underline-offset: 3px; }
 

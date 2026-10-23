@@ -3,7 +3,8 @@
 //
 // WHAT THIS CONTRACT DOES
 //   - Sells Reader and Writer memberships, and Ink packs for Writers.
-//   - Collects Book and Short Story open/close fees when Stories asks.
+//   - Collects the Book and Short Story open fee when Stories asks
+//     (closing a story is free).
 //   - Mints Ink by calling the Ink contract, only for the reasons Shop
 //     is allowed: PURCHASE, MEMBERSHIP, STARTER, PROMO.
 //   - Gives promo Ink to a wallet that presents a campaign code. Each
@@ -17,13 +18,19 @@
 //   - It does not hold customer funds and it has no withdraw.
 //   - It does not mint Ink by itself. Ink decides whether the mint is legal.
 //   - It does not hardcode a token address. The admin enables each
-//     stablecoin and sets each price in that token's base units.
+//     stablecoin and sets each price in that token's base units. A newly
+//     enabled token can't be used for 7 days and is announced with a public
+//     event (C1-01); disabling one works at once.
+//   - Every purchase carries the buyer's limits: the most they pay
+//     (max_price) and the least Ink they get (min_ink). Outside either,
+//     nothing is charged (AB-017, M-2).
 //
 // PAYING
-//   Koinos stablecoins (KCS-4) do not let a contract pull a normal
-//   wallet's tokens on a signature alone. The buyer approves Shop for
-//   the full price, and Shop also requires the buyer's signature so a
-//   leftover approval cannot be spent by someone else.
+//   Shop calls the token's transfer from the buyer to the treasury and the
+//   founder inside the buyer's own signed transaction, and also requires
+//   the buyer's signature itself. Whether the token accepts that signature
+//   alone or needs an earlier approval is the token's own rule (check it
+//   for each token before enabling it; see docs/KEY_CUSTODY.md).
 //   Shop does not trust the token's reply. It reads the treasury's and
 //   the founder's balances before and after, and refuses the purchase
 //   unless each one went up by exactly its share.
@@ -77,6 +84,9 @@ const PROMO_DOMAIN = "swarmtales/promo/v1";
 // speed up Writer Ink claims. Changing it means a new contract.
 const CLAIM_PERIOD: u64 = 2592000;
 const DAY_SECONDS: u64 = 86400;
+// A newly enabled payment token waits this long before it can be used
+// (C1-01). Not an admin setting, for the same reason.
+const ASSET_WAIT: u64 = 7 * DAY_SECONDS;
 
 // sha256("transfer") and sha256("mint"), first 4 bytes. These are the
 // Koinos entry points of a KCS-4 token and of the Ink contract.
@@ -153,7 +163,7 @@ export class Shop {
       MEMBERSHIPS_SPACE_ID,
       shop.membership.decode,
       shop.membership.encode,
-      () => new shop.membership(shop.tier.TIER_NONE, 0, 0, 0, 0)
+      () => new shop.membership()
     );
 
     this.campaigns = new Storage.Map(
@@ -208,12 +218,8 @@ export class Shop {
   }
 
   get_asset(args: shop.get_asset_arguments): shop.asset {
-    if (args.token == null || args.token!.length != ADDRESS_LENGTH) {
-      return new shop.asset(false, 0, "");
-    }
-    const found = this.assets.get(args.token!);
-    if (found == null) return new shop.asset(false, 0, "");
-    return found;
+    const found = args.token != null && args.token!.length == ADDRESS_LENGTH ? this.assets.get(args.token!) : null;
+    return found != null ? found : new shop.asset(false, 0, "");
   }
 
   get_price(args: shop.get_price_arguments): shop.uint64 {
@@ -223,9 +229,9 @@ export class Shop {
 
   get_membership(args: shop.get_membership_arguments): shop.membership {
     if (args.account == null || args.account!.length != ADDRESS_LENGTH) {
-      return new shop.membership(shop.tier.TIER_NONE, 0, 0, 0, 0);
+      return new shop.membership();
     }
-    return this.memberships.get(args.account!)!;
+    return this.membership(args.account!, this.now());
   }
 
   get_campaign(args: shop.get_campaign_arguments): shop.campaign {
@@ -242,8 +248,6 @@ export class Shop {
 
   get_campaign_claimed(args: shop.get_campaign_claimed_arguments): shop.boole {
     if (args.campaign_id == 0 || args.account == null || args.account!.length != ADDRESS_LENGTH) return new shop.boole(false);
-    // A claim from before per-campaign records counts too (AB-045).
-    if (this.promoClaimed.get(args.account!)!.value == args.campaign_id) return new shop.boole(true);
     return this.campaignClaimed.get(this.codeKey(args.campaign_id, args.account!))!;
   }
 
@@ -258,9 +262,8 @@ export class Shop {
   // ===================================================================
 
   buy_membership(args: shop.buy_membership_arguments): shop.empty_object {
-    this.requireNotPaused();
     this.enter();
-    this.requireDirectCall();
+    this.requireNotPaused();
 
     const payer = this.requireAddress(args.payer, "SHOP: invalid payer address");
     this.requireSigner(payer, "SHOP: payer has not authorized this purchase");
@@ -285,7 +288,7 @@ export class Shop {
     const price = SafeMath.mul(unit, <u64>args.months);
     this.requireMaxPrice(price, args.max_price);
     const now = this.now();
-    const current = this.memberships.get(member)!;
+    const current = this.membership(member, now);
     const writerActive = this.isActiveWriter(current, now);
 
     let inkAmount: u64 = 0;
@@ -304,18 +307,25 @@ export class Shop {
     } else {
       const cfg = this.loadConfig();
       System.require(cfg.writer_ink > 0, "SHOP: Writer Ink amount is not set");
+      // More months of a running term bring the Ink locked when it began.
+      const perMonth = writerActive ? current.ink_per_month : cfg.writer_ink;
+      this.requireMinInk(perMonth, args.min_ink);
       if (writerActive) {
         current.paid_until = this.addPeriods(current.paid_until, args.months);
         current.months_unclaimed = SafeMath.add(current.months_unclaimed, <u64>args.months);
       } else {
-        inkAmount = cfg.writer_ink;
+        // Reader time left resumes after the Writer term (C1-03).
+        if (current.tier == shop.tier.TIER_READER && current.paid_until > now) {
+          current.reader_left = current.paid_until - now;
+        }
+        inkAmount = perMonth;
         inkReason = MINT_MEMBERSHIP;
         memo = "writer:month";
         current.tier = shop.tier.TIER_WRITER;
         current.paid_until = this.addPeriods(now, args.months);
         current.months_unclaimed = <u64>args.months - 1;
         current.next_claim_at = SafeMath.add(now, CLAIM_PERIOD);
-        current.ink_per_month = cfg.writer_ink;
+        current.ink_per_month = perMonth;
       }
     }
 
@@ -330,15 +340,14 @@ export class Shop {
   }
 
   claim_writer_ink(args: shop.claim_writer_ink_arguments): shop.empty_object {
-    this.requireNotPaused();
     this.enter();
-    this.requireDirectCall();
+    this.requireNotPaused();
 
     const account = this.requireAddress(args.account, "SHOP: invalid account address");
     this.requireSigner(account, "SHOP: account has not authorized this claim");
 
     const now = this.now();
-    const current = this.memberships.get(account)!;
+    const current = this.membership(account, now);
     System.require(this.isActiveWriter(current, now), "SHOP: Writer membership is not active");
     System.require(current.ink_per_month > 0, "SHOP: Writer Ink amount is not set");
     System.require(current.months_unclaimed > 0, "SHOP: no Writer Ink is waiting");
@@ -361,9 +370,8 @@ export class Shop {
   }
 
   buy_pack(args: shop.buy_pack_arguments): shop.empty_object {
-    this.requireNotPaused();
     this.enter();
-    this.requireDirectCall();
+    this.requireNotPaused();
 
     const payer = this.requireAddress(args.payer, "SHOP: invalid payer address");
     this.requireSigner(payer, "SHOP: payer has not authorized this purchase");
@@ -373,11 +381,12 @@ export class Shop {
     const pack = args.pack;
     System.require(this.isPack(pack), "SHOP: pack must be S, M or L");
     const now = this.now();
-    System.require(this.isActiveWriter(this.memberships.get(payer)!, now), "SHOP: packs are for active Writers");
+    System.require(this.isActiveWriter(this.membership(payer, now), now), "SHOP: packs are for active Writers");
 
     const cfg = this.loadConfig();
     const inkAmount = this.packInk(cfg, pack);
     System.require(inkAmount > 0, "SHOP: pack Ink amount is not set");
+    this.requireMinInk(inkAmount, args.min_ink);
     const price = this.requirePrice(<u32>pack, assetId);
     this.requireMaxPrice(price, args.max_price);
     const memo = pack == shop.item.ITEM_PACK_S ? "pack:S" : pack == shop.item.ITEM_PACK_M ? "pack:M" : "pack:L";
@@ -388,16 +397,17 @@ export class Shop {
   }
 
   // ===================================================================
-  // Story open / close fees (Stories contract only)
+  // Story open fee (Stories contract only)
   // ===================================================================
 
   pay_open_fee(args: shop.pay_open_fee_arguments): shop.empty_object {
+    // The one call another contract may make, and only Stories.
+    this.requireStoriesCaller();
+    this.enter(false);
     this.requireNotPaused();
-    this.enter();
 
     const payer = this.requireAddress(args.payer, "SHOP: invalid payer address");
     this.requireSigner(payer, "SHOP: payer has not authorized this purchase");
-    this.requireStoriesCaller();
 
     const kind = args.kind;
     System.require(
@@ -412,6 +422,7 @@ export class Shop {
     const item = isBook ? shop.item.ITEM_OPEN_BOOK : shop.item.ITEM_OPEN_SHORT;
     const starter = isBook ? cfg.starter_book : cfg.starter_short;
     System.require(starter > 0, "SHOP: starter Ink amount is not set");
+    this.requireMinInk(starter, args.min_ink);
     const base = this.requirePrice(<u32>item, assetId);
     // Stories raises the price when the opener already has many projects open.
     const multiplier: u64 = args.price_multiplier <= 1 ? 1 : <u64>args.price_multiplier;
@@ -425,39 +436,13 @@ export class Shop {
     return new shop.empty_object();
   }
 
-  pay_close_fee(args: shop.pay_close_fee_arguments): shop.empty_object {
-    this.requireNotPaused();
-    this.enter();
-
-    const payer = this.requireAddress(args.payer, "SHOP: invalid payer address");
-    this.requireSigner(payer, "SHOP: payer has not authorized this purchase");
-    this.requireStoriesCaller();
-
-    const kind = args.kind;
-    System.require(
-      kind == shop.story_kind.KIND_BOOK || kind == shop.story_kind.KIND_SHORT,
-      "SHOP: kind must be Book or Short Story"
-    );
-    const assetId = this.requireAddress(args.token, "SHOP: invalid token address");
-    this.requireEnabledAsset(assetId);
-
-    const isBook = kind == shop.story_kind.KIND_BOOK;
-    const item = isBook ? shop.item.ITEM_CLOSE_BOOK : shop.item.ITEM_CLOSE_SHORT;
-    const price = this.requirePrice(<u32>item, assetId);
-
-    this.takePayment(payer, assetId, <u32>item, price, 0, 0, "");
-    this.leave();
-    return new shop.empty_object();
-  }
-
   // ===================================================================
   // Promo
   // ===================================================================
 
   claim_promo(args: shop.claim_promo_arguments): shop.empty_object {
-    this.requireNotPaused();
     this.enter();
-    this.requireDirectCall();
+    this.requireNotPaused();
 
     const account = this.requireAddress(args.account, "SHOP: invalid account address");
     this.requireSigner(account, "SHOP: account has not authorized this claim");
@@ -494,11 +479,6 @@ export class Shop {
     this.requireLinkSignature(signer, this.promoDigest(args.campaign_id, account), args.signature, "SHOP: promo link rejected");
 
     const claimKey = this.codeKey(args.campaign_id, account);
-    // A claim made before per-campaign records existed (one claim per wallet,
-    // ever, until October 2026) lives only in promoClaimed. Record it for its
-    // campaign before anything reads or overwrites promoClaimed, so claiming a
-    // newer campaign never reopens the old one (AB-045).
-    this.carryLegacyClaim(account);
     System.require(!this.campaignClaimed.get(claimKey)!.value, "SHOP: this wallet has already claimed this promo");
 
     const day = now / DAY_SECONDS;
@@ -508,11 +488,11 @@ export class Shop {
     }
     const nextBudget = SafeMath.add(row.budget_used, row.amount);
     System.require(nextBudget <= row.budget_total, "SHOP: promo budget exhausted");
-    if (row.daily_cap > 0) {
-      const nextToday = SafeMath.add(row.used_today, row.amount);
-      System.require(nextToday <= row.daily_cap, "SHOP: promo daily cap reached");
-      row.used_today = nextToday;
-    }
+    // Counted even without a cap, so a cap set mid-day sees the day's
+    // earlier claims (C1-04).
+    const nextToday = SafeMath.add(row.used_today, row.amount);
+    System.require(row.daily_cap == 0 || nextToday <= row.daily_cap, "SHOP: promo daily cap reached");
+    row.used_today = nextToday;
     row.budget_used = nextBudget;
     this.campaigns.put(key, row);
     this.campaignClaimed.put(claimKey, new shop.boole(true));
@@ -539,7 +519,25 @@ export class Shop {
     System.require(args.decimals <= MAX_DECIMALS, "SHOP: decimals must be from 0 to 18");
     const symbol = this.text(args.symbol);
     System.require(symbol.length > 0 && symbol.length <= MAX_SYMBOL_LENGTH, "SHOP: symbol must be 1 to 16 characters");
-    this.assets.put(assetId, new shop.asset(args.enabled, args.decimals, symbol));
+    // Turning a token on starts a public 7-day wait before anyone can pay
+    // with it (C1-01). An enabled token keeps its wait, and its decimals and
+    // symbol can't change under buyers; turn it off first. Off is immediate.
+    const found = this.assets.get(assetId);
+    const wasOn = found != null && found.enabled;
+    let usableFrom: u64 = 0;
+    if (args.enabled) {
+      if (wasOn) {
+        System.require(found!.decimals == args.decimals && found!.symbol == symbol,
+          "SHOP: turn the token off before changing its decimals or symbol");
+        usableFrom = found!.usable_from;
+      } else {
+        usableFrom = SafeMath.add(this.now(), ASSET_WAIT);
+      }
+    }
+    const row = new shop.asset(args.enabled, args.decimals, symbol, usableFrom);
+    this.assets.put(assetId, row);
+    const ev = new shop.asset_event(assetId, row.enabled, row.decimals, row.symbol, row.usable_from);
+    System.event("shop.asset_event", Protobuf.encode(ev, shop.asset_event.encode), []);
     this.leave();
     return new shop.empty_object();
   }
@@ -565,21 +563,24 @@ export class Shop {
     const stories = this.optionalAddress(args.stories, "SHOP: invalid Stories address");
     if (ink.length != 0) this.requireOutside(ink, "SHOP: Ink cannot be the Shop contract");
     if (stories.length != 0) this.requireOutside(stories, "SHOP: Stories cannot be the Shop contract");
+    System.require(ink.length == 0 || stories.length == 0 || !Arrays.equal(ink, stories), "SHOP: Ink and Stories must be different contracts");
 
     const cfg = this.loadConfig();
-    // Ink is set once and can never be changed or cleared (AB-050). Every
-    // purchase calls Ink's mint inside the buyer's own signed transaction, so
-    // an "Ink" swapped in by the admin key would act with the buyer's
-    // signature. Moving to a new Ink needs a reviewed code upload with the
-    // Shop contract key. Treasury, founder and Stories stay changeable.
-    const oldInk = cfg.ink;
-    System.require(oldInk == null || oldInk.length == 0 || Arrays.equal(oldInk!, ink),
-      "SHOP: the Ink address is already set and can never be changed");
+    // Ink and Stories are each set once and can never be changed or cleared
+    // (AB-050, C1-07). Every purchase calls Ink's mint inside the buyer's own
+    // signed transaction, and Stories calls pay_open_fee inside the opener's,
+    // so a contract swapped in by the admin key would act with their
+    // signatures. Moving to a new one needs a reviewed code upload with the
+    // Shop contract key. Treasury and founder stay changeable.
+    System.require(this.sameOrUnset(cfg.ink, ink), "SHOP: the Ink address is already set and can never be changed");
+    System.require(this.sameOrUnset(cfg.stories, stories), "SHOP: the Stories address is already set and can never be changed");
     cfg.treasury = treasury;
     cfg.founder = founder;
     cfg.ink = ink;
     cfg.stories = stories;
     this.saveConfig(cfg);
+    const ev = new shop.addresses_event(treasury, founder, ink, stories);
+    System.event("shop.addresses_event", Protobuf.encode(ev, shop.addresses_event.encode), []);
     this.leave();
     return new shop.empty_object();
   }
@@ -595,6 +596,8 @@ export class Shop {
     cfg.starter_book = args.starter_book;
     cfg.starter_short = args.starter_short;
     this.saveConfig(cfg);
+    const ev = new shop.ink_amounts_event(cfg.writer_ink, cfg.pack_s_ink, cfg.pack_m_ink, cfg.pack_l_ink, cfg.starter_book, cfg.starter_short);
+    System.event("shop.ink_amounts_event", Protobuf.encode(ev, shop.ink_amounts_event.encode), []);
     this.leave();
     return new shop.empty_object();
   }
@@ -645,7 +648,6 @@ export class Shop {
 
   // Step 2 of 2: the proposed admin signs to take over.
   accept_admin(args: shop.accept_admin_arguments): shop.empty_object {
-    this.requireDirectCall();
     this.enter();
     const cfg = this.loadConfig();
     const pending = cfg.pending_admin;
@@ -935,7 +937,6 @@ export class Shop {
   }
 
   private requireAdmin(): void {
-    this.requireDirectCall();
     System.require(
       System.checkAuthority(authority.authorization_type.contract_call, this.getAdmin()),
       "SHOP: admin authority required"
@@ -946,6 +947,12 @@ export class Shop {
   // after they looked, or a client that sends no limit, charges nothing.
   private requireMaxPrice(price: u64, maxPrice: u64): void {
     System.require(price <= maxPrice, "SHOP: the price is " + price.toString() + ", more than the most you agreed to pay. Nothing was charged.");
+  }
+
+  // And the least Ink they agreed to get (M-2): an Ink amount lowered after
+  // they looked charges nothing.
+  private requireMinInk(ink: u64, minInk: u64): void {
+    System.require(ink >= minInk, "SHOP: this now brings " + ink.toString() + " Ink, less than the " + minInk.toString() + " you agreed to. Nothing was charged.");
   }
 
   // Security fix H1. A transaction that calls Shop itself has no calling
@@ -985,8 +992,11 @@ export class Shop {
   }
 
   // Held across the whole call, including the signature check, so a token
-  // or authority contract cannot call back into Shop mid-payment.
-  private enter(): void {
+  // or authority contract cannot call back into Shop mid-payment. Every
+  // entry point but pay_open_fee must be called directly (fix H1); that is
+  // checked first, before anything is written.
+  private enter(direct: bool = true): void {
+    if (direct) this.requireDirectCall();
     const flag = this.lock.get()!;
     System.require(!flag.value, "SHOP: reentrant call");
     flag.value = true;
@@ -1015,8 +1025,27 @@ export class Shop {
 
   private requireEnabledAsset(assetId: Uint8Array): void {
     const found = this.assets.get(assetId);
-    System.require(found != null, "SHOP: asset is not accepted");
-    System.require(found!.enabled, "SHOP: asset is not accepted");
+    System.require(found != null && found.enabled, "SHOP: asset is not accepted");
+    System.require(this.now() >= found!.usable_from, "SHOP: this token was enabled recently and can't be used yet");
+  }
+
+  private sameOrUnset(stored: Uint8Array | null, value: Uint8Array): bool {
+    return stored == null || stored.length == 0 || Arrays.equal(stored!, value);
+  }
+
+  // The stored record, with Reader time saved under an ended Writer term
+  // resumed (C1-03). Reads return this; writes save it.
+  private membership(account: Uint8Array, now: u64): shop.membership {
+    const m = this.memberships.get(account)!;
+    if (m.tier == shop.tier.TIER_WRITER && m.paid_until <= now && m.reader_left > 0) {
+      m.tier = shop.tier.TIER_READER;
+      m.paid_until = SafeMath.add(m.paid_until, m.reader_left);
+      m.reader_left = 0;
+      m.months_unclaimed = 0;
+      m.next_claim_at = 0;
+      m.ink_per_month = 0;
+    }
+    return m;
   }
 
   private requirePrice(item: u32, assetId: Uint8Array): u64 {
@@ -1059,7 +1088,7 @@ export class Shop {
   }
 
   private isItem(item: u32): bool {
-    return item >= <u32>shop.item.ITEM_READER_MONTH && item <= <u32>shop.item.ITEM_CLOSE_SHORT;
+    return item >= <u32>shop.item.ITEM_READER_MONTH && item <= <u32>shop.item.ITEM_OPEN_SHORT;
   }
 
   private isPack(pack: shop.item): bool {
@@ -1094,16 +1123,6 @@ export class Shop {
     memory.copy(key.dataStart, id.dataStart, 8);
     memory.copy(key.dataStart + 8, hash.dataStart, hash.length);
     return key;
-  }
-
-  // promoClaimed holds the newest campaign a wallet claimed. Before October
-  // 2026 it was the only record of a claim, so copy it into campaignClaimed
-  // (once; later calls change nothing).
-  private carryLegacyClaim(account: Uint8Array): void {
-    const legacy = this.promoClaimed.get(account)!.value;
-    if (legacy == 0) return;
-    const key = this.codeKey(legacy, account);
-    if (!this.campaignClaimed.get(key)!.value) this.campaignClaimed.put(key, new shop.boole(true));
   }
 
   private requireCampaign(id: u64): shop.campaign {

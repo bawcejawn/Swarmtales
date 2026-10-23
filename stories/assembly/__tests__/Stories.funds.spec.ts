@@ -6,6 +6,7 @@ import { Base58, MockVM, System, authority, chain, Protobuf, system_calls } from
 import { Stories } from "../Stories";
 import { stories } from "../proto/stories";
 import { LINK_ADDRESSES, inviteSig } from "./linkFixtures";
+import { ownEditArgs } from "./reviewed";
 
 function linkKey(key: i32): Uint8Array {
   return Base58.decode(LINK_ADDRESSES[key]);
@@ -237,7 +238,7 @@ function edit(as: Uint8Array, id: u64, seq: u64, text: string): void {
   // shrinking it mints a refund.
   if (<u64>text.length > segment(id, seq).current_cost) results([writer(), okCall()]);
   else allowCalls(1);
-  new Stories().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length));
+  new Stories().edit_segment(ownEditArgs(as, id, seq, text, <u64>text.length));
   checkpoint();
 }
 
@@ -255,7 +256,7 @@ function fillShort(id: u64): void {
 function closeAs(opener: Uint8Array, id: u64): void {
   authorize(opener);
   allowCalls(1);
-  new Stories().close_story(new stories.close_story_arguments(opener, id, USDT));
+  new Stories().close_story(new stories.close_story_arguments(opener, id));
   checkpoint();
 }
 
@@ -294,7 +295,7 @@ function failContribute(): void {
 function failEdit(): void {
   authorize(fWho);
   results(fResults);
-  new Stories().edit_segment(new stories.edit_segment_arguments(fWho, fId, fSeq, fText, fExpected));
+  new Stories().edit_segment(ownEditArgs(fWho, fId, fSeq, fText, fExpected));
 }
 
 function failLimits(): void {
@@ -466,15 +467,15 @@ describe("Stories: story funds", () => {
 
   it("refuses a fund on a public story", () => {
     fVis = PUBLIC; fText = "Public start."; fAmount = 10000; fResults = [okCall(), okCall(), okCall()];
-    fails(failOpenFunded, "STORIES: only unlisted and private stories have a fund");
+    fails(failOpenFunded, "STORIES: only private stories have a fund");
   });
 
   it("requires a writers' pool of at least 10,000 Ink for invite-only stories", () => {
     fVis = PRIVATE; fText = "Private start."; fAmount = 0; fResults = [okCall(), okCall(), okCall()];
-    fails(failOpenFunded, "STORIES: an unlisted or private Short Story needs a writers' pool of at least 10,000 Ink");
-    fVis = UNLISTED; fAmount = 9999;
-    fails(failOpenFunded, "STORIES: an unlisted or private Short Story needs a writers' pool of at least 10,000 Ink");
-    const id = openFunded(UNLISTED, 10000, "Quiet start.", 10000);
+    fails(failOpenFunded, "STORIES: a private Short Story needs a writers' pool of at least 10,000 Ink");
+    fAmount = 9999;
+    fails(failOpenFunded, "STORIES: a private Short Story needs a writers' pool of at least 10,000 Ink");
+    const id = openFunded(PRIVATE, 10000, "Quiet start.", 10000);
     expect(story(id).fund).toBe(10000);
   });
 
@@ -498,17 +499,17 @@ describe("Stories: story funds", () => {
   });
 
   it("requires an invite and a Writer month for everyone but the opener", () => {
-    const id = openFunded(UNLISTED, 20000, "Quiet start.", 10000);
+    const id = openFunded(PRIVATE, 20000, "Quiet start.", 10000);
     fWho = BOB; fId = id; fText = "Bob found the link"; fExpected = 18;
     fResults = [writer()];
-    fails(failContribute, "STORIES: only invited writers can write in this story");
+    fails(failContribute, "STORIES: this story is private");
     invite(id, BOB);
     // No membership, and no promo trial here.
     fResults = [membership(0, 0), promo(true), okCall()];
-    fails(failContribute, "STORIES: an active Writer month is required to write in invite-only stories");
+    fails(failContribute, "STORIES: an active Writer month is required to write in private stories");
     // An expired month does not count either.
     fResults = [membership(2, START - 1), okCall()];
-    fails(failContribute, "STORIES: an active Writer month is required to write in invite-only stories");
+    fails(failContribute, "STORIES: an active Writer month is required to write in private stories");
     writeAsWriter(BOB, id, "Bob was invited in");
     expect(segment(id, 2).fund_paid).toBe(true);
   });
@@ -573,7 +574,7 @@ describe("Stories: story funds", () => {
     expect(lastBurn().value).toBe(250);
     const pub = openAs(ALICE, SHORT, 10000, PUBLIC, "Public start.");
     fId = pub; fAmount = 50;
-    fails(failTopUp, "STORIES: only unlisted and private stories have a fund");
+    fails(failTopUp, "STORIES: only private stories have a fund");
   });
 
   it("returns the leftover fund to the opener when the story is archived", () => {
@@ -673,21 +674,21 @@ describe("Stories: a removed writer cannot rejoin with the same invite (AB-010)"
 describe("Stories: switching to invite-only needs a writers' pool (AB-011)", () => {
   beforeEach(() => { reset(); configure(); });
 
-  it("refuses making a public story unlisted or private without a pool", () => {
+  it("refuses making a public story private without a pool, and Unlisted at all", () => {
     openShort();   // story 1, public, no pool
     fails(() => {
       authorize(ALICE);
       new Stories().update_story(new stories.update_story_arguments(ALICE, 1, "My Tale", 1, 0, PRIVATE, 0));
-    }, "STORIES: an unlisted or private Short Story needs a writers' pool of at least 10,000 Ink");
+    }, "STORIES: a private Short Story needs a writers' pool of at least 10,000 Ink");
     fails(() => {
       authorize(ALICE);
       new Stories().update_story(new stories.update_story_arguments(ALICE, 1, "My Tale", 1, 0, UNLISTED, 0));
-    }, "STORIES: an unlisted or private Short Story needs a writers' pool of at least 10,000 Ink");
+    }, "STORIES: visibility must be Public or Private");
     expect(story(1).visibility).toBe(PUBLIC);
   });
 
-  it("lets a story with a pool switch between unlisted, private and public", () => {
-    const id = openFunded(UNLISTED, 20000, "Quiet start.", 10000);
+  it("lets a story with a pool switch between private and public", () => {
+    const id = openFunded(PRIVATE, 20000, "Quiet start.", 10000);
     authorize(ALICE);
     new Stories().update_story(new stories.update_story_arguments(ALICE, id, "Funded", 1, 0, PRIVATE, 0));
     checkpoint();
@@ -696,9 +697,9 @@ describe("Stories: switching to invite-only needs a writers' pool (AB-011)", () 
     new Stories().update_story(new stories.update_story_arguments(ALICE, id, "Funded", 1, 0, PUBLIC, 0));
     checkpoint();
     authorize(ALICE);
-    new Stories().update_story(new stories.update_story_arguments(ALICE, id, "Funded", 1, 0, UNLISTED, 0));
+    new Stories().update_story(new stories.update_story_arguments(ALICE, id, "Funded", 1, 0, PRIVATE, 0));
     checkpoint();
-    expect(story(id).visibility).toBe(UNLISTED);
+    expect(story(id).visibility).toBe(PRIVATE);
   });
 });
 

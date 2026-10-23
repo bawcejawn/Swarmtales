@@ -11,6 +11,7 @@
 import { Base58, MockVM, System, authority, chain, Protobuf, system_calls } from "@koinos/sdk-as";
 import { Stories } from "../Stories";
 import { stories } from "../proto/stories";
+import { ownEditArgs } from "./reviewed";
 
 const STORIES = Base58.decode("16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt");
 const INK = Base58.decode("13Qrdvv3cXys9aryjZho6vHxDW3PRgX5pm");
@@ -150,7 +151,7 @@ function edit(as: Uint8Array, id: u64, seq: u64, text: string): void {
   // shrinking it mints a refund.
   if (<u64>text.length > segment(id, seq).current_cost) results([writer(), okCall()]);
   else allowCalls(1);
-  new Stories().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length));
+  new Stories().edit_segment(ownEditArgs(as, id, seq, text, <u64>text.length));
   checkpoint();
 }
 
@@ -167,7 +168,7 @@ function fillShort(id: u64): void {
 function closeAs(opener: Uint8Array, id: u64): void {
   authorize(opener);
   allowCalls(1);
-  new Stories().close_story(new stories.close_story_arguments(opener, id, USDT));
+  new Stories().close_story(new stories.close_story_arguments(opener, id));
   checkpoint();
 }
 
