@@ -111,10 +111,20 @@ stops it.
    and `min_ink` shown as readable fields, not just raw bytes.
 3. Take a screenshot and send it to me. Approve or reject; either is fine for the check.
 
-### C2. The mainnet stablecoin's authority rule (audit C1-01)
-I'll do the reading part: I check vUSDT's contract on mainnet to see whether its `transfer` accepts
-the payer's signature alone or needs an earlier `approve`. The site always sends an approve first,
-so both work. Before mainnet you only confirm the address I give you is the vUSDT you intend.
+**If the Kondor window keeps spinning or asking to refresh (23 Oct 2026: it does):** Kondor's
+built-in testnet is the old Harbinger chain. On the Koinos Foundation testnet it has no "mana
+meter" contract, and its default "Optimize mana" step fails. In the Kondor window click
+**Advanced**, untick **Optimize mana**, then press the refresh icon next to **Events**. If it still
+loops, the check moves to mainnet: on launch day, the first small purchase with Kondor is the M-9
+check (Kondor's source shows it uses the ABIs the site sends, `optsSend.abis`).
+
+The **Test wallet** signs without asking, by design. It exists only on testnet: on a mainnet build
+it is never offered and any saved test key is deleted.
+
+### C2. The mainnet stablecoin (audit C1-01)
+vUSDT is `12VoHz41a4HtfiyhTWbg9RXqGMRbYk6pXh` (confirmed by the owner, 23 Oct 2026; same as the
+README). Whether its `transfer` needs an earlier `approve` doesn't matter for the site, which
+always sends one. The launch-day test purchase in vUSDT proves Shop can take payment with it.
 
 ### C3. Multisig emergency pause (audit M-12) — once you've chosen the multisig wallet
 1. Create the 2-of-3 multisig wallet on **testnet** first, with the same three signers you'll use on
@@ -129,7 +139,7 @@ so both work. Before mainnet you only confirm the address I give you is the vUSD
 4. Send me the transaction ids.
 
 ### C4. KOIN Vault (audit W1-04, W1-05) — on mainnet, after launch
-Vault works only on mainnet. On launch day, make one small purchase with Vault on your phone and
+Rex (KOIN Vault) said Vault should work with the site (23 Oct 2026); the launch-day purchase confirms it. Vault works only on mainnet. On launch day, make one small purchase with Vault on your phone and
 tell me whether it said "Done" and whether anything looked odd. If Vault refuses the new POST
 status call, the site falls back to the old way by itself.
 
