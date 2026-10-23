@@ -12,8 +12,8 @@
 //
 // 2) removePanel says "This part is hidden while it's checked, so its Ink isn't
 //    returned" for EVERY hidden part. remove_segment refunds a part hidden only
-//    by writer reports (refundable: !hidden || hidden_by_reports, AB-012).
-//    SAFE: removePanel looks at hidden_by_reports / hidden_by.
+//    by writer reports (refundable: !hidden || hidden_by == 1, AB-012).
+//    SAFE: removePanel looks at hidden_by (hiddenByReports).
 //
 // 3) Final edit (renderFinish ~3150-3155): maxCost = charged + allowance.
 //    submit_final_batch (Stories.ts ~1067, AB-056) allows current_cost +
@@ -31,18 +31,18 @@
 // Copy into web/test/ and run: node --test
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
+import { appSource, fnBody } from "./helpers/appSource.js";
 
-const src = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+const src = appSource();
 function body(start, end) {
   const a = src.indexOf(start);
-  assert.ok(a >= 0, "can't find " + start + " in main.js");
+  assert.ok(a >= 0, "can't find " + start + " in the page source");
   const b = src.indexOf(end, a + start.length);
   return src.slice(a, b > a ? b : undefined);
 }
 
 test("RT-WEB: removing your own pool-paid part does not promise you Ink that goes to the pool", () => {
-  const panel = body("function removePanel(", "function reportControl(");
+  const panel = fnBody(src, "removePanel");
   const promises = /gets their " \+ num\(seg\.charged\)/.test(panel);
   const knowsPool = /fund_paid|own_paid|refundSplit|refundLine/.test(panel);
   assert.ok(!promises || knowsPool,
@@ -51,12 +51,12 @@ test("RT-WEB: removing your own pool-paid part does not promise you Ink that goe
 });
 
 test("RT-WEB: removing a part hidden only by reports does not say the Ink is lost", () => {
-  const panel = body("function removePanel(", "function reportControl(");
+  const panel = fnBody(src, "removePanel");
   const saysLost = /isn't returned|is not returned|not refunded/.test(panel);
-  const knowsReports = /hidden_by_reports|hidden_by\b/.test(panel);
+  const knowsReports = /hiddenByReports|hidden_by\b/.test(panel);
   assert.ok(!saysLost || knowsReports,
     "REMOVE-HIDDEN-LABEL: every hidden part is labelled 'its Ink isn't returned', but remove_segment refunds a part " +
-    "hidden only by writer reports (refundable = !hidden || hidden_by_reports)");
+    "hidden only by writer reports (refundable = !hidden || hidden_by == 1)");
 });
 
 test("RT-WEB: the final light-edit limit is measured from the part as it is now (AB-056)", () => {
@@ -71,7 +71,7 @@ test("RT-WEB: the page does not offer a paid change revise_part will refuse (60 
   const tool = body("const times = changeMultiplier(segment.paid_changes)", "Listen from here");
   const before = src.slice(src.indexOf("const times = changeMultiplier(segment.paid_changes)") - 200,
     src.indexOf("const times = changeMultiplier(segment.paid_changes)"));
-  const panel = body("function changePanel(", "function refundLine(");
+  const panel = fnBody(src, "changePanel");
   const gated = /paid_changes[^\n]*(<|>=|>)\s*(60|59|MAX_PAID)/.test(before + tool + panel) ||
     /(60|MAX_PAID)[^\n]*paid_changes/.test(before + tool + panel);
   assert.ok(gated,

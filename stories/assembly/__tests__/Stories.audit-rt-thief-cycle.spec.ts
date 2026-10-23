@@ -17,6 +17,7 @@ import {
   ALICE, BOB, DAY, PRIVATE, START, USDT, allowCalls, authorize, burnsFrom, checkpoint, configure, invite,
   mintsTo, openAs, openPublic, ownerEdit, ownerRemove, reset, segment, setTime, story, takedown, write,
 } from "./auditFixHelpers";
+import { ownEditArgs } from "./reviewed";
 
 function aliceWrites(id: u64, text: string): u64 {
   authorize(ALICE);
@@ -47,7 +48,7 @@ function writerRemoves(): void {
 function writerEdits(): void {
   authorize(BOB);
   allowCalls(2);
-  new Stories().edit_segment(new stories.edit_segment_arguments(BOB, gId, gSeq, gText, <u64>gText.length));
+  new Stories().edit_segment(ownEditArgs(BOB, gId, gSeq, gText, <u64>gText.length));
 }
 
 describe("RT-THIEF cycle: Ink back without paying", () => {
@@ -66,7 +67,7 @@ describe("RT-THIEF cycle: Ink back without paying", () => {
     aliceWrites(id, "f".repeat(10000 - 37 - 8000));           // story locks at 10,000
     expect(story(id).status).toBe(stories.story_status.STATUS_LOCKED);
     authorize(ALICE);
-    new Stories().close_story(new stories.close_story_arguments(ALICE, id, USDT));
+    new Stories().close_story(new stories.close_story_arguments(ALICE, id));
     checkpoint();
 
     gId = id;

@@ -1,46 +1,52 @@
 #!/usr/bin/env node
 /**
- * SwarmTales copy checker. Runs on a schedule in GitHub Actions (free for
- * public repositories). Each run:
+ * SwarmTales copy checker, plan step. Runs every hour in GitHub Actions
+ * (free for public repositories), in a job that holds NO moderator key
+ * (O1-09): it reads the chain and the web, decides, and writes a plan. A
+ * separate apply step (apply.mjs), in its own job with the key, re-checks
+ * each planned action against the chain and only then signs it.
+ *
+ * Each run:
  *   1. reads every story part added since the last run, and every part
  *      whose text or citation changed since it was checked (a part
  *      reworded after its check is checked again, AB-067);
  *   2. compares it with other writers' text on SwarmTales written before it
  *      (fingerprints), oldest parts first, so the later of two matching
  *      parts is the one treated as the copy;
- *   3. optionally, searches for three exact phrases from longer parts, using
- *      whichever free search keys are set (all optional, all free, no card):
+ *   3. optionally, searches for five exact phrases from longer parts, using
+ *      whichever free search keys are set (all optional, all free):
  *        GOOGLE_BOOKS_KEY  Google Books: searches inside millions of books
  *        TAVILY_API_KEY    Tavily web search (free: 1,000 searches a month)
  *        BRAVE_API_KEY     Brave web search (Brave now needs a card; kept for anyone who has a key)
- *   4. acts gently, by itself (no one has to review anything):
+ *   4. plans gentle actions (no one has to review anything):
  *        - a clear copy is hidden: 4 or more of 5 phrases found, 3 or more in
- *          the same book or site; or 80%+ of the part matches another
- *          writer's part on SwarmTales;
- *        - a partial match is NOT hidden: it gets a public source note under
- *          the part ("Parts of this text also appear in …");
- *        - a match with a part written at the same time (same block or
- *          second) is NOT hidden: both parts get a source note, since
- *          nobody can tell which came first;
+ *          the same BOOK, published before the part was written (M-11); or
+ *          80%+ of the part matches an older part by another writer;
+ *        - a match on websites only is never hidden (a website has no
+ *          reliable date: it may be a mirror of the part), and neither is a
+ *          book that isn't provably older: a public source note instead;
+ *        - a partial match gets a source note ("Parts of this text also
+ *          appear in …"); nothing is hidden;
+ *        - a match with a part written at the same time gets a note on both;
  *        - a match with a source the writer cited is left alone;
- *        - a part hidden by writer reports is checked too; a clear copy is
- *          taken over as the checker's hide, so restoring it forfeits the
- *          refund as if the checker had hidden it first (AB-071);
- *        - a part whose checker hide its opener restored (or the admin
- *          undid) is never hidden again for the same text (it can still get
- *          a note); new text is checked again.
- *      Signed with the MODERATOR key, which can only hide, unhide and add
- *      notes. Every action is a public event with a note.
+ *        - a part hidden by writer reports for copying is checked too; a
+ *          clear copy is taken over as the checker's hide (AB-071);
+ *        - a part whose checker hide its opener restored is never hidden
+ *          again for the same text, read from the chain so losing the saved
+ *          progress can't undo it (O1-07); new text is checked again;
+ *        - a copy the admin held or unhid is left to the admin.
  *   5. when a story fills up or enters its final edit, checks all of it once
  *      more against everything else, before it can be finished.
+ *
+ * Progress is saved after every few parts and the run stops starting new
+ * work after TIME_BUDGET_MINUTES, so a long run never loses its work (M-13);
+ * the next run goes on from there.
  *
  * Environment:
  *   STORIES_ADDRESS   Stories contract (required)
  *   RPC               node URL (default: the Foundation testnet)
  *   EXPECTED_CHAIN_ID the chain id the node must serve; needed for any node other than
- *                     the Foundation testnet or api.koinos.io (checked before signing)
- *   MODERATOR_WIF     the moderator's private key (secret). Without it the
- *                     checker only reports what it would hide.
+ *                     the Foundation testnet or api.koinos.io
  *   GOOGLE_BOOKS_KEY  optional, book phrase check (stays under BOOKS_MONTHLY, default 25000;
  *                     Google's free quota is 1,000 a day)
  *   TAVILY_API_KEY    optional, web phrase check (stays under TAVILY_MONTHLY, default 950)
@@ -49,76 +55,53 @@
  *   TEST_PHRASE       if set: only search this phrase with every service that has a key,
  *                     print what each one found, and stop (to check the keys work)
  *   IGNORE_HOSTS      comma list of hosts never counted as a source
- *   STATE_FILE        where progress is kept between runs (default checker-state.json)
- *   DRY_RUN=1         never send anything
+ *   STATE_FILE        progress from the load step, updated in place (default checker-state.json)
+ *   PLAN_FILE         where the planned actions go (default checker-plan.json)
+ *   TIME_BUDGET_MINUTES  stop starting new work after this long (default 20)
+ *   PARTS_PER_READ    parts per get_segments read (default 3, M-5)
  */
-import { createHash } from "crypto";
 import fs from "fs";
-import { createRequire } from "module";
 import {
-  HIDE_FOUND, Index, REASON, WEB_MIN_CHARS, budget, checkChainId, checkOrder, citationCovers, dateOf, decide, expectedChainId, fingerprint, isDuplicate,
-  isPartialDuplicate, normalizeResults, pickPhrases, resultMatches, worthAsking,
+  HIDE_FOUND, Index, REASON, WEB_MIN_CHARS, budget, checkOrder, citationCovers, cleanNote, dateOf, decide, fingerprint,
+  isDuplicate, isPartialDuplicate, logLine, mdCell, mdFence, normalizeResults, pickPhrases, provablyOlder, publishedEnd,
+  readParts, resultMatches, textAt, textKey, worthAsking,
 } from "./lib.mjs";
+import { activityNow, connect, timeBudgetMs } from "./chain.mjs";
+import { writeAtomic } from "./state.mjs";
 import { readAllVersions } from "../web/src/lib/versions.js";
-
-const require = createRequire(new URL("../web/package.json", import.meta.url));
-const { Contract, Provider, Signer, Transaction } = require("koilib");
-const { abis } = await import("../web/src/generated/abis.js");
 
 const env = process.env;
 const STORIES = env.STORIES_ADDRESS;
-const RPC = env.RPC || "https://testnet.koinosfoundation.org";
 const STATE_FILE = env.STATE_FILE || "checker-state.json";
-const DRY_RUN = env.DRY_RUN === "1";
+const PLAN_FILE = env.PLAN_FILE || "checker-plan.json";
 const MONTHLY = Number(env.SEARCH_MONTHLY || 1800);
 const BOOKS_MONTHLY = Number(env.BOOKS_MONTHLY || 25000);
 const TAVILY_MONTHLY = Number(env.TAVILY_MONTHLY || 950);
 const PER_RUN = Number(env.SEARCH_PER_RUN || 40);
+const PER_READ = Math.max(1, Math.min(10, Number(env.PARTS_PER_READ || 3)));
+const BUDGET_MS = timeBudgetMs(env.TIME_BUDGET_MINUTES);
+const SAVE_EVERY_MS = 15000;
 const IGNORE = ["bawcejawn.github.io", "koinosblocks.com", "koiner.app", "kollection.app"]
   .concat(String(env.IGNORE_HOSTS || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
+const startedAt = Date.now();
 
 const log = [];
 function note(line) {
-  console.log(line);
-  log.push(line);
+  const safe = logLine(line);
+  console.log(safe);
+  log.push(safe);
 }
-
-function loadState() {
-  try {
-    return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-  } catch {
-    return { checked: {}, swept: {}, index: {} };
-  }
-}
-
-function saveState(state, index) {
-  state.index = index.toJSON();
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state));
-}
+const errText = (error) => (error && error.message ? error.message : String(error));
 
 function writeSummary(actions) {
   const file = env.GITHUB_STEP_SUMMARY;
   if (!file) return;
+  const what = (a) => a.kind === "note" ? "source note" : a.kind === "unhide" ? "bring back" : a.reason === REASON.COPYRIGHT ? "hide: copied text" : "hide: duplicate";
   const rows = actions.length
-    ? actions.map((a) => `| ${a.story} | ${a.seq} | ${a.kind === "note" ? "source note" : a.kind === "unhide" ? "brought back" : a.reason === REASON.COPYRIGHT ? "copied text" : "duplicate"} | ${a.note} | ${a.kind === "note" ? (a.sent ? "noted" : "would note") : a.kind === "unhide" ? (a.sent ? "unhidden" : "would unhide") : a.sent ? "hidden" : "would hide"} |`).join("\n")
-    : "| | | | nothing to hide | |";
-  fs.appendFileSync(file, "## SwarmTales copy checker\n\n| story | part | why | note | action |\n|---|---|---|---|---|\n" + rows + "\n\n```\n" + log.join("\n") + "\n```\n");
-}
-
-/** A short key for a text, to notice when a part's text or citation changes (AB-067). */
-function textKey(text) {
-  return createHash("sha256").update(String(text || "")).digest("base64").slice(0, 16);
-}
-
-/**
- * When a part's text last changed: its last edit, or when it was added. Used
- * for the order parts are checked in, and as the time of words nothing older
- * shows (AB-076: words are compared by when they were first written).
- */
-function textAt(seg) {
-  const created = Number(seg.created_at || 0);
-  const edited = Number(seg.last_edited_at || 0);
-  return edited > created ? edited : created;
+    ? actions.map((a) => "| " + [a.story, a.seq, what(a), mdCell(a.note)].join(" | ") + " |").join("\n")
+    : "| | | nothing planned | |";
+  fs.appendFileSync(file, "## SwarmTales copy checker: plan\n\nThe apply step checks each of these against the chain again before signing it.\n\n" +
+    "| story | part | planned | note |\n|---|---|---|---|\n" + rows + "\n\n" + mdFence(log.join("\n")));
 }
 
 /**
@@ -140,29 +123,22 @@ const SERVICES = [
     label: "Google Books",
     key: () => env.GOOGLE_BOOKS_KEY,
     monthly: BOOKS_MONTHLY,
-    async ask(phrase) {
-      const url = "https://www.googleapis.com/books/v1/volumes?maxResults=5&q=" + encodeURIComponent('"' + phrase + '"') +
-        "&key=" + encodeURIComponent(env.GOOGLE_BOOKS_KEY.trim());
-      const res = await fetch(url, { headers: { Accept: "application/json" } });
-      return res;
-    },
+    ask: (phrase) => fetch("https://www.googleapis.com/books/v1/volumes?maxResults=5&q=" + encodeURIComponent('"' + phrase + '"') +
+      "&key=" + encodeURIComponent(env.GOOGLE_BOOKS_KEY.trim()), { headers: { Accept: "application/json" } }),
   },
   {
     name: "tavily",
     label: "Tavily",
     key: () => env.TAVILY_API_KEY,
     monthly: TAVILY_MONTHLY,
-    async ask(phrase) {
-      return fetch("https://api.tavily.com/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.TAVILY_API_KEY.trim() },
-        body: JSON.stringify({ query: '"' + phrase + '"', search_depth: "basic", max_results: 5 }),
-      });
-    },
+    ask: (phrase) => fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.TAVILY_API_KEY.trim() },
+      body: JSON.stringify({ query: '"' + phrase + '"', search_depth: "basic", max_results: 5 }),
+    }),
   },
   {
     name: "brave",
-    budgetName: "search",
     label: "Brave",
     key: () => env.BRAVE_API_KEY,
     monthly: MONTHLY,
@@ -216,7 +192,7 @@ async function searchOnce(service, phrase) {
     const results = normalizeResults(service.name, await res.json());
     return results.find((r) => resultMatches(phrase, r, IGNORE)) || null;
   } catch (error) {
-    note("  " + service.label + " search failed (" + (error && error.message ? error.message : String(error)) + ")");
+    note("  " + service.label + " search failed (" + errText(error) + ")");
     return "failed";
   }
 }
@@ -227,14 +203,16 @@ async function searchOnce(service, phrase) {
  * book text is the main risk), then the web. Returns null (nothing worth
  * noting), "defer" (a phrase that mattered went unanswered: no free searches
  * left this run, or every service failed; try next run, AB-083), or
- * { action: "hide" | "note", found, same, label, cited }.
+ * { action: "hide" | "note", found, same, of, label, source, kind, published, cited }.
+ * `kind` is "book" only when every hit of the main source was a book; then
+ * `published` is the latest publishedDate among them (the safe side, M-11).
  */
 async function webCheck(text, spendable, citation) {
   const phrases = pickPhrases(text);
   if (phrases.length < HIDE_FOUND) return null;
   if (!spendable.any() || spendable.leftThisRun() < phrases.length) return "defer";
   const found = [];
-  const labels = new Map();
+  const sources = new Map();
   for (let i = 0; i < phrases.length; i++) {
     if (!worthAsking(found.filter(Boolean).length, i, phrases.length)) break;
     let hit = null;
@@ -255,21 +233,27 @@ async function webCheck(text, spendable, citation) {
     }
     // Nobody could answer: never judged on the phrases asked so far (AB-083).
     if (!answered) return "defer";
-    if (hit) {
-      let host = "";
-      try { host = new URL(hit.url).host; } catch { host = hit.url || "a website"; }
-      const key = hit.source ? (hit.source.title + "|" + hit.source.author).toLowerCase() : host.toLowerCase();
-      if (!labels.has(key)) labels.set(key, { label: hit.label || host, source: hit.source || host });
-      found.push(key);
-    } else {
+    if (!hit) {
       found.push(null);
+      continue;
     }
+    let host = "";
+    try { host = new URL(hit.url).host; } catch { host = "a website"; }
+    const key = hit.source ? (hit.source.title + "|" + hit.source.author).toLowerCase() : host.toLowerCase();
+    const s = sources.get(key) || { label: hit.label || cleanNote(host, "a website", 100), source: hit.source || host, kind: "book", published: "" };
+    // The latest date among the source's hits counts; one unknown date makes it unknown.
+    const end = publishedEnd(hit.published);
+    if (hit.kind !== "book") s.kind = "web";
+    else if (end === null) s.published = "?";
+    else if (s.published === "" || (s.published !== "?" && end > publishedEnd(s.published))) s.published = hit.published;
+    sources.set(key, s);
+    found.push(key);
   }
   const d = decide(found);
   if (d.action === "none") return null;
-  const where = labels.get(d.source);
-  const cited = !!where && citationCovers(citation || "", where.source);
-  return { action: d.action, found: d.found, same: d.same, of: phrases.length, label: where ? where.label : "", source: where ? where.source : null, cited };
+  const where = sources.get(d.source) || { label: "", source: null, kind: "web", published: "" };
+  const cited = !!where.source && citationCovers(citation || "", where.source);
+  return { action: d.action, found: d.found, same: d.same, of: phrases.length, ...where, cited };
 }
 
 async function testPhrase(phrase) {
@@ -291,48 +275,53 @@ async function testPhrase(phrase) {
       note("  " + service.label + ": key works. " + results.length + " result(s); " +
         (hit ? "the phrase was FOUND in " + (hit.label || new URL(hit.url).host) + "." : "no exact match among them."));
     } catch (error) {
-      note("  " + service.label + ": FAILED (" + (error && error.message ? error.message : String(error)) + ")");
+      note("  " + service.label + ": FAILED (" + errText(error) + ")");
     }
   }
+}
+
+function loadState() {
+  try {
+    const state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+    if (state && typeof state === "object" && !Array.isArray(state)) return state;
+  } catch {
+    // below
+  }
+  return { load: { status: "fresh", detail: "no progress from the load step" } };
 }
 
 async function main() {
   if (env.TEST_PHRASE && env.TEST_PHRASE.trim()) {
     await testPhrase(env.TEST_PHRASE.trim());
     writeSummary([]);
-    return;
+    return 0;
   }
-  if (!STORIES) throw new Error("Set STORIES_ADDRESS.");
-  const provider = new Provider([RPC]);
-  // Sign only for the chain we expect, checked against the node (AB-015).
-  const chainId = expectedChainId(RPC, env.EXPECTED_CHAIN_ID);
-  checkChainId(chainId, await provider.getChainId());
-  const stories = new Contract({ id: STORIES, abi: abis.stories, provider });
-  const read = async (name, args) => (await stories.functions[name](args || {})).result || {};
-
+  const { read } = await connect(env);
   const cfg = await read("get_config");
-  let signer = null;
-  if (env.MODERATOR_WIF && !DRY_RUN) {
-    signer = Signer.fromWif(env.MODERATOR_WIF.trim());
-    signer.provider = provider;
-    if (signer.getAddress() !== cfg.moderator) {
-      note("The moderator key (" + signer.getAddress() + ") is not the contract's moderator (" + (cfg.moderator || "none") + "). Report-only this run.");
-      signer = null;
-    }
-  }
-  if (!signer) note("Report-only: nothing will be hidden this run.");
 
   const state = loadState();
-  state.checked = state.checked || {};
-  state.swept = state.swept || {};
+  const load = state.load || { status: "ok", detail: "" };
+  delete state.load;
+  // Without the state key nothing can be saved, so monthly search budgets
+  // can't be kept: no searches, and the apply step signs nothing.
+  const noKey = load.status === "nokey";
+  if (load.status !== "ok") note("Saved progress: " + load.status + " (" + load.detail + ").");
+  for (const name of ["checked", "swept", "seen", "hiddenByChecker", "protect", "activity", "pending"]) {
+    if (!state[name] || typeof state[name] !== "object") state[name] = {};
+  }
   const index = Index.fromJSON(state.index);
   const now = new Date();
   const budgets = {};
-  for (const s of SERVICES) budgets[s.name] = budget(state, now, s.monthly, s.budgetName || "search_" + s.name);
+  for (const s of SERVICES) budgets[s.name] = budget(state, now, s.monthly, "search_" + s.name);
   const disabled = new Set();
   let searchesThisRun = 0;
+  // Brave keeps a card on file: when this month's count of searches was lost
+  // (no valid saved progress), it isn't used this run, so a lost or planted
+  // state can never make the checker run past its free quota.
+  const searchKeys = noKey ? [] : SERVICES.filter((s) => s.key() && (s.name !== "brave" || load.status === "ok")).map((s) => s.label);
+  if (!noKey && load.status !== "ok" && env.BRAVE_API_KEY) note("Brave is not used this run: this month's count of its searches is unknown.");
   const spendable = {
-    services: () => SERVICES.filter((s) => s.key() && !disabled.has(s.name)),
+    services: () => SERVICES.filter((s) => searchKeys.includes(s.label) && !disabled.has(s.name)),
     ok: (s) => searchesThisRun < PER_RUN && budgets[s.name].left() > 0,
     leftThisRun: () => Math.min(PER_RUN - searchesThisRun,
       spendable.services().reduce((sum, s) => sum + budgets[s.name].left(), 0)),
@@ -340,61 +329,43 @@ async function main() {
     spend: (s) => { searchesThisRun += 1; budgets[s.name].spend(); },
     disable: (s) => disabled.add(s.name),
   };
-  const searchKeys = SERVICES.filter((s) => s.key()).map((s) => s.label);
-  note(searchKeys.length ? "Phrase search with: " + searchKeys.join(", ") + "." : "No search key set: only SwarmTales' own text is compared.");
+  note(searchKeys.length ? "Phrase search with: " + searchKeys.join(", ") + "." : "No phrase search this run: only SwarmTales' own text is compared.");
+
+  // ---------------------------------------------------------- the plan
   const actions = [];
+  const planned = new Set();
+  let lastSave = 0;
+  function save(force) {
+    if (!force && Date.now() - lastSave < SAVE_EVERY_MS) return;
+    state.index = index.toJSON();
+    writeAtomic(STATE_FILE, JSON.stringify(state));
+    writeAtomic(PLAN_FILE, JSON.stringify({ v: 1, stories: STORIES, made: new Date().toISOString(), actions }));
+    lastSave = Date.now();
+  }
+  const outOfTime = () => Date.now() - startedAt > BUDGET_MS;
 
-  state.noted = state.noted || {};
-  state.hiddenByChecker = state.hiddenByChecker || {};
-  // Each part's text and citation as last checked, and the verdict (AB-067).
-  state.seen = state.seen || {};
-  state.activity = state.activity || {};
-  // Parts an older checker found hidden and never checked.
-  const neverChecked = new Set(Object.keys(state.hiddenWhenRead || {}));
-  delete state.hiddenWhenRead;
-
-  /** Sign one Stories call with the moderator key (at most 0.5 mana; a hide uses about 0.05). */
-  async function sendAsModerator(name, args) {
-    if (!signer) return false;
-    const mana = BigInt(await provider.getAccountRc(signer.getAddress()));
-    if (mana === 0n) {
-      note("  the moderator wallet has no mana; send it a little KOIN (it is never spent)");
-      return false;
-    }
-    const limit = mana < 50000000n ? mana : 50000000n;
-    const tx = new Transaction({ signer, provider, options: { payer: signer.getAddress(), rcLimit: limit.toString(), chainId } });
-    await tx.pushOperation(await stories.encodeOperation({ name, args: { actor: signer.getAddress(), ...args } }));
-    await tx.prepare();
-    await tx.sign();
-    const receipt = await tx.send();
-    await tx.wait();
-    if (receipt && receipt.reverted) {
-      note("  the chain refused: " + (receipt.logs || []).join(" "));
-      return false;
-    }
-    return true;
+  function plan(action) {
+    const id = action.kind + ":" + action.story + ":" + action.seq;
+    if (planned.has(id)) return;
+    planned.add(id);
+    actions.push(action);
+    note("  " + action.kind.toUpperCase() + " story " + action.story + " part " + action.seq + ": " + action.note);
   }
 
-  /** Returns whether the hide was sent. */
-  async function hide(storyId, seq, reason, why) {
-    const action = { story: storyId, seq, reason, kind: "hide", note: String(why || "copied text").slice(0, 200), sent: false };
-    actions.push(action);
-    note("  HIDE story " + storyId + " part " + seq + ": " + action.note);
-    action.sent = await sendAsModerator("set_segment_hidden", {
-      story_id: String(storyId), seq: String(seq), hidden: true, reason, note: action.note,
+  /** Plans a hide; the apply step re-checks the evidence on the chain before signing. */
+  function hide(storyId, seq, seg, seen, afterRestore) {
+    plan({
+      kind: "hide", story: Number(storyId), seq: Number(seq), t: textKey(seg.text), reason: seen.reason,
+      note: cleanNote(seen.why, "copied text"), src: seen.src || null, label: seen.label || "",
+      copyOf: seen.copyOf || undefined, sourceKind: seen.sourceKind || undefined, published: seen.published || undefined,
+      afterRestore: afterRestore || undefined,
     });
-    return action.sent;
   }
 
-  /** A public note under the part. Nothing is hidden. Added once per part. */
-  async function sourceNote(storyId, seq, seg, text) {
-    const key = storyId + ":" + seq;
-    if (state.noted[key] || (seg.source_note && seg.source_note.length)) return;
-    const action = { story: storyId, seq, reason: 0, kind: "note", note: text.slice(0, 200), sent: false };
-    actions.push(action);
-    note("  NOTE story " + storyId + " part " + seq + ": " + action.note);
-    action.sent = await sendAsModerator("set_source_note", { story_id: String(storyId), seq: String(seq), note: action.note });
-    if (action.sent || !signer) state.noted[key] = true;
+  /** A public note under the part. Nothing is hidden. Never over a note it already has. */
+  function sourceNote(storyId, seq, seg, text) {
+    if (seg.source_note && seg.source_note.length) return;
+    plan({ kind: "note", story: Number(storyId), seq: Number(seq), t: textKey(seg.text), note: cleanNote(text, "Parts of this text also appear elsewhere.") });
   }
 
   /**
@@ -403,23 +374,38 @@ async function main() {
    * look new. Words the part had when it was last checked keep their time;
    * for a part never checked, its kept versions say when each first
    * appeared. Words nothing older shows are dated by the part's last change.
-   * Returns { hashes, at, newer } in the index's form.
+   * Returns { hashes, at, newer } in the index's form, or null when the
+   * versions could not all be read (O1-16): then the part waits for the next
+   * run instead of having its old words dated "now".
    */
   async function dateText(storyId, seq, seg) {
     const hashes = fingerprint(seg.text);
     const now = textAt(seg);
     const first = new Map();
     const prev = index.parts.get(storyId + ":" + seq);
+    const total = Number(seg.version_count || 0);
     if (prev) {
       for (const h of prev.hashes) first.set(h, dateOf(prev, h));
-    } else if (now > Number(seg.created_at || 0) && Number(seg.version_count || 0) > 0) {
+    } else if (now > Number(seg.created_at || 0) && total > 0) {
+      let versions;
       try {
         const ask = (from, count) => read("get_versions", { story_id: String(storyId), seq: String(seq), from, count });
-        for (const v of await readAllVersions(ask, seg.version_count)) {
-          for (const h of fingerprint(v.text)) if (!first.has(h)) first.set(h, Number(v.at || 0));
-        }
+        versions = await readAllVersions(ask, total);
       } catch (error) {
-        note("  could not read the versions of story " + storyId + " part " + seq + ": " + (error && error.message ? error.message : String(error)));
+        note("  could not read the versions of story " + storyId + " part " + seq + " (" + errText(error) + "): checked next run");
+        return null;
+      }
+      if (versions.length !== total) {
+        note("  read " + versions.length + " of " + total + " versions of story " + storyId + " part " + seq + ": checked next run");
+        return null;
+      }
+      for (const v of versions) {
+        const at = Number(v.at || 0);
+        if (!at) {
+          note("  a version of story " + storyId + " part " + seq + " has no date: checked next run");
+          return null;
+        }
+        for (const h of fingerprint(v.text)) if (!first.has(h)) first.set(h, at);
       }
     }
     const when = hashes.map((h) => first.get(h) || now);
@@ -436,12 +422,11 @@ async function main() {
 
   /**
    * Compares one part's text with SwarmTales and, with alsoWeb, the web.
-   * Adds a source note for a partial match. Returns "defer" (search budget
+   * Plans a source note for a partial match. Returns "defer" (search budget
    * used up: try next run) or a verdict: { v: "clean" }, { v: "note" },
-   * { v: "copy", reason, why, note, src, label, copyOf } (a clear copy, to be
-   * hidden) or { v: "cited", ... } (a clear copy of a source the writer cited:
-   * left alone while the citation names it). `dated`: the text's hashes and
-   * when each was first written (dateText).
+   * { v: "copy", reason, why, note, src, label, copyOf | sourceKind+published }
+   * (a clear copy, to be hidden) or { v: "cited", ... } (a clear copy of a
+   * source the writer cited: left alone while the citation names it).
    */
   async function checkPart(storyId, seq, seg, alsoWeb, dated) {
     const key = storyId + ":" + seq;
@@ -458,7 +443,7 @@ async function main() {
         return { v: "copy", reason: REASON.DUPLICATE, why: pct + "% of this part matches story " + srcStory + ", part " + srcSeq + ", by another writer",
           note: noteText, copyOf: match.key };
       }
-      await sourceNote(storyId, seq, seg, noteText);
+      sourceNote(storyId, seq, seg, noteText);
       return { v: "note" };
     }
     // Written at the same time as a matching part: nobody can tell which is
@@ -467,16 +452,16 @@ async function main() {
     if (tie && (isDuplicate(hashes, tie) || isPartialDuplicate(hashes, tie))) {
       const [tieStory, tieSeq] = tie.key.split(":");
       const pct = Math.round(tie.ratio * 100);
-      await sourceNote(storyId, seq, seg, "About " + pct + "% of this text also appears in story " + tieStory + ", part " + tieSeq + ", written at the same time.");
+      sourceNote(storyId, seq, seg, "About " + pct + "% of this text also appears in story " + tieStory + ", part " + tieSeq + ", written at the same time.");
       // Read the other part first: it may be gone by now, or already carry a
       // note (from the web check, say) that must not be overwritten (AB-030).
       try {
         const partner = await read("get_segment", { story_id: tieStory, seq: tieSeq });
-        if (Number(partner.status) === 1) {
-          await sourceNote(Number(tieStory), Number(tieSeq), partner, "Much of this text also appears in story " + storyId + ", part " + seq + ", written at the same time.");
+        if (Number(partner.status) === 1 && partner.text) {
+          sourceNote(tieStory, tieSeq, partner, "Much of this text also appears in story " + storyId + ", part " + seq + ", written at the same time.");
         }
       } catch (error) {
-        note("  could not read story " + tieStory + " part " + tieSeq + ": " + (error && error.message ? error.message : String(error)));
+        note("  could not read story " + tieStory + " part " + tieSeq + ": " + errText(error));
       }
       return { v: "note" };
     }
@@ -485,15 +470,19 @@ async function main() {
     if (alsoWeb && String(seg.text).length >= WEB_MIN_CHARS && searchKeys.length) {
       const web = await webCheck(seg.text, spendable, seg.citation);
       if (web === "defer") return "defer";
-      if (web && web.action === "hide") {
-        const found = { reason: REASON.COPYRIGHT, why: "copied text: " + web.found + " of " + web.of + " phrases found, " + web.same + " of them in " + web.label,
-          note: "Parts of this text also appear in " + web.label + ".", src: web.source, label: web.label };
-        // The writer named this source: left alone, but only while the citation names it (AB-067).
-        return { v: web.cited ? "cited" : "copy", ...found };
-      }
-      if (web && web.cited) return { v: "clean" }; // the writer named this source
       if (web) {
-        await sourceNote(storyId, seq, seg, "Parts of this text also appear in " + web.label + ".");
+        const noteText = "Parts of this text also appear in " + web.label + ".";
+        // Hidden only when the source is a book provably older than the part
+        // (M-11). A website, or a book that may be newer (it may have copied
+        // the part), gets a note and the part stays visible.
+        if (web.action === "hide" && web.kind === "book" && provablyOlder(web.published, seg.created_at)) {
+          const found = { reason: REASON.COPYRIGHT, why: "copied text: " + web.found + " of " + web.of + " phrases found, " + web.same + " of them in " +
+            web.label + " (published " + web.published + ")", note: noteText, src: web.source, label: web.label, sourceKind: "book", published: web.published };
+          // The writer named this source: left alone, but only while the citation names it (AB-067).
+          return { v: web.cited ? "cited" : "copy", ...found };
+        }
+        if (web.cited) return { v: "clean" }; // the writer named this source
+        sourceNote(storyId, seq, seg, noteText);
         return { v: "note" };
       }
     }
@@ -501,70 +490,76 @@ async function main() {
   }
 
   /**
+   * O1-07: the chain says the story's opener or an editor restored a checker
+   * hide of this part (restore_segment sets refund_forfeited only for a hide
+   * the checker made), so its text is never hidden again. Which text: the
+   * one the saved progress says was hidden then, or else the text now
+   * (recorded now), so losing the saved progress can only protect more.
+   */
+  function openerRestored(key, seg) {
+    if (!(seg.restored && seg.refund_forfeited)) return false;
+    const t = textKey(seg.text);
+    if (!state.protect[key]) state.protect[key] = t;
+    return state.protect[key] === t;
+  }
+
+  /**
    * Acts on a part's verdict. A clear copy is hidden, and a hide writer
-   * reports made is taken over in place, so it is treated exactly like one the
-   * checker made first: no refund on removal, and restoring it forfeits the
-   * refund (AB-071). A hide the admin holds is left to the admin. A copy whose
-   * checker hide was undone (its opener restored it, or the admin) is never
-   * hidden again for the same text; it gets a source note instead.
+   * reports made for copying is taken over in place (AB-071, AB-078). A hide
+   * the admin holds is left to the admin. A copy whose checker hide was
+   * undone (its opener restored it, or the admin) is never hidden again for
+   * the same text; it gets a source note instead.
    */
   async function enforce(storyId, seq, seg, seen) {
     const key = storyId + ":" + seq;
+    if (seen.v === "copy" && Number(seg.hidden_by || 0) !== 2 && openerRestored(key, seg)) seen.v = "overruled";
     if (seen.v === "overruled") {
       // Indexed after all, so a copy of it made later is still caught.
       const entry = index.parts.get(key);
       if (!entry || entry.skip) {
         indexText(key, seg, entry || { hashes: fingerprint(seg.text), at: textAt(seg) }, false, seen.copyOf);
       }
-      if (seen.note) await sourceNote(storyId, seq, seg, seen.note);
+      if (seen.note) sourceNote(storyId, seq, seg, seen.note);
       return;
     }
     if (seen.v !== "copy") return;
     const by = Number(seg.hidden_by || 0);
     if (seg.hidden) {
       if (by === 2) {
-        if (!state.hiddenByChecker[key]) state.hiddenByChecker[key] = { source: seen.src || null, label: seen.label || "" };
+        if (!state.hiddenByChecker[key]) state.hiddenByChecker[key] = { source: seen.src || null, label: seen.label || "", t: textKey(seg.text) };
         return;
       }
-      // The admin's hide, or one from before hidden_by that may be the admin's.
-      if (by === 3 || (by === 0 && !seg.hidden_by_reports)) {
-        seen.admin = true;
+      if (by !== 1) {
+        seen.admin = true; // the admin's hide: left to the admin
         return;
       }
       // A hide writer reports made for anything but copying (abuse, spam) is
-      // never taken over, so no citation can lift it (AB-078). If its opener
-      // restores it, the copy is hidden then.
+      // never taken over, so no citation can lift it (AB-078).
       const reason = Number(seg.moderation_reason || 0);
       if (reason !== REASON.COPYRIGHT && reason !== REASON.DUPLICATE) return;
     } else if (seen.admin) {
-      // The admin looked at it and unhid it: only the admin can unhide the
-      // admin's hide, whatever `restored` says from an older restore (AB-077).
+      // The admin looked at it and unhid it: only the admin decides (AB-077).
       seen.v = "overruled";
       await enforce(storyId, seq, seg, seen);
       return;
     }
-    // Remembered so the part comes back by itself if its writer names this
-    // source, but only a hide that was sent: in a report-only run, or when
-    // the chain refused it, the checker hid nothing it may undo (AB-061).
-    if (await hide(storyId, seq, seen.reason, seen.why)) {
-      state.hiddenByChecker[key] = { source: seen.src || null, label: seen.label || "" };
-    }
+    hide(storyId, seq, seg, seen, seg.restored && seg.refund_forfeited);
   }
 
   /**
    * Checks a live part whose text the checker hasn't judged yet (new, or
    * changed since: AB-067), or re-reads its citation, then acts on the
-   * verdict. Returns "defer" when the search budget ran out.
+   * verdict. Returns "done", "defer" (out of searches) or "retry" (its
+   * versions could not be read).
    */
   async function review(storyId, seq, seg, alsoWeb) {
     const key = storyId + ":" + seq;
     const t = textKey(seg.text);
     const c = textKey(seg.citation);
     let seen = state.seen[key];
-    // Recorded by the hide re-check without the text: it is the text hidden then.
-    if (seen && seen.t === undefined) seen.t = t;
     if (!seen || seen.t !== t) {
       const dated = await dateText(storyId, seq, seg);
+      if (!dated) return "retry";
       const verdict = await checkPart(storyId, seq, seg, alsoWeb, dated);
       if (verdict === "defer") return "defer";
       seen = state.seen[key] = { t, c, ...verdict };
@@ -580,44 +575,22 @@ async function main() {
   }
 
   /** Whether a live part read again needs review this run. */
-  function needsReview(key, seq, seg, checkedUpTo) {
+  function needsReview(key, seg) {
     const seen = state.seen[key];
-    if (!seen) {
-      const hid = state.hiddenByChecker[key];
-      if (hid) {
-        // Hidden by an older checker, which kept no verdict.
-        state.seen[key] = { t: textKey(seg.text), c: textKey(seg.citation), v: "copy", reason: REASON.COPYRIGHT, why: "copied text",
-          note: hid.label ? "Parts of this text also appear in " + hid.label + "." : "", src: hid.source, label: hid.label };
-        return true;
-      }
-      // Checked by an older checker, which kept no text key: its text counts
-      // as checked unless it was edited after it was written, was hidden
-      // when that checker read it (and so never checked), or has a citation:
-      // that checker kept no record of the parts it brought back because
-      // their writer cited the source, so clearing the citation must find
-      // them uncited (AB-080).
-      const edited = Number(seg.last_edited_at || 0) > Number(seg.created_at || 0);
-      if (seq <= checkedUpTo && !neverChecked.has(key) && !edited && !seg.citation) {
-        state.seen[key] = { t: textKey(seg.text), c: textKey(seg.citation), v: "clean" };
-        return false;
-      }
-      return true;
-    }
-    if (seen.t !== textKey(seg.text)) return true;
+    if (!seen || seen.t !== textKey(seg.text)) return true;
     if (seen.v === "copy" || seen.v === "cited") return true;
-    return seen.v === "overruled" && !!seen.note && !state.noted[key] && !(seg.source_note && seg.source_note.length);
+    return seen.v === "overruled" && !!seen.note && !(seg.source_note && seg.source_note.length);
   }
 
   // Parts the checker hid: bring one back when its writer has named the source,
   // and stop holding the ones someone else took over or undid. Only the
   // checker's own hide (hidden_by 2): never one the admin or writer reports
-  // made, or took over (AB-061).
+  // made (AB-061).
   for (const key of Object.keys(state.hiddenByChecker)) {
     try {
       const [sid, sq] = key.split(":");
       const seg = await read("get_segment", { story_id: sid, seq: sq });
       const entry = state.hiddenByChecker[key];
-      const seen = state.seen && state.seen[key];
       if (Number(seg.status) !== 1) {
         delete state.hiddenByChecker[key];
         continue;
@@ -625,44 +598,40 @@ async function main() {
       if (!seg.hidden || Number(seg.hidden_by || 0) !== 2) {
         // Its opener restored it (which forfeits the refund), or the admin
         // took it over or unhid it: the checker never hides this text again.
-        // Only a hide the chain accepted is recorded here, so it landed;
-        // `restored` may be left over from an older restore and says nothing
-        // about this one (AB-077).
-        if (seen) seen.v = "overruled";
+        if (seg.restored && seg.refund_forfeited && !seg.hidden) state.protect[key] = entry.t || textKey(seg.text);
+        if (state.seen[key]) state.seen[key].v = "overruled";
         delete state.hiddenByChecker[key];
         continue;
       }
       if (seg.citation && citationCovers(seg.citation, entry.source)) {
-        note("  UNHIDE story " + sid + " part " + sq + ": the writer named the source (" + seg.citation.slice(0, 80) + ")");
-        const ok = await sendAsModerator("set_segment_hidden", {
-          story_id: sid, seq: sq, hidden: false, reason: 0, note: "source cited by the writer",
-        });
-        actions.push({ story: sid, seq: sq, reason: REASON.COPYRIGHT, kind: "unhide", note: "source cited by the writer", sent: ok });
-        if (ok || !signer) {
-          delete state.hiddenByChecker[key];
-          // Kept: if the citation stops naming the source, it is hidden again (AB-067).
-          if (state.seen) {
-            state.seen[key] = { reason: REASON.COPYRIGHT, why: "copied text from " + (entry.label || "a source"),
-              note: entry.label ? "Parts of this text also appear in " + entry.label + "." : "",
-              ...(seen || {}), v: "cited", c: undefined, src: entry.source, label: entry.label };
-          }
-        }
+        plan({ kind: "unhide", story: Number(sid), seq: Number(sq), t: textKey(seg.text), note: "source cited by the writer",
+          src: entry.source, label: entry.label || "" });
       }
     } catch (error) {
-      note("  could not re-check " + key + ": " + (error && error.message ? error.message : String(error)));
+      note("  could not re-check " + key + ": " + errText(error));
     }
   }
 
-  // 1. Read every story's new parts.
-  // And its older parts again whenever anything in the story changed since
-  // they were checked: a part reworded after its check is checked again, web
-  // search included (AB-067).
+  // 1. Read every story's new parts, and its older parts again whenever
+  // anything in the story changed since they were checked: a part reworded
+  // after its check is checked again, web search included (AB-067). Parts
+  // are read a few at a time (M-5).
+  // A run out of time stops reading; the next one starts reading where it
+  // stopped (state.readFrom), so no story waits for good behind the others.
   const next = Number(cfg.next_story_id || 1);
   const fresh = [];
   const full = [];
   const marks = new Map(); // story id -> what it looked like when read in full
   const reread = new Set();
-  for (let id = 1; id < next; id++) {
+  const first = Number(state.readFrom) >= 1 && Number(state.readFrom) < next ? Number(state.readFrom) : 1;
+  delete state.readFrom;
+  for (let n = 0; n < next - 1; n++) {
+    const id = ((first - 1 + n) % (next - 1)) + 1;
+    if (outOfTime() && fresh.some((s) => s.parts.length)) {
+      state.readFrom = id;
+      note("Out of time while reading stories: reading goes on from story " + id + " next run.");
+      break;
+    }
     try {
       const st = await read("get_story", { story_id: String(id) });
       const status = Number(st.status || 0);
@@ -673,22 +642,18 @@ async function main() {
       // Text changes while a story is open, locked or in its final edit.
       const again = status <= 3 && (mark === null || state.activity[id] !== mark);
       const parts = [];
-      for (let start = again ? 1 : checkedUpTo + 1; start <= count; start += 10) {
-        const page = await read("get_segments", { story_id: String(id), start: String(start), limit: 10 });
-        (page.values || []).forEach((seg, i) => {
-          const seq = start + i;
-          const key = id + ":" + seq;
-          reread.add(key);
-          if (seq > checkedUpTo) parts.push({ seq, at: Number(seg.created_at || 0), seg, isNew: true });
-          else if (Number(seg.status) !== 1 || !seg.text) delete state.seen[key];
-          else if (needsReview(key, seq, seg, checkedUpTo)) parts.push({ seq, at: textAt(seg), seg });
-        });
+      for (const { seq, seg } of await readParts(read, id, again ? 1 : checkedUpTo + 1, count, PER_READ)) {
+        const key = id + ":" + seq;
+        reread.add(key);
+        if (seq > checkedUpTo) parts.push({ seq, at: Number(seg.created_at || 0), seg, isNew: true });
+        else if (Number(seg.status) !== 1 || !seg.text) delete state.seen[key];
+        else if (needsReview(key, seg)) parts.push({ seq, at: textAt(seg), seg });
       }
       fresh.push({ id, parts });
       if (again) marks.set(id, mark);
       if ((status === 2 || status === 3) && !state.swept[id]) full.push({ id, count });
     } catch (error) {
-      note("Story " + id + ": " + (error && error.message ? error.message : String(error)) + " (will retry next run)");
+      note("Story " + id + ": " + errText(error) + " (will retry next run)");
     }
   }
   // Copies waiting to be hidden, and cited copies, in stories not read again:
@@ -700,9 +665,9 @@ async function main() {
     try {
       const seg = await read("get_segment", { story_id: String(sid), seq: String(sq) });
       if (Number(seg.status) !== 1 || !seg.text) delete state.seen[key];
-      else if (needsReview(key, sq, seg, sq)) fresh.push({ id: sid, parts: [{ seq: sq, at: textAt(seg), seg }] });
+      else if (needsReview(key, seg)) fresh.push({ id: sid, parts: [{ seq: sq, at: textAt(seg), seg }] });
     } catch (error) {
-      note("  could not re-check " + key + ": " + (error && error.message ? error.message : String(error)));
+      note("  could not re-check " + key + ": " + errText(error));
     }
   }
 
@@ -712,75 +677,95 @@ async function main() {
   // "done up to" mark when the run stops early. Hidden parts are checked
   // too: one hidden by writer reports is taken over if it is a copy (AB-071).
   // A part that waited for its search last run is checked first (AB-083).
+  // At least one part is checked every run, whatever the time budget.
   const stopped = new Set();
-  state.pending = state.pending || {};
   const waiting = (p) => (state.pending[p.story + ":" + p.seq] ? 1 : 0);
   const order = checkOrder(fresh).sort((a, b) => waiting(b) - waiting(a));
   const left = new Map();
   for (const p of order) left.set(p.story, (left.get(p.story) || 0) + 1);
+  let done = 0;
   for (const { story: id, seq, seg, isNew } of order) {
     if (stopped.has(id)) continue;
+    if (done > 0 && outOfTime()) {
+      note("Out of time: the remaining parts are checked next run.");
+      break;
+    }
     const key = id + ":" + seq;
     try {
       if (Number(seg.status) === 1 && seg.text) {
+        const r = await review(id, seq, seg, true);
         // Out of free searches for this run: this part and everything after
         // it waits for the next run, still unchecked.
-        if (await review(id, seq, seg, true) === "defer") {
+        if (r === "defer") {
           state.pending[key] = true;
           break;
+        }
+        // Its versions couldn't be read: this story waits for the next run.
+        if (r === "retry") {
+          stopped.add(id);
+          continue;
         }
       }
       delete state.pending[key];
       if (isNew) state.checked[id] = seq;
       left.set(id, left.get(id) - 1);
+      done += 1;
+      save(false);
     } catch (error) {
       stopped.add(id);
-      note("Story " + id + ": " + (error && error.message ? error.message : String(error)) + " (will retry next run)");
+      note("Story " + id + ": " + errText(error) + " (will retry next run)");
     }
   }
   // A story read in full counts as up to date once every part of it is done.
   // A change in the last few minutes may share its second with one still to
-  // come, so such a story is read in full again next run.
+  // come, so such a story is read in full again next run. last_activity_at
+  // is on Stories' activity clock, which stops while Stories is paused.
+  const clock = activityNow(cfg, now.getTime() / 1000);
   for (const [id, mark] of marks) {
-    const recent = mark === null || now.getTime() / 1000 - Number(mark.split(":")[0]) < 300;
+    const recent = mark === null || clock - Number(mark.split(":")[0]) < 300;
     if (!left.get(id) && !recent) state.activity[id] = mark;
     else delete state.activity[id];
   }
 
   // 3. Before a story can be finished: one more full comparison, once.
   for (const { id, count } of full) {
+    if (outOfTime() && done > 0) break;
     try {
       note("Story " + id + " is full: checking all of it once more before it can be finished.");
-      for (let start = 1; start <= count; start += 10) {
-        const page = await read("get_segments", { story_id: String(id), start: String(start), limit: 10 });
-        (page.values || []).forEach((seg, i) => { seg._seq = start + i; });
-        for (const seg of page.values || []) {
-          if (Number(seg.status) !== 1 || !seg.text) continue;
-          const key = id + ":" + seg._seq;
-          const t = textKey(seg.text);
-          const seen = state.seen[key];
-          if (seen && seen.t === t && (seen.v === "copy" || seen.v === "overruled")) continue;
-          const dated = await dateText(id, seg._seq, seg);
-          const verdict = await checkPart(id, seg._seq, seg, false, dated);
-          if (verdict === "defer" || verdict.v !== "copy") continue;
-          state.seen[key] = { t, c: textKey(seg.citation), ...verdict };
-          indexText(key, seg, dated, true);
-          await enforce(id, seg._seq, seg, state.seen[key]);
-        }
+      for (const { seq, seg } of await readParts(read, id, 1, count, PER_READ)) {
+        if (Number(seg.status) !== 1 || !seg.text) continue;
+        const key = id + ":" + seq;
+        const t = textKey(seg.text);
+        const seen = state.seen[key];
+        if (seen && seen.t === t && (seen.v === "copy" || seen.v === "overruled")) continue;
+        const dated = await dateText(id, seq, seg);
+        if (!dated) throw new Error("part " + seq + " could not be dated");
+        const verdict = await checkPart(id, seq, seg, false, dated);
+        if (verdict === "defer" || verdict.v !== "copy") continue;
+        state.seen[key] = { t, c: textKey(seg.citation), ...verdict };
+        indexText(key, seg, dated, true);
+        await enforce(id, seq, seg, state.seen[key]);
       }
       state.swept[id] = true;
+      done += 1;
     } catch (error) {
-      note("Story " + id + ": " + (error && error.message ? error.message : String(error)) + " (will retry next run)");
+      note("Story " + id + ": " + errText(error) + " (will retry next run)");
     }
   }
 
-  saveState(state, index);
-  note("Done. Hidden: " + actions.filter((a) => a.kind === "hide").length + ". Source notes: " + actions.filter((a) => a.kind === "note").length + ". Searches this run: " + searchesThisRun + "." +
-    SERVICES.filter((s) => s.key()).map((s) => " " + s.label + " left this month: " + budgets[s.name].left() + ".").join(""));
+  save(true);
+  note("Planned: " + actions.filter((a) => a.kind === "hide").length + " hide(s), " + actions.filter((a) => a.kind === "note").length + " note(s), " +
+    actions.filter((a) => a.kind === "unhide").length + " unhide(s). Searches this run: " + searchesThisRun + "." +
+    SERVICES.filter((s) => searchKeys.includes(s.label)).map((s) => " " + s.label + " left this month: " + budgets[s.name].left() + ".").join(""));
   writeSummary(actions);
+  if (noKey) {
+    note("::error title=Copy checker::" + load.detail + ": this run only reported. Add CHECKER_STATE_KEY to the copy-checker environment.");
+    return 1;
+  }
+  return 0;
 }
 
-main().catch((error) => {
-  console.error("Copy checker stopped: " + (error && error.message ? error.message : String(error)));
+main().then((code) => process.exit(code), (error) => {
+  console.error(logLine("Copy checker stopped: " + errText(error)));
   process.exit(1);
 });

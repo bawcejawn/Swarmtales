@@ -14,6 +14,7 @@ import {
   reset, configure, openPublic, write, revise, segment, story, versions, takedown,
   authorize, allowCalls, checkpoint, setTime, directly,
 } from "./auditFixHelpers";
+import { ownEditArgs } from "./reviewed";
 
 // Closures cannot capture locals in AssemblyScript: tests pass values through these.
 let ID: u64 = 0;
@@ -33,7 +34,7 @@ function letters(n: i32): string {
 // The writer's free, same-length rewording: no Ink moves, no external call.
 function freeEdit(id: u64, seq: u64, text: string): void {
   authorize(BOB);
-  new Stories().edit_segment(new stories.edit_segment_arguments(BOB, id, seq, text, <u64>text.length));
+  new Stories().edit_segment(ownEditArgs(BOB, id, seq, text, <u64>text.length));
   checkpoint();
 }
 // `count` free edits alternating two texts; version_count ends at count + 1.
@@ -134,7 +135,7 @@ describe("RT-SAB-L3: the final edit at the version limit", () => {
     expect(segment(id, seq).version_count).toBe(99);
     fillAndLock(id);
     authorize(ALICE); allowCalls(1);
-    new Stories().close_story(new stories.close_story_arguments(ALICE, id, USDT));
+    new Stories().close_story(new stories.close_story_arguments(ALICE, id));
     checkpoint();
     const fixed = "Bob writes a short scene in the harbor.."; // same length
     authorize(ALICE); allowCalls(2);

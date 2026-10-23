@@ -1,0 +1,95 @@
+// Audit 2026-10 W1-04 (a Vault endpoint can't show "Done" for an unrelated
+// transaction) and W1-05 (the session secret stays out of URLs).
+import assert from "node:assert/strict";
+import test from "node:test";
+import { vaultRequestStatus, vaultStatus, vaultTransactionMismatch } from "../src/lib/vaultApi.js";
+
+if (!globalThis.sessionStorage) {
+  const m = new Map();
+  globalThis.sessionStorage = { getItem: (k) => m.get(k) ?? null, setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) };
+}
+const { verifyVaultTransaction } = await import("../src/wallet.js");
+
+function json(status, body) {
+  return { ok: status >= 200 && status < 300, status, json: async () => body };
+}
+
+const statusBody = { ok: true, connected: true, address: "1abc", expiresAt: 1 };
+
+test("W1-05: status calls send the secret in a POST body, never in the URL, when Vault accepts it", async () => {
+  const creds = { sessionId: "sess", secret: "s3cret" };
+  const seen = [];
+  const fetchImpl = async (url, init) => {
+    seen.push({ url, init });
+    return json(200, url.includes("request-status") ? { ok: true, status: "pending" } : statusBody);
+  };
+  await vaultStatus(creds, fetchImpl);
+  await vaultRequestStatus(creds, "req1", fetchImpl);
+  assert.equal(creds.transport, "post");
+  for (const s of seen) {
+    assert.equal(s.init.method, "POST");
+    assert.ok(!s.url.includes("s3cret") && !s.url.includes("?"), s.url);
+    assert.equal(JSON.parse(s.init.body).secret, "s3cret");
+  }
+  assert.equal(JSON.parse(seen[1].init.body).requestId, "req1");
+});
+
+test("W1-05: if Vault only takes GET, the page falls back once and remembers it", async () => {
+  const creds = { sessionId: "sess", secret: "s3cret" };
+  const seen = [];
+  const fetchImpl = async (url, init) => {
+    seen.push(init.method);
+    if (init.method === "POST") return json(405, { ok: false, error: "method not allowed" });
+    return json(200, statusBody);
+  };
+  await vaultStatus(creds, fetchImpl);
+  await vaultStatus(creds, fetchImpl);
+  assert.deepEqual(seen, ["POST", "GET", "GET"]);
+  assert.equal(creds.transport, "get");
+});
+
+test("W1-05: an expired session is still reported as expired (no silent fallback loop)", async () => {
+  const creds = { sessionId: "sess", secret: "s3cret", transport: "post" };
+  await assert.rejects(vaultStatus(creds, async () => json(404, { ok: false, error: "no session" })), (e) => e.status === 404);
+});
+
+const ops = [
+  { call_contract: { contract_id: "1Shop", entry_point: 11, args: "AAEC" } },
+  { call_contract: { contract_id: "1Stories", entry_point: 22, args: "AwQ=" } },
+];
+const tx = (over = {}) => ({
+  id: "0x1220ab",
+  header: { chain_id: "CHAIN" },
+  operations: ops.map((o) => ({ call_contract: { ...o.call_contract, args: o.call_contract.args.replace(/=+$/, "") } })),
+  ...over,
+});
+
+test("W1-04: only the exact transaction asked for counts", () => {
+  assert.equal(vaultTransactionMismatch(tx(), ops, { txid: "0x1220AB", chainId: "CHAIN" }), "");
+  assert.match(vaultTransactionMismatch(tx({ id: "0x1220cd" }), ops, { txid: "0x1220ab", chainId: "CHAIN" }), /id/);
+  assert.match(vaultTransactionMismatch(tx({ header: { chain_id: "OTHER" } }), ops, { txid: "0x1220ab", chainId: "CHAIN" }), /chain/);
+  assert.match(vaultTransactionMismatch(tx({ operations: tx().operations.slice(0, 1) }), ops, { txid: "0x1220ab", chainId: "CHAIN" }), /calls/);
+  const swapped = tx();
+  swapped.operations[1] = { call_contract: { contract_id: "1Stories", entry_point: 22, args: "BBBB" } };
+  assert.match(vaultTransactionMismatch(swapped, ops, { txid: "0x1220ab", chainId: "CHAIN" }), /different details/);
+  const other = tx();
+  other.operations[0] = { call_contract: { contract_id: "1Thief", entry_point: 11, args: "AAEC" } };
+  assert.match(vaultTransactionMismatch(other, ops, { txid: "0x1220ab", chainId: "CHAIN" }), /different contract/);
+  assert.match(vaultTransactionMismatch(null, ops, { txid: "x", chainId: "CHAIN" }), /no such/);
+});
+
+test("W1-04: the Vault wallet reports success only after the node shows the matching transaction", async () => {
+  let calls = 0;
+  const lookup = async () => (++calls < 3 ? null : { transaction: tx() });
+  const got = await verifyVaultTransaction("0x1220ab", ops, "CHAIN", { lookup, sleep: async () => {}, waitMs: 60000 });
+  assert.equal(got.id, "0x1220ab");
+  await assert.rejects(
+    verifyVaultTransaction("0x1220ab", ops, "CHAIN", { lookup: async () => ({ transaction: tx({ id: "0x1220ab", operations: [] }) }), sleep: async () => {} }),
+    /not what this page asked for/
+  );
+  let t = 0;
+  await assert.rejects(
+    verifyVaultTransaction("0x1220ab", ops, "CHAIN", { lookup: async () => null, sleep: async () => { t += 5000; }, now: () => t, waitMs: 10000 }),
+    /doesn't show it yet/
+  );
+});

@@ -1,14 +1,34 @@
 /** Tiny DOM helpers. Text is always inserted as text, never as HTML. */
 
+// Attributes that load or run a URL: a javascript: (or vbscript:/data:text)
+// value there would be script, so h() refuses it.
+const URL_ATTRS = new Set(["href", "src", "action", "formaction", "xlink:href", "poster", "background"]);
+// Browsers ignore spaces and control characters inside a scheme ("java\tscript:").
+const SCRIPT_URL = /^(javascript|vbscript):|^data:text\/html/i;
+const squeeze = (v) => String(v).replace(/[\u0000-\u0020]/g, "");
+// Never set from h(): raw HTML or a document of its own.
+const BANNED_ATTRS = new Set(["srcdoc", "innerhtml", "outerhtml"]);
+
+/**
+ * h(tag, attrs, children). An "on..." key must be a function and becomes an
+ * event listener: h() never writes an inline handler attribute (onclick="..."),
+ * whatever the value, so on-chain text can't become script even if a caller
+ * passes it by mistake. URL attributes refuse javascript: and similar.
+ */
 export function h(tag, attrs, children) {
   const node = document.createElement(tag);
   const props = attrs || {};
   for (const key of Object.keys(props)) {
     const value = props[key];
     if (value == null || value === false) continue;
-    if (key === "class") node.className = value;
+    const lower = key.toLowerCase();
+    if (lower.startsWith("on")) {
+      if (typeof value !== "function") throw new TypeError("h(): " + key + " must be a function, not " + typeof value);
+      node.addEventListener(lower.slice(2), value);
+    } else if (key === "class") node.className = String(value);
     else if (key === "dataset") Object.assign(node.dataset, value);
-    else if (key.startsWith("on") && typeof value === "function") node.addEventListener(key.slice(2).toLowerCase(), value);
+    else if (BANNED_ATTRS.has(lower)) throw new TypeError("h(): " + key + " is not allowed");
+    else if (URL_ATTRS.has(lower) && SCRIPT_URL.test(squeeze(value))) throw new TypeError("h(): unsafe " + key);
     else node.setAttribute(key, value === true ? "" : String(value));
   }
   append(node, children);

@@ -8,6 +8,7 @@ import { Base58, MockVM, System, authority, chain, Protobuf, system_calls } from
 import { Stories } from "../Stories";
 import { stories } from "../proto/stories";
 import { LINK_ADDRESSES, inviteSig } from "./linkFixtures";
+import { ownEditArgs } from "./reviewed";
 
 function linkKey(key: i32): Uint8Array {
   return Base58.decode(LINK_ADDRESSES[key]);
@@ -244,7 +245,7 @@ function edit(as: Uint8Array, id: u64, seq: u64, text: string): void {
   else allowCalls(1);
   // max_ink: the growth price the page would show (AB-049).
   const growth: u64 = <u64>text.length > current ? <u64>text.length - current : 0;
-  new Stories().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length, growth));
+  new Stories().edit_segment(ownEditArgs(as, id, seq, text, <u64>text.length, growth));
   checkpoint();
 }
 
@@ -262,7 +263,7 @@ function fillShort(id: u64): void {
 function closeAs(opener: Uint8Array, id: u64): void {
   authorize(opener);
   allowCalls(1);
-  new Stories().close_story(new stories.close_story_arguments(opener, id, USDT));
+  new Stories().close_story(new stories.close_story_arguments(opener, id));
   checkpoint();
 }
 
@@ -301,7 +302,7 @@ function failContribute(): void {
 function failEdit(): void {
   authorize(fWho);
   results(fResults);
-  new Stories().edit_segment(new stories.edit_segment_arguments(fWho, fId, fSeq, fText, fExpected, u64.MAX_VALUE)); // any price: these edits fail for other reasons
+  new Stories().edit_segment(ownEditArgs(fWho, fId, fSeq, fText, fExpected, u64.MAX_VALUE)); // any price: these edits fail for other reasons
 }
 
 function failLimits(): void {
@@ -333,6 +334,12 @@ function reset(): void {
 
 function openArgs(opener: Uint8Array, kind: stories.story_kind, max: u64, c1: u32, c2: u32, title: string, text: string, expected: u64, free: u32): stories.open_story_arguments {
   return new stories.open_story_arguments(opener, kind, title, max, c1, c2, PUBLIC, free, 0, text, false, expected, USDT, true, 0);
+}
+
+function failOpenUnlisted(): void {
+  const args = openArgs(ALICE, SHORT, 10000, 1, 0, "T", "Hi", 2, 0);
+  args.visibility = UNLISTED;
+  tryOpen(args, twoOk());
 }
 
 // Alice tries to open with these settings; Shop and Ink answer `answers`.
@@ -411,18 +418,8 @@ describe("Stories: opening", () => {
     expect(second.values[0]).toBe(id);
   });
 
-  it("lets only invited writers write an unlisted story", () => {
-    const id = openAs(ALICE, SHORT, 10000, UNLISTED, "Quiet start.");
-    expect(story(id).visibility).toBe(UNLISTED);
-    fWho = BOB; fId = id; fText = "A reader found the link"; fExpected = 23;
-    fResults = [writer(), okCall()];
-    fails(failContribute, "STORIES: only invited writers can write in this story");
-    authorize(ALICE);
-    new Stories().set_allowed(new stories.set_allowed_arguments(ALICE, id, [BOB], true));
-    checkpoint();
-    writeAsWriter(BOB, id, "A reader found the link");
-    expect(segment(id, 2).text).toBe("A reader found the link");
-    expect(story(id).contributor_count).toBe(2);
+  it("refuses the retired Unlisted visibility (merged into Private)", () => {
+    fails(failOpenUnlisted, "STORIES: visibility must be Public or Private");
   });
 
   it("honors an open-project limit of 1", () => {
@@ -561,7 +558,7 @@ describe("Stories: closing", () => {
     expect(st.kind).toBe(BOOK);
     expect(st.status).toBe(stories.story_status.STATUS_OPEN);
     expect(st.used_chars).toBe(12);
-    fails(() => { authorize(ALICE); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(ALICE, 1, USDT)); }, "STORIES: story cannot be closed yet");
+    fails(() => { authorize(ALICE); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(ALICE, 1)); }, "STORIES: story cannot be closed yet");
     fails(() => { authorize(STORIES); new Stories().admin_take_over(new stories.admin_take_over_arguments(1)); }, "STORIES: story is not ready for an admin finalize");
     expect(story(1).status).toBe(stories.story_status.STATUS_OPEN);
     expect(story(1).locked_at).toBe(0);
@@ -636,6 +633,9 @@ describe("Stories: archive and revive", () => {
     authorize(STORIES);
     new Stories().set_paused(new stories.set_paused_arguments(false));
     checkpoint();
+    // The 90 paused days don't count as inactivity (audit M-1).
+    fails(() => { new Stories().archive_if_stale(new stories.archive_if_stale_arguments(1)); }, "STORIES: story has been active recently");
+    setTime(START + 151 * DAY);
     new Stories().archive_if_stale(new stories.archive_if_stale_arguments(1));
     checkpoint();
     expect(story(1).status).toBe(stories.story_status.STATUS_ARCHIVED);
@@ -781,7 +781,7 @@ describe("Stories: gaps the main suite does not reach", () => {
     checkpoint();
     fails(() => { authorize(ALICE); new Stories().update_story(new stories.update_story_arguments(ALICE, 1, "New", 1, 0, PUBLIC, 0)); }, "STORIES: stories are paused");
     fails(() => { authorize(ALICE); new Stories().create_invite(new stories.create_invite_arguments(ALICE, 1, linkKey(0), 5, START + DAY)); }, "STORIES: stories are paused");
-    fails(() => { authorize(ALICE); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(ALICE, 1, USDT)); }, "STORIES: stories are paused");
+    fails(() => { authorize(ALICE); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(ALICE, 1)); }, "STORIES: stories are paused");
     fails(() => { new Stories().archive_if_stale(new stories.archive_if_stale_arguments(1)); }, "STORIES: stories are paused");
     expect(story(1).status).toBe(stories.story_status.STATUS_OPEN);
     expect(story(1).used_chars).toBe(17);
@@ -808,7 +808,7 @@ describe("Stories: gaps the main suite does not reach", () => {
 
   it("refuses a signer who is not the opener (the token is ignored: closing is free)", () => {
     openShort();
-    fails(() => { authorize(MALLORY); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(ALICE, 1, USDT)); }, "STORIES: opener has not authorized this");
+    fails(() => { authorize(MALLORY); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(ALICE, 1)); }, "STORIES: opener has not authorized this");
   });
 });
 

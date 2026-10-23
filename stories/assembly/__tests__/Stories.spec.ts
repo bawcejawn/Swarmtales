@@ -11,6 +11,7 @@ import { Base58, MockVM, System, authority, chain, Protobuf, system_calls } from
 import { Stories } from "../Stories";
 import { stories } from "../proto/stories";
 import { LINK_ADDRESSES, inviteSig } from "./linkFixtures";
+import { ownEditArgs } from "./reviewed";
 
 const STORIES = Base58.decode("16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt");
 const INK = Base58.decode("13Qrdvv3cXys9aryjZho6vHxDW3PRgX5pm");
@@ -237,7 +238,7 @@ function edit(as: Uint8Array, id: u64, seq: u64, text: string): void {
   else allowCalls(1);
   // max_ink: the growth price the page would show (AB-049).
   const growth: u64 = <u64>text.length > current ? <u64>text.length - current : 0;
-  new Stories().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length, growth));
+  new Stories().edit_segment(ownEditArgs(as, id, seq, text, <u64>text.length, growth));
   checkpoint();
 }
 
@@ -255,7 +256,7 @@ function fillShort(id: u64): void {
 function closeAs(opener: Uint8Array, id: u64): void {
   authorize(opener);
   allowCalls(1);
-  new Stories().close_story(new stories.close_story_arguments(opener, id, USDT));
+  new Stories().close_story(new stories.close_story_arguments(opener, id));
   checkpoint();
 }
 
@@ -294,7 +295,7 @@ function failContribute(): void {
 function failEdit(): void {
   authorize(fWho);
   results(fResults);
-  new Stories().edit_segment(new stories.edit_segment_arguments(fWho, fId, fSeq, fText, fExpected, u64.MAX_VALUE)); // any price: these edits fail for other reasons
+  new Stories().edit_segment(ownEditArgs(fWho, fId, fSeq, fText, fExpected, u64.MAX_VALUE)); // any price: these edits fail for other reasons
 }
 
 function failLimits(): void {
@@ -384,7 +385,7 @@ describe("Stories: admin and settings", () => {
   it("starts with the contract as admin and the default limits", () => {
     const cfg = config();
     expect(same(cfg.admin, STORIES)).toBe(true);
-    expect(cfg.contribution_cap).toBe(10000);
+    expect(cfg.contribution_cap).toBe(6000);
     expect(cfg.trial_limit).toBe(1000);
     expect(cfg.open_limit).toBe(10);
     expect(cfg.full_price_projects).toBe(0); // 0 means the default, 3
@@ -428,15 +429,15 @@ describe("Stories: admin and settings", () => {
     fails(() => { authorize(STORIES); new Stories().set_addresses(new stories.set_addresses_arguments(INK, new Uint8Array(0))); }, "STORIES: invalid Shop address");
   });
 
-  it("accepts a per-submission cap from 100 to 10000 and nothing outside", () => {
-    setLimits(10000, 1000);
-    expect(config().contribution_cap).toBe(10000);
+  it("accepts a per-submission cap from 100 to 6000 and nothing outside", () => {
+    setLimits(6000, 1000);
+    expect(config().contribution_cap).toBe(6000);
     setLimits(100, 1000);
     expect(config().contribution_cap).toBe(100);
-    fCap = 10001;
-    fails(failLimits, "STORIES: per-submission cap must be 100 to 10000");
+    fCap = 6001;
+    fails(failLimits, "STORIES: per-submission cap must be 100 to 6000");
     fCap = 99;
-    fails(failLimits, "STORIES: per-submission cap must be 100 to 10000");
+    fails(failLimits, "STORIES: per-submission cap must be 100 to 6000");
   });
 
   it("refuses other limits outside their ranges", () => {
@@ -573,7 +574,7 @@ describe("Stories: opening", () => {
       authorize(ALICE);
       allowCalls(2);
       new Stories().open_story(new stories.open_story_arguments(ALICE, SHORT, "T", 10000, 1, 0, <stories.visibility>9, 0, 0, "Hi", false, 2, USDT, true, 0));
-    }, "STORIES: visibility must be Public, Unlisted or Private");
+    }, "STORIES: visibility must be Public or Private");
     fails(() => {
       authorize(ALICE);
       allowCalls(2);
@@ -1032,7 +1033,7 @@ describe("Stories: closing", () => {
 
   it("refuses to close before the minimum", () => {
     openShort();
-    fails(() => { authorize(ALICE); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(ALICE, 1, USDT)); }, "STORIES: story cannot be closed yet");
+    fails(() => { authorize(ALICE); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(ALICE, 1)); }, "STORIES: story cannot be closed yet");
   });
 
   it("closes an open story at exactly the 10,000 minimum, for free", () => {
@@ -1041,14 +1042,13 @@ describe("Stories: closing", () => {
     writeAsOpener(1, chars(2000));
     writeAsOpener(1, chars(2000));
     writeAsOpener(1, chars(1999));
-    fails(() => { authorize(ALICE); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(ALICE, 1, USDT)); }, "STORIES: story cannot be closed yet");
+    fails(() => { authorize(ALICE); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(ALICE, 1)); }, "STORIES: story cannot be closed yet");
     writeAsOpener(1, "x");
     closeAs(ALICE, 1);
     // Closing is free: no call to the Shop.
     expect(callsTo(CLOSE_FEE_ENTRY).length).toBe(0);
     const st = story(1);
     expect(st.status).toBe(stories.story_status.STATUS_EDITING);
-    expect(st.close_fee_paid).toBe(true);
     expect(st.finalizer_is_admin).toBe(false);
   });
 
@@ -1060,7 +1060,7 @@ describe("Stories: closing", () => {
     writeAsOpener(1, chars(2000));
     writeAsOpener(1, chars(1980));
     expect(story(1).used_chars).toBe(9940);
-    fails(() => { authorize(ALICE); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(ALICE, 1, USDT)); }, "STORIES: story cannot be closed yet");
+    fails(() => { authorize(ALICE); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(ALICE, 1)); }, "STORIES: story cannot be closed yet");
     writeAsOpener(1, chars(20));
     expect(story(1).used_chars).toBe(9960);
     closeAs(ALICE, 1);
@@ -1072,7 +1072,7 @@ describe("Stories: closing", () => {
     writeAsWriter(BOB, 1, chars(2000));
     fillShort(1);
     expect(story(1).status).toBe(stories.story_status.STATUS_LOCKED);
-    fails(() => { authorize(BOB); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(BOB, 1, USDT)); }, "STORIES: only the opener may do this");
+    fails(() => { authorize(BOB); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(BOB, 1)); }, "STORIES: only the opener may do this");
     expect(story(1).status).toBe(stories.story_status.STATUS_LOCKED);
     closeAs(ALICE, 1);
     expect(story(1).status).toBe(stories.story_status.STATUS_EDITING);
@@ -1087,7 +1087,7 @@ describe("Stories: closing", () => {
     fails(failContribute, "STORIES: story is not open for writing");
     fWho = ALICE; fSeq = 1;
     fails(failEdit, "STORIES: text can only be edited while the story is open");
-    fails(() => { authorize(ALICE); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(ALICE, 1, USDT)); }, "STORIES: story cannot be closed yet");
+    fails(() => { authorize(ALICE); allowCalls(1); new Stories().close_story(new stories.close_story_arguments(ALICE, 1)); }, "STORIES: story cannot be closed yet");
   });
 });
 

@@ -19,6 +19,7 @@ import {
   ALICE, BOB, STORIES, USDT, COPYRIGHT, allowCalls, authorize, checkpoint, configure, openPublic, reset,
   segment, story, strikes, write,
 } from "./auditFixHelpers";
+import { reviewedTakedown } from "./reviewed";
 
 let FILL_COUNTER: i32 = 0;
 function chars(n: i32): string {
@@ -49,7 +50,7 @@ let gWho: Uint8Array = new Uint8Array(0);
 // Takedown with `gWho` as the strike (empty = the default: strike the writer of an unchanged part).
 function takedownNaming(): void {
   authorize(STORIES);
-  new Stories().takedown_segment(new stories.takedown_segment_arguments(gId, gSeq, COPYRIGHT, "notice 2026-077", gWho, false));
+  new Stories().takedown_segment(reviewedTakedown(gId, gSeq, COPYRIGHT, "notice 2026-077", gWho, false));
 }
 
 describe("RT-IMP-NOOPBLAME: a change that changes nothing still makes the actor a 'changer'", () => {
@@ -62,7 +63,7 @@ describe("RT-IMP-NOOPBLAME: a change that changes nothing still makes the actor 
     openerWrites(id, chars(10000 - 17 - 38 - 8000));           // story locks at 10,000
     expect(story(id).status).toBe(stories.story_status.STATUS_LOCKED);
     authorize(ALICE);
-    new Stories().close_story(new stories.close_story_arguments(ALICE, id, USDT));
+    new Stories().close_story(new stories.close_story_arguments(ALICE, id));
     checkpoint();
     // The opener picks "Edit" on Bob's part and saves it without changing a letter.
     authorize(ALICE);

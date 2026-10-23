@@ -14,6 +14,7 @@
 import { Base58, MockVM, System, authority, chain, Protobuf, system_calls } from "@koinos/sdk-as";
 import { Stories } from "../Stories";
 import { stories } from "../proto/stories";
+import { reviewedTakedown } from "./reviewed";
 
 // Helpers copied from Stories.audit-AB001.spec.ts / Stories.moderation.spec.ts.
 const STORIES = Base58.decode("16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt");
@@ -136,7 +137,7 @@ function revise(who: Uint8Array, id: u64, seq: u64, text: string): void {
 }
 function takedownStriking(id: u64, seq: u64, who: Uint8Array): void {
   directly(); authorize(STORIES);
-  c().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-101", who));
+  c().takedown_segment(reviewedTakedown(id, seq, COPYRIGHT, "notice 2026-101", who));
   checkpoint();
 }
 function setModerator(): void {

@@ -79,3 +79,32 @@ for (const file of files) {
 test("both workflows are checked", () => {
   assert.deepEqual(files.sort(), ["copy-checker.yml", "pages.yml"]);
 });
+
+// ---------- audit 2026-10: O1-09 (plan without the key), M-10 (state key), M-13 (time budget) ----------
+
+test("copy-checker.yml: only the apply job gets the moderator key; the web-reading plan job gets no key and no environment", () => {
+  const lines = fs.readFileSync(new URL("copy-checker.yml", dir), "utf8").split(/\r?\n/);
+  const all = jobs(lines);
+  const uses = (name, secret) => all[name].some((l) => new RegExp("secrets\\." + secret + "\\b").test(code(l)));
+  const env = (name) => (all[name].find((l) => /^ {4}environment:/.test(l)) || "").replace(/^ {4}environment:\s*/, "").trim();
+  assert.deepEqual(Object.keys(all).filter((n) => uses(n, "MODERATOR_WIF")), ["apply"]);
+  assert.deepEqual(Object.keys(all).filter((n) => uses(n, "CHECKER_STATE_KEY")).sort(), ["apply", "load"]);
+  for (const n of ["load", "apply"]) assert.equal(env(n), "copy-checker", n + " runs in the main-only environment");
+  assert.equal(env("plan"), "", "the plan job runs in no environment");
+  assert.ok(all.plan.some((l) => /node checker\/check\.mjs/.test(l)));
+  assert.ok(all.apply.some((l) => /node checker\/apply\.mjs/.test(l)));
+  assert.ok(!all.apply.some((l) => /node checker\/check\.mjs/.test(l)), "the key job never runs the web-reading step");
+  assert.ok(all.plan.some((l) => /^ {4}needs: load\s*$/.test(l)) && all.apply.some((l) => /^ {4}needs: plan\s*$/.test(l)));
+  // The load job (with the state key) runs no installed packages.
+  assert.ok(!all.load.some((l) => /\bnpm\b|setup-node/.test(code(l))));
+});
+
+test("copy-checker.yml: the time budget is well under each job's time limit", () => {
+  const lines = fs.readFileSync(new URL("copy-checker.yml", dir), "utf8").split(/\r?\n/);
+  const budget = Number((/TIME_BUDGET_MINUTES:\s*"?(\d+)/.exec(lines.join("\n")) || [])[1]);
+  assert.ok(budget > 0, "TIME_BUDGET_MINUTES is set");
+  for (const n of ["plan", "apply"]) {
+    const limit = Number((/timeout-minutes:\s*(\d+)/.exec(jobs(lines)[n].join("\n")) || [])[1]);
+    assert.ok(limit - budget >= 5, n + ": " + budget + " minutes of work in a " + limit + "-minute job");
+  }
+});

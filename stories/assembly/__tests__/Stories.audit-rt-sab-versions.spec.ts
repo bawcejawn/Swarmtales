@@ -10,6 +10,7 @@
 import { Base58, MockVM, System, authority, chain, Protobuf, system_calls } from "@koinos/sdk-as";
 import { Stories } from "../Stories";
 import { stories } from "../proto/stories";
+import { reviewedTakedown, ownEditArgs } from "./reviewed";
 
 const STORIES = Base58.decode("16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt");
 const INK = Base58.decode("13Qrdvv3cXys9aryjZho6vHxDW3PRgX5pm");
@@ -107,7 +108,7 @@ function change(as: Uint8Array, id: u64, seq: u64, text: string): void {
 }
 function takedownStriking(id: u64, seq: u64, who: Uint8Array): void {
   authorize(STORIES);
-  new Stories().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-002", who));
+  new Stories().takedown_segment(reviewedTakedown(id, seq, COPYRIGHT, "notice 2026-002", who));
   checkpoint();
 }
 function fails(fn: () => void, message: string): void {
@@ -139,12 +140,12 @@ function ownEdit(as: Uint8Array, id: u64, seq: u64, text: string): void {
   // Growing the part reads the Writer membership and burns the added letters.
   if (<u64>text.length > segment(id, seq).current_cost) results([writer(), okCall()]);
   else allowCalls(1);
-  new Stories().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length));
+  new Stories().edit_segment(ownEditArgs(as, id, seq, text, <u64>text.length));
   checkpoint();
 }
 function takedownNoStrike(id: u64, seq: u64): void {
   authorize(STORIES);
-  new Stories().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-009", new Uint8Array(0), true));
+  new Stories().takedown_segment(reviewedTakedown(id, seq, COPYRIGHT, "notice 2026-009", new Uint8Array(0), true));
   checkpoint();
 }
 // Same length as `like`, so a writer's free light edit always fits.
@@ -239,7 +240,7 @@ describe("RT-SAB-3: a blocked writer keeps editing", () => {
     ID = id; SEQ = seq; TXT = "Bob writes a short scene in the harbour!";
     expect(() => {
       authorize(BOB); allowCalls(1);
-      new Stories().edit_segment(new stories.edit_segment_arguments(BOB, ID, SEQ, TXT, <u64>TXT.length));
+      new Stories().edit_segment(ownEditArgs(BOB, ID, SEQ, TXT, <u64>TXT.length));
     }).toThrow("RT-SAB-3: a blocked wallet can still change its text");
     MockVM.rollbackTransaction();
     MockVM.commitTransaction();
@@ -263,7 +264,7 @@ describe("RT-SAB-4: editing a hidden part", () => {
     ID = id; SEQ = seq; TXT = "Bob writes his own first page, honest.";
     expect(() => {
       authorize(BOB); allowCalls(1);
-      new Stories().edit_segment(new stories.edit_segment_arguments(BOB, ID, SEQ, TXT, <u64>TXT.length));
+      new Stories().edit_segment(ownEditArgs(BOB, ID, SEQ, TXT, <u64>TXT.length));
     }).toThrow("RT-SAB-4: the writer rewrites a part hidden as copied before the admin sees it");
     MockVM.rollbackTransaction();
     MockVM.commitTransaction();

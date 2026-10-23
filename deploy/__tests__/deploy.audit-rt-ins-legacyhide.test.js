@@ -37,13 +37,12 @@ function functionSource(name) {
   return DEPLOY_JS.slice(start, DEPLOY_JS.indexOf("\nasync function ", start + 10));
 }
 
-test("RT-INS D1: the moderator key can't unhide a pre-upgrade hide that may be the admin's", () => {
-  const legacy = { author: BOB, status: 1, hidden: true, hidden_by: 0, hidden_by_reports: false };
-  assert.throws(() => lib.hidePlan(legacy, false, MOD, ADMIN), /admin/i,
-    "RT-INS D1: deploy.js hide --unhide with the moderator key undoes a pre-upgrade (possibly admin) hide");
-  // The admin still can, and a pre-upgrade reports hide stays the moderator's to undo.
-  assert.match(lib.hidePlan(legacy, false, ADMIN, ADMIN), /^UNHIDE/);
-  assert.match(lib.hidePlan({ ...legacy, hidden_by_reports: true }, false, MOD, ADMIN), /^UNHIDE/);
+test("RT-INS D1: the moderator key can't unhide an admin hide", () => {
+  const adminHide = { author: BOB, status: 1, hidden: true, hidden_by: 3 };
+  assert.throws(() => lib.hidePlan(adminHide, false, MOD, ADMIN), /admin/i,
+    "RT-INS D1: deploy.js hide --unhide with the moderator key undoes an admin hide");
+  assert.match(lib.hidePlan(adminHide, false, ADMIN, ADMIN), /^UNHIDE/);
+  assert.match(lib.hidePlan({ ...adminHide, hidden_by: 1 }, false, MOD, ADMIN), /^UNHIDE/);
 });
 
 test("RT-INS D2: takedown stops for a strike choice when the part's history could not be read", () => {

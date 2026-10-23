@@ -15,6 +15,7 @@ import { stories } from "../proto/stories";
 import {
   ALICE, BOB, MALLORY, STORIES, COPYRIGHT, authorize, checkpoint, configure, directly, openPublic, reset, story, write,
 } from "./auditFixHelpers";
+import { reviewedTakedown } from "./reviewed";
 
 const MOD = Base58.decode("1FCjNjhaLnEDSUM3RhoVpfzET8mSaQapiF");
 const EVIL_APP = Base58.decode("1HJgvngE2GMMy5Lw4YtzomfMCgrkuJsq91");
@@ -35,7 +36,7 @@ function viaEvilApp(): void {
 }
 function modTakedown(): void {
   authorize(MOD);
-  new Stories().takedown_segment(new stories.takedown_segment_arguments(gId, 2, COPYRIGHT, "mod", BOB, false));
+  new Stories().takedown_segment(reviewedTakedown(gId, 2, COPYRIGHT, "mod", BOB, false));
 }
 
 function setup(): u64 {

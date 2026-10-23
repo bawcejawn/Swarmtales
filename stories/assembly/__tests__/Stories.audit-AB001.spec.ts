@@ -12,6 +12,7 @@
 import { Base58, MockVM, System, authority, chain, Protobuf, system_calls } from "@koinos/sdk-as";
 import { Stories } from "../Stories";
 import { stories } from "../proto/stories";
+import { reviewedTakedown } from "./reviewed";
 
 const STORIES = Base58.decode("16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt");
 const INK = Base58.decode("13Qrdvv3cXys9aryjZho6vHxDW3PRgX5pm");
@@ -169,7 +170,7 @@ function report(who: Uint8Array, id: u64, seq: u64): void {
 
 function takedown(id: u64, seq: u64): void {
   directly(); authorize(STORIES);
-  c().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-001"));
+  c().takedown_segment(reviewedTakedown(id, seq, COPYRIGHT, "notice 2026-001"));
   checkpoint();
 }
 
@@ -196,7 +197,7 @@ function fillAndLock(id: u64): void {
 
 function closeStory(id: u64): void {
   directly(); authorize(ALICE); allowCalls(1);
-  c().close_story(new stories.close_story_arguments(ALICE, id, USDT));
+  c().close_story(new stories.close_story_arguments(ALICE, id));
   checkpoint();
 }
 
@@ -241,11 +242,11 @@ function revise(who: Uint8Array, id: u64, seq: u64, text: string): void {
 let FAIL_ID: u64 = 0;
 function takedownDefault(): void {
   directly(); authorize(STORIES);
-  c().takedown_segment(new stories.takedown_segment_arguments(FAIL_ID, 2, COPYRIGHT, "notice 2026-001"));
+  c().takedown_segment(reviewedTakedown(FAIL_ID, 2, COPYRIGHT, "notice 2026-001"));
 }
 function takedownStriking(id: u64, seq: u64, who: Uint8Array): void {
   directly(); authorize(STORIES);
-  c().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-001", who));
+  c().takedown_segment(reviewedTakedown(id, seq, COPYRIGHT, "notice 2026-001", who));
   checkpoint();
 }
 

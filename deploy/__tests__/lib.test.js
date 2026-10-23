@@ -45,12 +45,12 @@ test("keys on the command line are refused", () => {
 });
 
 test("parseArgs reads positionals and flags", () => {
-  const a = lib.parseArgs(["upload", "ink", "--expect", ADDR_A, "--network=testnet", "--dry"]);
+  const a = lib.parseArgs(["upload", "ink", "--expect", ADDR_A, "--network=testnet", "--upgrade"]);
   assert.strictEqual(a.command, "upload");
   assert.strictEqual(a.target, "ink");
   assert.strictEqual(a.flags.expect, ADDR_A);
   assert.strictEqual(a.flags.network, "testnet");
-  assert.strictEqual(a.flags.dry, true);
+  assert.strictEqual(a.flags.upgrade, true);
 });
 
 test("address validation", () => {
@@ -145,10 +145,23 @@ test("generated .abi converts to koilib format", () => {
 test("deploy files never write the key anywhere", () => {
   const fs = require("fs");
   const path = require("path");
-  for (const f of ["deploy.js", "lib.js"]) {
-    const src = fs.readFileSync(path.join(__dirname, "..", f), "utf8");
-    assert.ok(!/writeFile|appendFile|createWriteStream/.test(src), f + " must not write files");
-  }
+  const libSrc = fs.readFileSync(path.join(__dirname, "..", "lib.js"), "utf8");
+  assert.ok(!/writeFile|appendFile|createWriteStream|renameSync/.test(libSrc), "lib.js must not write files");
+  // deploy.js writes exactly one kind of file: a prepared multisig transaction
+  // (lib.preparedFile: header, operations, signatures), in one function.
+  const src = fs.readFileSync(path.join(__dirname, "..", "deploy.js"), "utf8");
+  assert.ok(!/appendFile|createWriteStream/.test(src));
+  assert.strictEqual(src.split("writeFileSync(").length - 1, 1, "one write site");
+  const start = src.indexOf("function writeTxFile(");
+  const body = src.slice(start, src.indexOf("\n}\n", start));
+  assert.ok(body.includes("writeFileSync("), "the write is inside writeTxFile");
+  const calls = src.split("writeTxFile(").slice(1).map((s) => s.split(")")[0]);
+  assert.deepStrictEqual(calls.slice(1).sort(), ["file, data, true", "session.prepare, file, false"].sort());
+  assert.match(src, /const file = lib\.preparedFile\(net, tx, described, session\.args\.command\);/);
+  // What preparedFile keeps: nothing but the network, the description and the transaction.
+  const f = lib.preparedFile({ key: "testnet", chainId: "x" }, { id: "0x", header: {}, operations: [] }, [], "pause");
+  assert.deepStrictEqual(Object.keys(f).sort(), ["chain_id", "command", "format", "network", "operations", "prepared_at", "transaction"]);
+  assert.deepStrictEqual(Object.keys(f.transaction).sort(), ["header", "id", "operations", "signatures"]);
 });
 
 test("negative checks: contract rejections pass, infrastructure errors do not", () => {
@@ -333,8 +346,8 @@ test("deploy help documents test-write as testnet only", () => {
   const path = require("path");
   const src = fs.readFileSync(path.join(__dirname, "..", "deploy.js"), "utf8");
   assert.match(src, /test-write --user <addr> --ink <addr> --stories <addr> --story <id>/);
-  assert.match(src, /test-write is for testnet only/);
-  assert.match(src, /case "test-write"/);
+  const { COMMANDS } = require("../deploy");
+  assert.strictEqual(COMMANDS["test-write"].testnet, true);
 });
 
 test("test-write stops before any network call when arguments or the network are wrong", () => {
@@ -409,21 +422,32 @@ test("moderation reasons map to the contract's numbers", () => {
 const WASM = Buffer.from("pretend this is contract.wasm");
 const WASM_SHA = crypto.createHash("sha256").update(WASM).digest("hex");
 
-test("the upload reports the wasm's sha256", () => {
-  assert.strictEqual(lib.checkWasmHash(WASM, undefined, false), WASM_SHA);
+test("testnet uploads any build and says whether it is the pinned release", () => {
+  assert.strictEqual(lib.checkWasmHash(WASM, "ink", { ink: "", shop: "", stories: "" }, false), null);
+  assert.strictEqual(lib.checkWasmHash(WASM, "ink", { ink: WASM_SHA, shop: "", stories: "" }, false), true);
+  assert.strictEqual(lib.checkWasmHash(Buffer.from("x"), "ink", { ink: WASM_SHA, shop: "", stories: "" }, false), false);
 });
 
-test("a wasm that does not match --expect-sha256 is refused, on any network", () => {
+test("O1-13: mainnet compares with the pinned file, never a typed hash, and never prints a hash to paste", () => {
   const other = crypto.createHash("sha256").update("a different build").digest("hex");
-  assert.throws(() => lib.checkWasmHash(WASM, other, false), /does not match/);
-  assert.throws(() => lib.checkWasmHash(WASM, other, true), /does not match/);
-  assert.strictEqual(lib.checkWasmHash(WASM, WASM_SHA.toUpperCase(), true), WASM_SHA);
-});
-
-test("mainnet uploads need --expect-sha256; a malformed hash is refused", () => {
-  assert.throws(() => lib.checkWasmHash(WASM, undefined, true), /--expect-sha256/);
-  assert.throws(() => lib.checkWasmHash(WASM, "abc123", false), /64 hex/);
-  assert.throws(() => lib.checkWasmHash(WASM, true, false), /64 hex/);
+  const pinned = { ink: other, shop: "", stories: "" };
+  for (const [role, rel] of [["ink", pinned], ["shop", pinned]]) {
+    try {
+      lib.checkWasmHash(WASM, role, rel, true);
+      assert.fail("accepted");
+    } catch (e) {
+      assert.ok(e instanceof lib.UserError);
+      assert.ok(!/[0-9a-f]{64}/i.test(e.message), "the error shows a hash: " + e.message);
+    }
+  }
+  assert.throws(() => lib.parseArgs(["upload", "ink", "--expect-sha256", WASM_SHA]), /release-hashes\.json/);
+  // The file in the repository loads (placeholders are allowed until the release).
+  const fs = require("fs");
+  const path = require("path");
+  const file = lib.parseReleaseHashes(fs.readFileSync(path.join(__dirname, "..", "release-hashes.json"), "utf8"));
+  assert.deepStrictEqual(Object.keys(file).sort(), ["ink", "shop", "sponsor", "stories"]);
+  assert.throws(() => lib.parseReleaseHashes('{"ink":"","shop":"","stories":"","extra":""}'), /unknown entry/);
+  assert.throws(() => lib.parseReleaseHashes("{"), /not valid JSON/);
 });
 
 // ---------- AB-009: on mainnet, trust only the listed node ----------
@@ -455,9 +479,9 @@ test("on mainnet, wire-stories needs --treasury and --founder instead of trustin
 // ---------- AB-013: link keys stay out of shell history; strong randomness ----------
 
 test("a link key on the command line is refused: it would land in shell history", () => {
-  assert.throws(() => lib.refuseSecretFlag({ "link-key": "5KwdXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" }, "link-key"), /hidden prompt/);
-  assert.throws(() => lib.refuseSecretFlag({ "link-key": true }, "link-key"), /hidden prompt/);
-  lib.refuseSecretFlag({}, "link-key"); // no flag: fine, the prompt asks for it
+  assert.throws(() => lib.parseArgs(["claim-promo", "--link-key", "5KwdXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"]), /hidden prompt/);
+  assert.throws(() => lib.parseArgs(["claim-promo", "--link-key=abc"]), /hidden prompt/);
+  assert.throws(() => lib.parseArgs(["claim-promo", "--link-key"]), /hidden prompt/);
 });
 
 test("claim-promo and the other test commands refuse mainnet", () => {
@@ -533,7 +557,7 @@ test("takedown: every wallet the contract recorded is a candidate, citation-only
   let who = lib.takedownStrike({ author: ADDR_A, edited_by_others: true, last_edited_by: ADDR_A }, [], "", false, [ADDR_B]);
   assert.deepStrictEqual([who.needsChoice, who.changers, who.unseen], [true, [ADDR_B], false]);
   assert.ok(who.candidates.includes(ADDR_B));
-  // An older contract can't list them: the admin is told someone it can't name exists.
+  // A changed part with no changer to name: the admin is told someone it can't name exists.
   who = lib.takedownStrike({ author: ADDR_A, edited_by_others: true, last_edited_by: ADDR_A }, [], "", false);
   assert.deepStrictEqual([who.unseen, who.candidates[who.candidates.length - 1]], [true, lib.UNSEEN_CHANGER]);
   // A part revised before edited_by_others existed: the versions show the change.
@@ -546,14 +570,4 @@ test("wire: set-once addresses refuse a different value, accept the same or an e
   assert.doesNotThrow(() => lib.requireSetOnce("Shop's Ink address", "", ADDR_A));
   assert.doesNotThrow(() => lib.requireSetOnce("Shop's Ink address", ADDR_A, ADDR_A));
   assert.throws(() => lib.requireSetOnce("Shop's Ink address", ADDR_A, ADDR_B), /can never be changed/);
-});
-
-test("legacy-parts: notes old parts the audit-2 upgrade reads differently (AB-052, AB-053)", () => {
-  const ADDR_C = "1NRNShd6oHh1JCxfbnWj47PrgqvqeyK7w1";
-  const old = [{ version: 1, kind: 1, by: ADDR_A }, { version: 2, kind: 2, by: ADDR_C }];
-  assert.strictEqual(lib.legacyPartNotes(3, { author: ADDR_A, version_count: 2 }, old).length, 1);
-  assert.strictEqual(lib.legacyPartNotes(3, { author: ADDR_A, version_count: 2, edited_by_others: true }, old).length, 0);
-  assert.match(lib.legacyPartNotes(4, { author: ADDR_A, hidden: true }, [])[0], /part 4: hidden/);
-  assert.strictEqual(lib.legacyPartNotes(4, { author: ADDR_A, hidden: true, hidden_by_reports: true }, []).length, 0);
-  assert.deepStrictEqual(lib.legacyPartNotes(5, { author: ADDR_A }, [{ version: 2, kind: 4, by: ADDR_A }]), []);
 });

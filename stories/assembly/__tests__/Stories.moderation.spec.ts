@@ -17,6 +17,7 @@
 import { Base58, MockVM, System, authority, chain, Protobuf, system_calls } from "@koinos/sdk-as";
 import { Stories } from "../Stories";
 import { stories } from "../proto/stories";
+import { reviewedTakedown, ownEditArgs } from "./reviewed";
 
 const STORIES = Base58.decode("16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt");
 const INK = Base58.decode("13Qrdvv3cXys9aryjZho6vHxDW3PRgX5pm");
@@ -174,7 +175,7 @@ function report(who: Uint8Array, id: u64, seq: u64): void {
 
 function takedown(id: u64, seq: u64): void {
   directly(); authorize(STORIES);
-  c().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-001"));
+  c().takedown_segment(reviewedTakedown(id, seq, COPYRIGHT, "notice 2026-001"));
   checkpoint();
 }
 
@@ -201,7 +202,7 @@ function fillAndLock(id: u64): void {
 
 function closeStory(id: u64): void {
   directly(); authorize(ALICE); allowCalls(1);
-  c().close_story(new stories.close_story_arguments(ALICE, id, USDT));
+  c().close_story(new stories.close_story_arguments(ALICE, id));
   checkpoint();
 }
 
@@ -490,13 +491,13 @@ describe("Moderation: admin takedown", () => {
   it("is admin-only, direct-only, needs a reason, and happens once", () => {
     open(OPENING);
     setModerator();
-    fails(() => { authorize(BOT); c().takedown_segment(new stories.takedown_segment_arguments(1, 1, COPYRIGHT, "")); }, "STORIES: admin authority required");
-    fails(() => { authorize(ALICE); c().takedown_segment(new stories.takedown_segment_arguments(1, 1, COPYRIGHT, "")); }, "STORIES: admin authority required");
-    fails(() => { viaOtherContract(); authorize(STORIES); c().takedown_segment(new stories.takedown_segment_arguments(1, 1, COPYRIGHT, "")); }, DIRECT_ONLY);
-    fails(() => { directly(); authorize(STORIES); c().takedown_segment(new stories.takedown_segment_arguments(1, 1, NO_REASON, "")); }, "STORIES: give a reason");
-    fails(() => { directly(); authorize(STORIES); c().takedown_segment(new stories.takedown_segment_arguments(1, 9, COPYRIGHT, "")); }, "STORIES: unknown segment");
+    fails(() => { authorize(BOT); c().takedown_segment(reviewedTakedown(1, 1, COPYRIGHT, "")); }, "STORIES: admin authority required");
+    fails(() => { authorize(ALICE); c().takedown_segment(reviewedTakedown(1, 1, COPYRIGHT, "")); }, "STORIES: admin authority required");
+    fails(() => { viaOtherContract(); authorize(STORIES); c().takedown_segment(reviewedTakedown(1, 1, COPYRIGHT, "")); }, DIRECT_ONLY);
+    fails(() => { directly(); authorize(STORIES); c().takedown_segment(reviewedTakedown(1, 1, NO_REASON, "")); }, "STORIES: give a reason");
+    fails(() => { directly(); authorize(STORIES); c().takedown_segment(reviewedTakedown(1, 9, COPYRIGHT, "")); }, "STORIES: unknown segment");
     takedown(1, 1);
-    fails(() => { directly(); authorize(STORIES); c().takedown_segment(new stories.takedown_segment_arguments(1, 1, COPYRIGHT, "")); }, "STORIES: part was already taken down");
+    fails(() => { directly(); authorize(STORIES); c().takedown_segment(reviewedTakedown(1, 1, COPYRIGHT, "")); }, "STORIES: part was already taken down");
   });
 
   it("reopens a locked story when a takedown frees space", () => {
@@ -696,7 +697,7 @@ function ownEdit(as: Uint8Array, id: u64, seq: u64, text: string): void {
   // Growing the part reads the Writer membership and burns the added letters.
   if (<u64>text.length > seg(id, seq).current_cost) MockVM.setCallContractResults([writerAnswer(), okCall()]);
   else allowCalls(1);
-  c().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length));
+  c().edit_segment(ownEditArgs(as, id, seq, text, <u64>text.length));
   checkpoint();
 }
 
@@ -731,13 +732,13 @@ function strikes(who: Uint8Array): u32 {
 
 function takedownStriking(id: u64, seq: u64, who: Uint8Array): void {
   directly(); authorize(STORIES);
-  c().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-002", who));
+  c().takedown_segment(reviewedTakedown(id, seq, COPYRIGHT, "notice 2026-002", who));
   checkpoint();
 }
 
 function takedownNoStrike(id: u64, seq: u64): void {
   directly(); authorize(STORIES);
-  c().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-003", new Uint8Array(0), true));
+  c().takedown_segment(reviewedTakedown(id, seq, COPYRIGHT, "notice 2026-003", new Uint8Array(0), true));
   checkpoint();
 }
 
@@ -747,7 +748,7 @@ let TD_WHO: Uint8Array = new Uint8Array(0);
 let TD_NO_STRIKE = false;
 function takedownAs(): void {
   directly(); authorize(STORIES);
-  c().takedown_segment(new stories.takedown_segment_arguments(1, TD_SEQ, COPYRIGHT, "notice 2026-004", TD_WHO, TD_NO_STRIKE));
+  c().takedown_segment(reviewedTakedown(1, TD_SEQ, COPYRIGHT, "notice 2026-004", TD_WHO, TD_NO_STRIKE));
 }
 function aim(seq: u64, who: Uint8Array, noStrike: bool): void {
   TD_SEQ = seq; TD_WHO = who; TD_NO_STRIKE = noStrike;
@@ -777,13 +778,15 @@ describe("Moderation: a part nobody else changed strikes its writer", () => {
     expect(strikes(BOB)).toBe(1);
   });
 
-  it("strikes the writer when an editor only removed the hidden part", () => {
+  it("strikes the writer when the hidden part was only removed (an editor may not remove an admin hide)", () => {
     open(OPENING);
     writerWrites(BOB, 1, "Bob pastes a paragraph from a novel.");   // 2
     addEditor(1, CAROL);
     hide(STORIES, 1, 2, true);
-    directly(); authorize(CAROL); allowCalls(1);
-    c().remove_segment(new stories.remove_segment_arguments(CAROL, 1, 2));
+    fails(() => { directly(); authorize(CAROL); allowCalls(1); c().remove_segment(new stories.remove_segment_arguments(CAROL, 1, 2)); },
+      "STORIES: only the part's writer may remove it for free; others can remove it for Ink");
+    directly(); authorize(BOB); allowCalls(1);
+    c().remove_segment(new stories.remove_segment_arguments(BOB, 1, 2));
     checkpoint();
     takedown(1, 2);
     expect(strikes(BOB)).toBe(1);
@@ -927,32 +930,32 @@ describe("Moderation: once someone else changed a part, the admin decides", () =
 
 // ---------- 10,000-character parts and adding text between parts ----------
 
-describe("Writing: 10,000-character parts and adding text between parts", () => {
+describe("Writing: 6,000-character parts and adding text between parts", () => {
   beforeEach(() => { reset(); });
 
-  it("starts with a 10,000 per-part cap, and the admin may set up to 10,000", () => {
+  it("starts with a 6,000 per-part cap, and the admin may set up to 6,000", () => {
     MockVM.reset();
     MockVM.setContractId(STORIES);
     setTime(START);
     directly();
     checkpoint();
-    expect(cfg().contribution_cap).toBe(10000);
+    expect(cfg().contribution_cap).toBe(6000);
     authorize(STORIES);
-    c().set_limits(new stories.set_limits_arguments(10000, 1000, 3, 60, 30));
+    c().set_limits(new stories.set_limits_arguments(6000, 1000, 3, 60, 30));
     checkpoint();
-    fails(() => { authorize(STORIES); c().set_limits(new stories.set_limits_arguments(10001, 1000, 3, 60, 30)); },
-      "STORIES: per-submission cap must be 100 to 10000");
+    fails(() => { authorize(STORIES); c().set_limits(new stories.set_limits_arguments(6001, 1000, 3, 60, 30)); },
+      "STORIES: per-submission cap must be 100 to 6000");
   });
 
-  it("accepts a 10,000-character part at the default cap", () => {
+  it("accepts a 6,000-character part at the default cap", () => {
     directly(); authorize(STORIES);
-    c().set_limits(new stories.set_limits_arguments(10000, 1000, 3, 60, 30));
+    c().set_limits(new stories.set_limits_arguments(6000, 1000, 3, 60, 30));
     checkpoint();
     directly(); authorize(ALICE); allowCalls(2);
-    const big = chars(10000);
-    c().open_story(new stories.open_story_arguments(ALICE, SHORT, "Big", 99999, 1, 0, PUBLIC, 0, 0, big, false, 10000, USDT, true, 0));
+    const big = chars(6000);
+    c().open_story(new stories.open_story_arguments(ALICE, SHORT, "Big", 99999, 1, 0, PUBLIC, 0, 0, big, false, 6000, USDT, true, 0));
     checkpoint();
-    expect(story(1).used_chars).toBe(10000);
+    expect(story(1).used_chars).toBe(6000);
   });
 
   it("adds text right after a chosen part, and records where", () => {

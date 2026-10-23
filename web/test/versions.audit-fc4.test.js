@@ -2,7 +2,7 @@
 // (AB-070), and the change panel's paid removal refunds as the contract (AB-068).
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
+import { appSource } from "./helpers/appSource.js";
 import { VERSIONS_PER_READ, readAllVersions } from "../src/lib/versions.js";
 
 const versionsOf = (n) => Array.from({ length: n }, (_, i) => ({ version: String(i + 1), text: "v" + (i + 1) }));
@@ -52,6 +52,6 @@ test("returns them oldest first whatever the page order", async () => {
 });
 
 test("the change panel's paid removal refunds what removalRefunds says (AB-068)", () => {
-  const src = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+  const src = appSource();
   assert.match(src, /r\.refund = removalRefunds\(seg\) \? Number\(seg\.charged \|\| 0\) : 0;/);
 });

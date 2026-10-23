@@ -12,41 +12,41 @@ test("words ignore case, accents and punctuation", () => {
 
 test("a copied part matches its source, even with small changes", () => {
   const idx = new Index();
-  idx.add("1:2", "alice", fingerprint(ORIGINAL));
+  idx.add("1:2", "alice", fingerprint(ORIGINAL), 1000);
   const copy = ORIGINAL.replace("Nell", "Nora").toUpperCase();
   const hashes = fingerprint(copy);
-  const match = idx.bestMatch(hashes, "mallory", "2:5");
+  const match = idx.bestMatch(hashes, "mallory", "2:5", 2000);
   assert.equal(match.key, "1:2");
   assert.ok(isDuplicate(hashes, match), JSON.stringify(match));
 });
 
 test("different writing does not match", () => {
   const idx = new Index();
-  idx.add("1:2", "alice", fingerprint(ORIGINAL));
+  idx.add("1:2", "alice", fingerprint(ORIGINAL), 1000);
   const other = "Rain had soaked the market stalls by noon, and the fishmonger sang louder to keep the customers from drifting " +
     "toward the bakery, where the ovens kept everyone warm and dry while the gulls argued over scraps behind the harbour wall.";
   const hashes = fingerprint(other);
-  assert.equal(isDuplicate(hashes, idx.bestMatch(hashes, "bob", "3:1")), false);
+  assert.equal(isDuplicate(hashes, idx.bestMatch(hashes, "bob", "3:1", 2000)), false);
 });
 
 test("a writer reusing their own words is not flagged", () => {
   const idx = new Index();
-  idx.add("1:2", "alice", fingerprint(ORIGINAL));
-  assert.equal(idx.bestMatch(fingerprint(ORIGINAL), "alice", "4:1"), null);
+  idx.add("1:2", "alice", fingerprint(ORIGINAL), 1000);
+  assert.equal(idx.bestMatch(fingerprint(ORIGINAL), "alice", "4:1", 2000), null);
 });
 
 test("short parts are never judged", () => {
   const idx = new Index();
-  idx.add("1:2", "alice", fingerprint("A short line here."));
+  idx.add("1:2", "alice", fingerprint("A short line here."), 1000);
   const hashes = fingerprint("A short line here.");
-  assert.equal(isDuplicate(hashes, idx.bestMatch(hashes, "bob", "1:3")), false);
+  assert.equal(isDuplicate(hashes, idx.bestMatch(hashes, "bob", "1:3", 2000)), false);
 });
 
 test("the index survives a save and load", () => {
   const idx = new Index();
-  idx.add("1:2", "alice", fingerprint(ORIGINAL));
+  idx.add("1:2", "alice", fingerprint(ORIGINAL), 1000);
   const back = Index.fromJSON(JSON.parse(JSON.stringify(idx.toJSON())));
-  assert.equal(back.bestMatch(fingerprint(ORIGINAL), "bob", "9:9").key, "1:2");
+  assert.equal(back.bestMatch(fingerprint(ORIGINAL), "bob", "9:9", 2000).key, "1:2");
 });
 
 test("phrases are distinctive runs of about 12 words", () => {
@@ -67,10 +67,10 @@ test("a web result only counts if it contains most of the phrase and isn't Swarm
 
 test("the monthly search budget resets each month", () => {
   const state = {};
-  const b = budget(state, new Date("2026-10-20T00:00:00Z"), 3);
+  const b = budget(state, new Date("2026-10-20T00:00:00Z"), 3, "search_books");
   b.spend(); b.spend();
   assert.equal(b.left(), 1);
-  const next = budget(state, new Date("2026-11-01T00:00:00Z"), 3);
+  const next = budget(state, new Date("2026-11-01T00:00:00Z"), 3, "search_books");
   assert.equal(next.left(), 3);
 });
 
@@ -102,7 +102,7 @@ test("each search service keeps its own monthly budget", () => {
   tavily.spend();
   assert.equal(books.left(), 1);
   assert.equal(tavily.left(), 0);
-  assert.equal(budget(state, now, 1800).left(), 1800); // the original Brave budget is untouched
+  assert.equal(budget(state, now, 1800, "search_brave").left(), 1800); // the Brave budget is untouched
 });
 
 test("decide: hide only on strong matches from one source, otherwise a note or nothing", async () => {
@@ -190,14 +190,15 @@ test("the final sweep never flags an original because a later copy is in the ind
   assert.ok(isDuplicate(fingerprint(COPY), copy));
 });
 
-test("when each part was written survives a save and load; older saved entries count as earlier", () => {
+test("when each part was written survives a save and load; an unknown date never proves who was first", () => {
   const idx = new Index();
   idx.add("10:3", "wren", fingerprint(ORIGINAL), 1000);
   const back = Index.fromJSON(JSON.parse(JSON.stringify(idx.toJSON())));
   assert.equal(back.bestMatch(fingerprint(COPY), "mallory", "5:2", 500), null);   // written before the original
   assert.equal(back.bestMatch(fingerprint(COPY), "mallory", "5:2", 2000).key, "10:3");
-  const legacy = Index.fromJSON({ "10:3": { author: "wren", hashes: fingerprint(ORIGINAL) } });
-  assert.equal(legacy.bestMatch(fingerprint(COPY), "mallory", "5:2", 2000).key, "10:3");
+  const undated = Index.fromJSON({ "10:3": { author: "wren", hashes: fingerprint(ORIGINAL) } });
+  assert.equal(undated.bestMatch(fingerprint(COPY), "mallory", "5:2", 2000), null);
+  assert.equal(back.bestMatch(fingerprint(COPY), "mallory", "5:2", 0), null);
 });
 
 // ---------- AB-024: parts written at the same time are never hidden ----------
@@ -241,4 +242,114 @@ test("another node needs EXPECTED_CHAIN_ID, which also overrides the known ones"
 test("a node on a different chain stops the run before anything is signed", () => {
   assert.throws(() => checkChainId(deployNetworks.mainnet.chainId, deployNetworks.testnet.chainId), /chain id/);
   checkChainId("abc=", "abc=");
+});
+
+// ---------- audit 2026-10 ----------
+
+import {
+  cleanNote, logLine, mdCell, mdFence, normalizeResults, noteAllowed, provablyOlder, publishedEnd, readParts, recordSent,
+} from "../lib.mjs";
+
+test("O1-08: any text becomes a note the contract accepts (and the contract's rule is ported faithfully)", () => {
+  assert.equal(noteAllowed("A fine note."), true);
+  for (const bad of ["a\nb", "a\u0007b", "a\u0085b", "a​b", "a﻿b", "a b", "a⁡b", "a‮b", "a⁧b",
+    "a\uD800b", "a\uDC00b", "a�b", "  　‍", "x".repeat(201)]) assert.equal(noteAllowed(bad), false, JSON.stringify(bad));
+  const cases = ["“Title”\nby\tSomeone", "‮evil‬ title", "\uD83D", "​​", "", "  ", "x".repeat(500), "😀".repeat(150),
+    "a" + "😀".repeat(100), "�\uDC00 ok", "⁦⁩", " 　", "abc\u0000def", "\u0085next line"];
+  // And a few thousand random strings from the troublesome ranges.
+  const pool = [0x0a, 0x0d, 0x07, 0x7f, 0x85, 0xa0, 0x200b, 0x200d, 0x2028, 0x2060, 0x202e, 0x2068, 0xfeff, 0xfffd, 0xd83d, 0xde00, 0x3000, 0x41, 0x20, 0xe9];
+  let seed = 7;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  for (let i = 0; i < 3000; i++) cases.push(Array.from({ length: Math.floor(rnd() * 260) }, () => String.fromCharCode(pool[Math.floor(rnd() * pool.length)])).join(""));
+  for (const text of cases) {
+    const out = cleanNote(text, "copied text");
+    assert.ok(out.length > 0 && noteAllowed(out), JSON.stringify(text) + " -> " + JSON.stringify(out));
+  }
+  assert.equal(cleanNote("​ ", ""), "");
+  assert.equal(cleanNote("  Parts of “A‮B” appear  "), "Parts of “AB” appear");
+  const long = cleanNote("😀".repeat(150));
+  assert.ok(long.length <= 200 && long.endsWith("…"));
+});
+
+test("O1-08: book titles and authors from the search answer are cleaned before they can reach a note", () => {
+  const [hit] = normalizeResults("books", { items: [{ id: "x", volumeInfo: { title: "Evil\n::error::‮title " + "x".repeat(300), authors: ["A​B"], publishedDate: "1999" } }] });
+  assert.ok(noteAllowed("Parts of this text also appear in " + hit.label + "."), hit.label);
+  assert.ok(hit.label.length < 160);
+  assert.equal(hit.kind, "book");
+  assert.equal(hit.published, "1999");
+  assert.deepEqual(normalizeResults("books", { items: "nope" }), []);
+  assert.equal(normalizeResults("tavily", { results: [{ url: "https://x.example" }] })[0].kind, "web");
+});
+
+test("M-11: a book counts as older than a part only when its whole publication period is (a day's margin)", () => {
+  const at = (iso) => Date.parse(iso) / 1000;
+  assert.equal(publishedEnd("2011"), at("2012-01-01T00:00:00Z"));
+  assert.equal(publishedEnd("2011-09"), at("2011-10-01T00:00:00Z"));
+  assert.equal(publishedEnd("2011-09-13"), at("2011-09-14T00:00:00Z"));
+  assert.equal(publishedEnd("1960") < 0, true, "before 1970 is still a date");
+  for (const bad of ["", "soon", "2011-13", "2011-00-01", "11", "2011-9-1", "1990s", null, undefined]) assert.equal(publishedEnd(bad), null, String(bad));
+  assert.equal(provablyOlder("2011", at("2012-01-02T00:00:00Z")), true);
+  assert.equal(provablyOlder("2011", at("2011-12-31T00:00:00Z")), false, "same year: not provably older");
+  assert.equal(provablyOlder("2011-09-13", at("2011-09-14T12:00:00Z")), false, "within a day: time zones");
+  assert.equal(provablyOlder("1960", 1000), true);
+  assert.equal(provablyOlder("", at("2030-01-01T00:00:00Z")), false, "unknown date");
+  assert.equal(provablyOlder("1960", 0), false, "unknown part date");
+});
+
+test("Info: user text can't break out of the run summary or form a workflow command", () => {
+  assert.equal(mdCell("a|b"), "a\\|b");
+  assert.doesNotMatch(mdCell("[click](https://evil.example) <img src=x> ![i](y)"), /(^|[^\\])[[\]()<>!]/);
+  const text = "line\n```\n# not a heading\n````";
+  const block = mdFence(text);
+  const fence = block.split("\n")[0];
+  assert.ok(fence.length >= 5 && /^`+$/.test(fence));
+  assert.ok(!text.split("\n").some((l) => l.startsWith(fence)), "no line of the text can close the fence");
+  assert.equal(logLine("title\n::error::boom\r\n::add-mask::x").includes("\n"), false);
+});
+
+/** A fake Stories read for readParts: `count` parts; pages over `limitBytes` of text fail; log of calls. */
+function partsReader(texts, limitBytes, calls) {
+  return async (name, args) => {
+    calls.push(name + ":" + args.start + (args.seq ? ":" + args.seq : "") + (args.limit ? "x" + args.limit : ""));
+    if (name === "get_segment") return { status: 1, text: texts[Number(args.seq) - 1] };
+    const start = Number(args.start);
+    const values = texts.slice(start - 1, start - 1 + Math.min(10, args.limit)).map((text) => ({ status: 1, text }));
+    if (values.length > 1 && values.reduce((n, v) => n + Buffer.byteLength(v.text), 0) > limitBytes) throw new Error("read limit");
+    const next = start + values.length;
+    return { values, next: next <= texts.length ? String(next) : "0" };
+  };
+}
+
+test("M-5: parts are read a few at a time, paged by next, and one at a time when a page is too big", async () => {
+  const cjk = "漢".repeat(6000); // 18 KB of UTF-8 each
+  const texts = ["short one", cjk, cjk, cjk, "short two", cjk, cjk];
+  const calls = [];
+  const got = await readParts(partsReader(texts, 30000, calls), 1, 1, texts.length, 3);
+  assert.deepEqual(got.map((p) => p.seq), [1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(got.map((p) => p.seg.text), texts);
+  assert.ok(calls.every((c) => !/x(\d+)/.test(c) || Number(/x(\d+)/.exec(c)[1]) <= 3), calls.join(" "));
+  assert.ok(calls.some((c) => c.startsWith("get_segment:")), "fell back to single reads");
+  // Starts where asked, stops at the end.
+  const calls2 = [];
+  assert.deepEqual((await readParts(partsReader(texts, 1e9, calls2), 1, 5, 7, 3)).map((p) => p.seq), [5, 6, 7]);
+  assert.deepEqual(calls2, ["get_segments:5x3"]);
+});
+
+test("M-5: a page that would skip parts, or a part that can't be read even alone, fails the story (retried next run)", async () => {
+  const skipping = async () => ({ values: [{ status: 1, text: "a" }], next: "5" });
+  await assert.rejects(readParts(skipping, 1, 1, 9, 3), /next 5/);
+  const broken = async (name) => { throw new Error(name + " failed"); };
+  await assert.rejects(readParts(broken, 1, 1, 3, 3), /get_segment failed/);
+});
+
+test("recordSent: only a sent hide becomes the checker's own; a sent unhide is kept as cited", () => {
+  const state = { seen: { "1:1": { t: "t1", v: "copy", reason: 1, sourceKind: "book", published: "1960" } } };
+  recordSent(state, { kind: "hide", story: 1, seq: 1, t: "t1", src: { title: "B", author: "A" }, label: "“B” by A" });
+  assert.deepEqual(state.hiddenByChecker["1:1"], { source: { title: "B", author: "A" }, label: "“B” by A", t: "t1" });
+  recordSent(state, { kind: "unhide", story: 1, seq: 1, t: "t1", src: { title: "B", author: "A" }, label: "“B” by A" });
+  assert.equal(state.hiddenByChecker["1:1"], undefined);
+  assert.equal(state.seen["1:1"].v, "cited");
+  assert.equal(state.seen["1:1"].published, "1960", "the evidence stays, so clearing the citation hides it again");
+  recordSent(state, { kind: "note", story: 2, seq: 1, t: "t2" });
+  assert.equal(state.hiddenByChecker["2:1"], undefined);
 });

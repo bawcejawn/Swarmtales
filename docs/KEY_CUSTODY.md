@@ -4,7 +4,7 @@ Who can do what is listed in [ADMIN_POWERS.md](ADMIN_POWERS.md). This checklist 
 
 ## 1. Make the keys
 
-- [ ] Each of these is a **separate** key, never reused for anything else:
+- [ ] Each of these is a **separate** key, never reused for anything else, and never reused across networks (a testnet contract key is never a mainnet one; the deploy tool refuses):
   - Ink contract key, Shop contract key, Stories contract key (the three upload addresses)
   - Admin (one wallet for all three contracts, or one per contract)
   - Treasury, founder
@@ -20,8 +20,9 @@ These keys can replace a contract's code, so they are the most valuable keys.
 - [ ] Used only to **upload** a contract and to make the **first** admin proposal (`set-admin`). After that, they go back offline.
 - [ ] The upload overrides stay **off** (the deploy script always uploads with `false false false`). This keeps upload power with the key alone.
 - [ ] A contract key cannot be made multisig without adding a reviewed `authorize` function to the contract, so it stays a single hardware-held key. Do not turn the overrides on to get multisig.
-- [ ] Every upload uses a release build with a recorded sha256: `node deploy/deploy.js upload <name> --expect <addr> --expect-sha256 <hex>`. The script refuses mainnet without it.
-- [ ] The release sha256 of each contract is published (README or release notes) at the same time as the upload.
+- [ ] The release sha256 of each contract is reproduced by two people from the same commit and written into `deploy/release-hashes.json` (reviewed like code). Never copy a hash the tool or a build printed.
+- [ ] Every upload uses that release build: `node deploy/deploy.js upload <name> --expect <addr>`. On mainnet the tool refuses a build that doesn't match `release-hashes.json`.
+- [ ] After each mainnet upload, its address is written into `MAINNET_PINNED` in `deploy/lib.js` (one line, reviewed). On mainnet the tool then refuses any other Ink, Shop, Stories or token address, and `wire` / `wire-stories` check each contract's code hash on chain.
 
 ## 3. Admin
 
@@ -29,6 +30,12 @@ These keys can replace a contract's code, so they are the most valuable keys.
 - [ ] Make the admin a **multisig wallet, 2 of 3**, set up before mainnet: two hardware keys held by different people, and **one spare key kept offline** (on paper or a hardware wallet in a separate place, never used day to day). Losing any one key then loses nothing. Admin checks ask the admin address to authorize, so a multisig smart-contract wallet works. Rehearse it on testnet first: a full admin action, the two-step handover to the multisig, and replacing one lost signer with the spare.
 - [ ] The admin key is not the treasury or founder key.
 - [ ] Admin actions are signed only through the deploy script, which checks the chain id and only talks to listed mainnet nodes.
+- [ ] **Multisig signing with the deploy tool** (any number of signers, each on their own computer):
+  1. Anyone runs the admin command with `--prepare tx.json` (for example `node deploy/deploy.js pause stories --contract <addr> --admin <multisig> --prepare pause.json`). No key is asked; the unsigned transaction is written to the file. Add `--payer <addr>` if a separate wallet pays the mana.
+  2. Each signer runs `node deploy/deploy.js cosign pause.json` on their own computer. It decodes and shows every operation from that computer's own copy of the contracts, refuses anything that doesn't match, asks them to type SIGN, and adds one signature at the hidden key prompt.
+  3. Anyone runs `node deploy/deploy.js submit pause.json [other signed copies...]`. It joins the signatures, dry-runs and sends after SEND.
+  A prepared file is cancelled by any other transaction from the paying account (it uses that account's next nonce).
+- [ ] **Rehearse on testnet with the real multisig before mainnet:** an emergency pause of each contract (once with the multisig paying, once with a separate mana payer), the two-step handover to the multisig (`set-admin`, then `accept-admin --prepare`), and replacing a lost signer with the spare.
 
 ## 4. Treasury and founder
 
@@ -37,10 +44,20 @@ These keys can replace a contract's code, so they are the most valuable keys.
 
 ## 5. Moderator (copy checker)
 
-- [ ] A fresh key from `node deploy/deploy.js new-moderator-key`, used for nothing else. It can only hide and unhide parts, add notes and clear a story's summary. It can't take a part down or delete a part's text, touch Ink or change settings.
-- [ ] Stored only as the `MODERATOR_WIF` secret of the `copy-checker` environment (Settings > Environments > copy-checker), with "Deployment branches" limited to `main`. The workflow's `check` job runs in that environment, so a run dispatched on any other branch never gets the key. Delete any repository-level `MODERATOR_WIF` secret: every branch can read those.
+- [ ] A fresh key from `node deploy/deploy.js new-moderator-key`, used for nothing else (it prints only to a terminal, never into a file or pipe). It can only hide and unhide parts, add notes and clear a story's summary. It can't take a part down or delete a part's text, touch Ink or change settings.
+- [ ] Stored only as the `MODERATOR_WIF` **environment secret** of the `copy-checker` environment (Settings > Environments > copy-checker), with "Deployment branches" limited to `main`. Only the checker's apply job runs in that environment; the job that searches the web never has the key. Delete any repository-level `MODERATOR_WIF` secret: every branch can read those.
+- [ ] `CHECKER_STATE_KEY` (a random text of at least 32 characters from a password manager) is also an **environment secret** of `copy-checker`. It seals the checker's saved progress; without it the checker only reports and the run fails so GitHub emails you.
+- [ ] The search keys (`GOOGLE_BOOKS_KEY`, `TAVILY_API_KEY`, `BRAVE_API_KEY`) are **repository secrets**, because the search job has no environment.
+- [ ] `main` is protected (Settings > Branches): changes only through a pull request, no force pushes, no deletion, and the tests must pass. The moderator key is only as safe as who can push to `main`.
 - [ ] Set the `EXPECTED_CHAIN_ID` variable if the checker uses a node other than the Foundation testnet or api.koinos.io.
 - [ ] If it leaks: set a new moderator with `set-moderation` (admin), then replace the secret.
+
+## 5b. Mana sponsor
+
+- [ ] A fresh wallet used for nothing else, its recovery phrase on paper (like the contract keys). Per network: never the same sponsor key on testnet and mainnet.
+- [ ] Uploaded with `node deploy/deploy.js upload sponsor --expect <addr>`, which turns on only the "decides when this wallet pays" flag. `status --sponsor <addr>` must show `call false, pay true, upload false`.
+- [ ] Settings only with `sponsor-config` and that wallet's key. Keep KOIN in it only for mana; it isn't a treasury.
+- [ ] If it leaks: move its KOIN out at once (Kondor, like any wallet), switch it off (`sponsor-config ... --disable`), remove its address from `web/src/config.js`, and set up a new one. The leaked key can't touch Ink, Shop or Stories or anyone's tokens.
 
 ## 6. If a key is lost or leaks
 
@@ -60,7 +77,8 @@ The contract key is the only key that can do this, and the stored data (stories,
 1. Build the reviewed code (`npx yarn@1.22.22 build:release` in the contract's folder) and record its sha256. Have a second person build the same commit and compare the hash.
 2. Pause the contract with its admin first, if the admin still works: `node deploy/deploy.js pause ink|shop|stories --contract <contract address> --admin <admin address>` (with the mainnet flags).
 3. Run, from the repository root:
-   `node deploy/deploy.js upload ink|shop|stories --expect <contract address> --expect-sha256 <recorded hash> --upgrade --network mainnet --i-understand-this-is-mainnet --i-understand-this-replaces-mainnet-code`
+   `node deploy/deploy.js upload ink|shop|stories --expect <contract address> --upgrade --network mainnet --i-understand-this-is-mainnet --i-understand-this-replaces-mainnet-code`
+   (record the reviewed hash in `deploy/release-hashes.json` first; the tool refuses a build that doesn't match)
    The script stops on a sha256 mismatch, on an unlisted node, without both mainnet flags, or when the node can't say whether a contract is already there. It runs a dry run, then waits for you to type SEND.
 4. For a lost admin: the recovery build lets a new admin be proposed. Propose and accept it (`set-admin`, `accept-admin`), then upload the normal release build again the same way, with its own recorded sha256.
 5. Check `status`, unpause (`deploy.js unpause ...`), and publish what changed and why.
@@ -68,5 +86,7 @@ The contract key is the only key that can do this, and the stored data (stories,
 ## 7. Before the mainnet upload
 
 - [ ] Every box above is ticked.
-- [ ] [ADMIN_POWERS.md](ADMIN_POWERS.md) is published and linked from the site.
+- [x] [ADMIN_POWERS.md](ADMIN_POWERS.md) is published and linked from the site footer.
+- [ ] `deploy/release-hashes.json` holds the reviewed release hashes, and `MAINNET_PINNED` the uploaded addresses.
+- [ ] The mainnet payment token is checked before it is enabled: does it let Shop's transfer go through on the buyer's signature alone, or does it need an earlier approval? Either works with Shop; record which. Enable it before launch: after the Shop's first sale, a newly enabled token waits 7 days.
 - [ ] A full rehearsal on testnet used the same key setup (hardware wallets, multisig admin, two-step admin handover).

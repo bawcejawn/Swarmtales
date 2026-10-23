@@ -1,9 +1,15 @@
 /**
- * Reading progress and bookmarks, kept in this browser only (free, private,
+ * Reading progress and bookmarks, kept in this browser (free, private,
  * no wallet needed). One record per story:
  *   last: where the reader last was (saved automatically while reading)
  *   mark: the part the reader bookmarked (optional)
+ *   dirty: the bookmark (or its removal) is not in the wallet yet
+ *   clearedAt: when the reader last removed the bookmark
  * Each place is { seq, chapter, percent, at }.
+ *
+ * A bookmark is always saved here first. It goes to the wallet (on chain,
+ * set_reading_place) only when the reader asks, in one batched confirmation,
+ * never as a signature prompt per click (audit W1-10).
  */
 
 const PREFIX = "st-read:";
@@ -34,7 +40,7 @@ export function load(contract, storyId, store = storage()) {
 function save(contract, storyId, record, store) {
   if (!store) return;
   try {
-    if (!record.last && !record.mark) store.removeItem(keyFor(contract, storyId));
+    if (!record.last && !record.mark && !record.dirty) store.removeItem(keyFor(contract, storyId));
     else store.setItem(keyFor(contract, storyId), JSON.stringify(record));
   } catch {
     /* full or blocked: reading still works */
@@ -58,17 +64,68 @@ export function saveLast(contract, storyId, info, store = storage(), now = Date.
   return record;
 }
 
-/** Set the bookmark to this part, or clear it (info = null). */
-export function setMark(contract, storyId, info, store = storage(), now = Date.now()) {
+/**
+ * Set the bookmark to this part, or clear it (info = null). A change the
+ * reader makes is marked dirty (not in the wallet yet); one copied from the
+ * wallet passes { fromWallet: true } and is not.
+ */
+export function setMark(contract, storyId, info, store = storage(), now = Date.now(), opts = {}) {
   const record = load(contract, storyId, store);
   if (info) {
     record.mark = place(info, now);
     if (info.title) record.title = String(info.title).slice(0, 120);
+    delete record.clearedAt;
   } else {
     delete record.mark;
+    record.clearedAt = now;
   }
+  if (opts.fromWallet) delete record.dirty;
+  else record.dirty = true;
   save(contract, storyId, record, store);
   return record;
+}
+
+/** When this browser's bookmark last changed (set or removed), in ms; 0 if never. */
+export function markChangedAt(record) {
+  return Math.max(record && record.mark ? record.mark.at : 0, (record && record.clearedAt) || 0);
+}
+
+/**
+ * Bookmarks (and removed bookmarks) not in the wallet yet, oldest change
+ * first: [{ id, seq, chapter, percent, at }]. seq 0 clears the wallet's place.
+ */
+export function pendingWallet(contract, store = storage()) {
+  if (!store) return [];
+  const out = [];
+  const prefix = PREFIX + contract + ":";
+  for (let i = 0; i < store.length; i++) {
+    const key = store.key(i);
+    if (!key || !key.startsWith(prefix)) continue;
+    const id = key.slice(prefix.length);
+    const record = load(contract, id, store);
+    if (!record.dirty) continue;
+    const m = record.mark;
+    out.push(m
+      ? { id, seq: m.seq, chapter: m.chapter, percent: m.percent, at: m.at }
+      : { id, seq: 0, chapter: 0, percent: 0, at: 0 });
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
+/**
+ * The wallet now holds these places (items from pendingWallet). Each stops
+ * being pending, unless the reader changed that bookmark again meanwhile.
+ */
+export function markInWallet(contract, sent, store = storage()) {
+  for (const item of sent) {
+    const record = load(contract, item.id, store);
+    if (!record.dirty) continue;
+    const m = record.mark;
+    const same = m ? m.seq === item.seq && m.at === item.at : item.seq === 0;
+    if (!same) continue;
+    delete record.dirty;
+    save(contract, item.id, record, store);
+  }
 }
 
 /** Every story this browser has progress for, most recent first. */

@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
-import { NETWORKS } from "./src/config.js";
+import { NETWORKS, SITE } from "./src/config.js";
+import { canonicalBase, customDomain } from "./src/lib/site.js";
 
 /**
  * Content-Security-Policy for the built site. GitHub Pages can't send headers,
@@ -9,13 +10,25 @@ import { NETWORKS } from "./src/config.js";
  * - scripts, styles, fonts: only files from this site
  * - network: only the Koinos nodes and KOIN Vault's API
  * - no frames, no plugins, forms post nowhere
+ *
+ * Why 'unsafe-eval' stays (checked October 2026, koilib 9.4.0, protobufjs 7):
+ * koilib encodes and decodes every contract call with protobufjs reflection
+ * types built at run time from the contract ABIs (koilib Serializer ->
+ * protobufjs Type.create/encode/decode). protobufjs builds each type's
+ * constructor, encoder and decoder with @protobufjs/codegen, which calls
+ * Function(source). There is no switch to turn that off: the only codegen-free
+ * protobufjs path is ahead-of-time static code (pbjs -t static-module), which
+ * koilib's Serializer cannot use. With code generation blocked, the first
+ * contract read fails ("EvalError: Code generation from strings disallowed",
+ * reproduced with node --disallow-code-generation-from-strings). Removing it
+ * would mean replacing koilib's serializer. Inline and third-party scripts
+ * stay blocked, so 'unsafe-eval' only matters if an attacker can already run
+ * code here; the page never passes its own data to eval/Function.
  */
 function contentSecurityPolicy() {
   const nodes = Object.values(NETWORKS).map((n) => new URL(n.rpc).origin);
   const policy = [
     "default-src 'self'",
-    // koilib's protobuf library builds its encoders with new Function(), so
-    // 'unsafe-eval' is required. Inline and third-party scripts stay blocked.
     "script-src 'self' 'unsafe-eval'",
     "style-src 'self'",
     "font-src 'self'",
@@ -39,11 +52,39 @@ function contentSecurityPolicy() {
   };
 }
 
-// Relative asset paths so the same build works on GitHub Pages
-// (https://<user>.github.io/<repo>/), a later custom domain, and a local static server.
+/**
+ * The site's own address (SITE.url in src/config.js, audit M-7): the page's
+ * canonical link and og:url, and, once SITE.url is a custom domain, the
+ * CNAME file GitHub Pages expects. While SITE.url is a github.io address no
+ * CNAME is written. (With the GitHub Actions Pages deploy, the custom domain
+ * itself is set in Settings > Pages; the file keeps the published copy
+ * self-describing and matches what a branch deploy would need.)
+ */
+function siteAddress() {
+  const base = canonicalBase(SITE.url);
+  const domain = customDomain(SITE.url);
+  const escape = (s) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  return {
+    name: "swarmtales-site-address",
+    apply: "build",
+    transformIndexHtml(html) {
+      return html.replace(
+        '<meta property="og:type" content="website" />',
+        '<link rel="canonical" href="' + escape(base) + '" />\n    <meta property="og:url" content="' + escape(base) + '" />\n    <meta property="og:type" content="website" />'
+      );
+    },
+    generateBundle() {
+      if (domain) this.emitFile({ type: "asset", fileName: "CNAME", source: domain + "\n" });
+    },
+  };
+}
+
+// Relative asset paths ("./"), so the same build works on GitHub Pages
+// (https://<user>.github.io/<repo>/), at the root of a custom domain, and on
+// a local static server. Only SITE.url changes when the domain does.
 export default defineConfig({
   base: "./",
-  plugins: [contentSecurityPolicy()],
+  plugins: [contentSecurityPolicy(), siteAddress()],
   build: {
     outDir: "dist",
     emptyOutDir: true,

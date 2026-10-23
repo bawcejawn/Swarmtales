@@ -39,7 +39,8 @@ function functionSource(name, next) {
 test("RT-INS runbook: the leaked-key runbook's 'pause the contract' step has a command", () => {
   const custody = fs.readFileSync(path.join(DOCS, "KEY_CUSTODY.md"), "utf8");
   assert.match(custody, /Pause the contract/, "precondition: KEY_CUSTODY.md tells the admin to pause");
-  const hasPause = /case\s+"(pause|set-paused|unpause)"/.test(DEPLOY_JS) && /name:\s*"set_paused"/.test(DEPLOY_JS);
+  const { COMMANDS } = require("../deploy");
+  const hasPause = !!(COMMANDS.pause && COMMANDS.unpause) && /name:\s*"set_paused"/.test(DEPLOY_JS);
   assert.ok(hasPause,
     "RT-INS runbook: KEY_CUSTODY section 6 says to pause the contract first (leaked contract key, mainnet re-upload), " +
       "but deploy.js has no pause command; in an emergency the admin has no documented way to do it");

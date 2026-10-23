@@ -9,7 +9,6 @@
 
 export const MAX_NEWLINE_RUN = 3;
 export const MAX_TITLE = 100;
-export const HARD_SUBMISSION_CAP = 4000;
 export const SHORT_MIN = 10000;
 export const SHORT_MAX = 99999;
 export const BOOK_MIN = 100000;

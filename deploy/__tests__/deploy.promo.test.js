@@ -77,7 +77,8 @@ test("promo commands ask for confirmation (dry run, then SEND) and reach the Sho
     assert.match(b, /await connect\(f\)/, name + " skips the network checks (mainnet needs --i-understand-this-is-mainnet)");
     assert.match(b, /dryRunThenSend\(/, name + " sends without the dry run and SEND");
   }
-  for (const cmd of ["promo-new", "promo-on", "promo-off", "promo-end"]) assert.match(SRC, new RegExp('case "' + cmd + '":'));
+  const { COMMANDS } = require("../deploy");
+  for (const cmd of ["promo-new", "promo-on", "promo-off", "promo-end"]) assert.ok(COMMANDS[cmd], cmd + " is not a command");
   assert.throws(() => lib.requireCampaignId(undefined), /campaign id/);
   assert.throws(() => lib.requireCampaignId("0"), /campaign id/);
   assert.throws(() => lib.requireCampaignId("x"), /campaign id/);
@@ -104,7 +105,7 @@ test("clear-summary sends an empty set_story_summary as the admin or moderator, 
   assert.match(b, /await connect\(f\)/);
   assert.match(b, /dryRunThenSend\(/);
   assert.match(b, /summary: ""/);
-  assert.match(SRC, /case "clear-summary":/);
+  assert.ok(require("../deploy").COMMANDS["clear-summary"]);
   const { Contract } = require("koilib");
   const abi = lib.toKoilibAbi(JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "stories", "abi", "stories.abi"), "utf8")));
   const c = new Contract({ id: "16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt", abi });

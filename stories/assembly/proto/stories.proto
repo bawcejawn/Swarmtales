@@ -4,16 +4,19 @@ syntax = "proto3";
 // SwarmTales Stories — interface definition
 //
 // One contract holds every Book and Short Story. Writing burns the
-// writer's Ink (reason BURN_CONTRIBUTION). Editor removals and
-// shortenings re-credit the ORIGINAL author through Ink mint with
-// reason MINT_REFUND (the only mint reason Stories is allowed).
-// Open and close fees are paid through Shop, which splits them.
+// writer's Ink (reason BURN_CONTRIBUTION). Removals and cuts refund the
+// part's writer (or the story's pool) through Ink mint with reason
+// MINT_REFUND (the only mint reason Stories is allowed), and only Ink
+// that was paid for that part and not yet given back.
+// The open fee is paid through Shop, which splits it. Closing is free.
 //
 // Ink cost of text = number of UTF-16 code units. A letter costs 1,
 // most emoji cost 2, a few older emoji cost 1, skin tones and flags
 // cost 4, family emoji cost 8. The website shows the exact number and
 // sends it as expected_ink; the contract refuses any mismatch.
-// All times are seconds.
+// All times are seconds. last_activity_at and opener_last_active are on the
+// "activity clock": wall time minus every second Stories spent paused, so a
+// pause never counts as inactivity (config.paused_seconds says how far it lags).
 // =====================================================================
 
 package stories;
@@ -55,9 +58,9 @@ enum story_kind {
 
 enum visibility {
   VISIBILITY_UNSPECIFIED = 0;
-  VISIBILITY_PUBLIC = 1;   // in the gallery; anyone eligible may write
-  VISIBILITY_UNLISTED = 2; // hidden from the gallery; anyone eligible may write
-  VISIBILITY_PRIVATE = 3;  // only opener, editors and allow-listed wallets may write
+  VISIBILITY_PUBLIC = 1;   // in the gallery; anyone with a Writer month (or the promo trial) may write
+  VISIBILITY_UNLISTED = 2; // retired: merged into Private (October 2026); not accepted
+  VISIBILITY_PRIVATE = 3;  // not in the gallery; only the opener, editors and invited wallets may write
 }
 
 enum story_status {
@@ -126,6 +129,12 @@ message config {
   uint32 full_price_projects = 19; // open projects at the normal price; each one beyond doubles it (default 3)
   uint32 max_price_multiplier = 20; // the doubling stops here (default 4)
   bytes pending_admin = 21 [(koinos.btype) = ADDRESS]; // proposed by set_admin, waiting for accept_admin
+  // Pause bookkeeping (audit M-1): when the current pause began (0 = not
+  // paused) and every second of earlier pauses. Inactivity clocks stop while
+  // paused, so a long pause never makes stories archivable or open to an
+  // admin take-over.
+  uint64 paused_at = 22 [jstype = JS_STRING];
+  uint64 paused_seconds = 23 [jstype = JS_STRING];
 }
 
 message story {
@@ -146,12 +155,12 @@ message story {
   uint32 free_chapters = 15;
   uint64 contributor_edition_min = 16 [jstype = JS_STRING];
   uint64 created_at = 17 [jstype = JS_STRING];
-  uint64 last_activity_at = 18 [jstype = JS_STRING];
-  uint64 opener_last_active = 19 [jstype = JS_STRING];
+  uint64 last_activity_at = 18 [jstype = JS_STRING];   // activity clock (see the top of this file)
+  uint64 opener_last_active = 19 [jstype = JS_STRING]; // activity clock
   uint64 locked_at = 20 [jstype = JS_STRING];
   bool admin_finalize_requested = 21;
   bool finalizer_is_admin = 22;
-  bool close_fee_paid = 23;
+  reserved 23;                   // was close_fee_paid (closing is free)
   uint64 final_cursor = 24 [jstype = JS_STRING];
   bytes running_hash = 25;
   bool revived = 26;
@@ -161,7 +170,7 @@ message story {
   uint64 next_invite_id = 30 [jstype = JS_STRING];
   uint32 hidden_count = 31;      // parts hidden right now; a story cannot be finalized while this is above 0
   bool needs_new_pdf = 32;       // a part was taken down after finalizing; the admin must publish a new PDF
-  // Unlisted and private stories only: Ink the opener set aside to pay for
+  // Private stories only: Ink the opener set aside to pay for
   // everyone's writing. Returned to the opener when the story is finished
   // or archived.
   uint64 fund = 33 [jstype = JS_STRING];
@@ -201,8 +210,7 @@ message segment {
   string source_note = 24;       // added by the copy checker: where parts of this text also appear (does not hide it)
   bool restored = 25;            // brought back by the story's opener or an editor after being hidden
   uint32 version_count = 26;     // 0: never revised. Otherwise versions 1..version_count are kept (get_versions)
-  bool hidden_by_reports = 27;   // hidden by writer reports alone, not the admin or the checker: refunded if removed (AB-012)
-  reserved 28;                   // was text_by on the audit-fixes branch (never deployed)
+  reserved 27, 28;               // were hidden_by_reports (now hidden_by = 1) and text_by
   // Someone other than the writer changed the text (revise_part or the final
   // edit), even only by cutting words. A takedown then needs the admin to
   // name who gets the strike, or to choose no strike.
@@ -214,21 +222,17 @@ message segment {
   // later (the pool pays only for new parts). Refunds pay this back to the
   // writer first, then the rest goes back to the pool.
   uint64 own_paid = 31 [jstype = JS_STRING];
-  // Who hid the part: 0 not hidden (or hidden before this field existed),
-  // 1 writer reports, 2 the moderator (the copy checker), 3 the admin. The
+  // Who hid the part: 0 not hidden, 1 writer reports (refunded if removed,
+  // AB-012), 2 the moderator (the copy checker), 3 the admin. The
   // opener or an editor may restore a part hidden by reports or the checker,
   // never one the admin hid (AB-053), and only the admin unhides an admin
   // hide (AB-061). The admin may take over any other hide in place (AB-062).
   uint32 hidden_by = 32;
-  // Someone other than the writer made one of its kept versions (a paid
-  // change or the final edit), so a takedown never reads the versions to
-  // find out (AB-059).
-  bool other_version = 33;
+  reserved 33;                   // was other_version (edited_by_others covers it)
   // Its opener or an editor restored it after the copy checker hid it: a cut
   // or removing it gives back no Ink (AB-062).
   bool refund_forfeited = 34;
-  // Counted among its writer's live parts in the story (AB-066).
-  bool live_counted = 35;
+  reserved 35;                   // was live_counted (every part is counted)
 }
 
 message address_list {
@@ -263,6 +267,9 @@ message account_status {
 
 message segment_list {
   repeated segment values = 1;
+  // Where the next page starts (0: no more). A page stops early at about
+  // 64 KB of text, so long multibyte parts still fit a node's read limit (M-5).
+  uint64 next = 2 [jstype = JS_STRING];
 }
 
 message segment_ref {
@@ -322,6 +329,7 @@ message shop_fee_call {
   bytes token = 3 [(koinos.btype) = ADDRESS];
   uint32 price_multiplier = 4;   // open fee only: 1, 2, 4, 8...
   uint64 max_price = 5 [jstype = JS_STRING]; // the most the payer agreed to pay (AB-017)
+  uint64 min_ink = 6 [jstype = JS_STRING];   // the least starter Ink the payer agreed to receive (M-2)
 }
 
 // Wire-compatible with shop.get_membership_arguments / get_promo_claimed_arguments.
@@ -360,7 +368,7 @@ message get_segment_arguments {
   uint64 seq = 2 [jstype = JS_STRING];
 }
 
-// @description Up to 10 segments starting at seq `start`
+// @description Up to 10 segments starting at seq `start`, and fewer when their text passes about 64 KB (at least one). `next` says where to go on.
 // @read-only true
 // @result segment_list
 message get_segments_arguments {
@@ -515,9 +523,10 @@ message open_story_arguments {
   bytes token = 13 [(koinos.btype) = ADDRESS];
   bool rights_confirmed = 14;    // must be true: "I wrote this, or I have the right to use it"
   uint32 terms_version = 15;     // must equal the current Terms of Use version
-  uint64 fund = 16 [jstype = JS_STRING]; // unlisted/private only: extra Ink set aside for everyone's writing
+  uint64 fund = 16 [jstype = JS_STRING]; // private only: Ink set aside for everyone's writing (at least the kind's minimum length)
   string citation = 17;          // optional: what the opening part quotes (up to 200 characters)
   uint64 max_price = 18 [jstype = JS_STRING]; // the most the opener agreed to pay for opening (passed to Shop, AB-017)
+  uint64 min_ink = 19 [jstype = JS_STRING];   // the least starter Ink the opener agreed to receive (passed to Shop, M-2)
 }
 
 // @description Opener changes title, categories, visibility and free chapters (send all of them)
@@ -658,8 +667,9 @@ message set_story_summary_arguments {
 }
 
 // @description The part's own writer edits it in an OPEN story. Rewording is free; letters beyond the part's
-// current length cost the normal Ink rate (the writer pays, never the pool). Shortening is always allowed and
-// refunds the removed Ink, but only Ink the writer (or the pool) paid for the part and has not had back.
+// current length cost the normal Ink rate (the writer pays, never the pool). Shortening refunds the removed Ink,
+// but only Ink the writer (or the pool) paid for the part and has not had back. In a private story the writer
+// must still be on its allow-list. Needs the rights confirmation and the current Terms version, like new text.
 // @read-only false
 // @result empty_object
 message edit_segment_arguments {
@@ -671,10 +681,13 @@ message edit_segment_arguments {
   // The most Ink the writer agrees to pay for added letters (the price the page showed). The edit is
   // refused if it would cost more, e.g. because someone shortened the part since (AB-049).
   uint64 max_ink = 6 [jstype = JS_STRING];
+  bool rights_confirmed = 7;     // must be true: "I wrote this, or I have the right to use it" (F-04)
+  uint32 terms_version = 8;      // must equal the current Terms of Use version (F-04)
 }
 
-// @description The part's writer removes it from an OPEN story for free (the opener or an editor may remove a hidden part).
-// What the writer paid comes back to them; what the pool paid goes back to the pool.
+// @description The part's writer removes it from an OPEN story for free. The opener or an editor may remove a part
+// that writer reports hid (the writer still gets the refund), never one the admin or the checker hid. What the
+// writer paid comes back to them; what the pool paid goes back to the pool. The removed text stays in its versions.
 // @read-only false
 // @result empty_object
 message remove_segment_arguments {
@@ -683,7 +696,7 @@ message remove_segment_arguments {
   uint64 seq = 3 [jstype = JS_STRING];
 }
 
-// @description Opener adds Ink to an unlisted or private story's fund (burned from the opener now; unused Ink comes back at the end)
+// @description Opener adds Ink to a private story's fund (burned from the opener now; unused Ink comes back at the end)
 // @read-only false
 // @result empty_object
 message top_up_fund_arguments {
@@ -717,7 +730,7 @@ message set_citation_arguments {
   string citation = 4;           // up to 200 characters; empty clears it
 }
 
-// @description A reader saves their place in a story (their bookmark), so it follows their wallet to any device.
+// @description A reader saves their place in a story (their bookmark), so it follows their wallet to any device. Not while paused.
 // @read-only false
 // @result empty_object
 message set_reading_place_arguments {
@@ -791,10 +804,15 @@ message takedown_segment_arguments {
   // else changed needs a wallet here or no_strike.
   bytes strike = 5 [(koinos.btype) = ADDRESS];
   bool no_strike = 6;            // take the part down without striking anyone (leave strike empty)
+  // What the admin reviewed: the part's text_hash and version_count as read
+  // just before (get_segment). If the part changed since, nothing happens, so
+  // a takedown and its strike always match the reviewed text.
+  bytes reviewed_hash = 7;
+  uint32 reviewed_versions = 8;
 }
 
-// @description Any wallet reports a part, once per part. Reports from wallets that have written on
-// SwarmTales count toward hiding it automatically.
+// @description Any wallet reports a part of a story that is not finalized, once per part. Reports from wallets that
+// have written on SwarmTales count toward hiding it automatically. Finished books are reported off-chain (M-3).
 // @read-only false
 // @result empty_object
 message report_segment_arguments {
@@ -805,7 +823,8 @@ message report_segment_arguments {
   string note = 5;               // up to 200 characters
 }
 
-// @description Admin publishes a new PDF after a takedown in a finalized story
+// @description Admin publishes a new book link and text hash after a takedown in a finalized story (the contract does not
+// recompute the hash; the deploy tool computes it from the chain)
 // @read-only false
 // @result empty_object
 message replace_pdf_arguments {
@@ -816,13 +835,13 @@ message replace_pdf_arguments {
 
 // ---------- Closing and the final edit ----------
 
-// @description Opener pays the close fee through Shop and starts the final edit
+// @description Opener closes the story for free and starts the final edit
 // @read-only false
 // @result empty_object
 message close_story_arguments {
   bytes opener = 1 [(koinos.btype) = ADDRESS];
   uint64 story_id = 2 [jstype = JS_STRING];
-  bytes token = 3 [(koinos.btype) = ADDRESS];
+  reserved 3;                    // was token (closing is free)
 }
 
 // @description Opener turns the "admin, please finalize" request on or off
@@ -842,7 +861,8 @@ message advance_final_cursor_arguments {
   uint64 story_id = 1 [jstype = JS_STRING];
 }
 
-// @description Admin takes over the final edit (opener asked, or opener inactive 30+ days). No fee.
+// @description Admin takes over the final edit (opener asked, or opener inactive for inactivity_days, not counting
+// paused time). Not while paused. No fee.
 // @read-only false
 // @result empty_object
 message admin_take_over_arguments {
@@ -870,14 +890,16 @@ message finalize_arguments {
 
 // ---------- Archive ----------
 
-// @description Anyone archives an OPEN story with no contribution or edit for the archive period
+// @description Anyone archives an OPEN story when neither its text nor its opener has been active for the archive
+// period (paused time does not count). Its pool goes back to the opener.
 // @read-only false
 // @result empty_object
 message archive_if_stale_arguments {
   uint64 story_id = 1 [jstype = JS_STRING];
 }
 
-// @description Opener revives an archived story once, for free
+// @description Opener revives an archived story once, for free, while their next open project would still be at the
+// normal price (S2-03). A story archived a second time stays archived.
 // @read-only false
 // @result empty_object
 message revive_arguments {
@@ -887,7 +909,7 @@ message revive_arguments {
 
 // ---------- Admin ----------
 
-// @description Set the Ink and Shop contract addresses. Ink can be set once and never changed; Shop can change.
+// @description Set the Ink and Shop contract addresses. Each can be set once and never changed (AB-037, AB-050).
 // @read-only false
 // @result empty_object
 message set_addresses_arguments {
@@ -904,8 +926,8 @@ message set_limits_arguments {
   uint32 open_limit = 3;
   uint32 archive_days = 4;
   uint32 inactivity_days = 5;
-  uint32 full_price_projects = 6; // 0 = keep 3
-  uint32 max_price_multiplier = 7; // 0 = keep 4; 1 to 1024
+  uint32 full_price_projects = 6; // 1 to 10; 0 means the default, 3
+  uint32 max_price_multiplier = 7; // 1 to 1024; 0 means the default, 4
 }
 
 // @description Add a category (1-32 characters). Returns its id.
@@ -923,7 +945,8 @@ message set_category_active_arguments {
   bool active = 2;
 }
 
-// @description Pause or unpause every Stories write except admin settings
+// @description Pause or unpause Stories. While paused, every user write fails, and so do admin_take_over and archiving;
+// moderation (hide, unhide, takedown, source notes, clearing a summary) and admin settings still work.
 // @read-only false
 // @result empty_object
 message set_paused_arguments {

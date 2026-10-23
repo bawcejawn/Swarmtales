@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+// =====================================================================
+// SwarmTales multisig wallet — interface definition
+//
+// This contract is uploaded onto ONE fresh Koinos account (the multisig
+// address), with all three authority overrides on (contract call,
+// transaction application, contract upload). From then on that account
+// only acts when at least `threshold` of its `signers` have signed the
+// transaction. The account's own key no longer counts after setup.
+//
+// It is made to be the admin of the Ink, Shop and Stories contracts: their
+// admin checks ask this account to authorize, and this contract answers
+// "yes" only for a transaction with enough signer signatures.
+//
+//   setup        once, in the same transaction as the upload, signed by
+//                the account's own key. Sets the first signers.
+//   set_signers  changes the signers or the threshold. Needs the quorum
+//                of the CURRENT signers (this is how a lost signer is
+//                replaced by the other two).
+//   authorize    called by the chain only. Counts distinct current signers
+//                among the transaction's signatures.
+//
+// Limits: 2 to 10 signers, threshold at least 2 and at most the number of
+// signers, no duplicates, the multisig itself can't be a signer.
+// =====================================================================
+
+package multisig;
+
+import "koinos/options.proto";
+
+message config {
+  // The current signer addresses. Empty until setup.
+  repeated bytes signers = 1 [(koinos.btype) = ADDRESS];
+  // How many distinct signers must sign. 0 until setup.
+  uint32 threshold = 2;
+}
+
+// @description Read the signers and threshold.
+// @read-only true
+// @result config
+message get_config_arguments {}
+
+message empty_object {}
+
+// @description Set the first signers. Once only, signed by this account's own key.
+// @read-only false
+// @result empty_object
+message setup_arguments {
+  repeated bytes signers = 1 [(koinos.btype) = ADDRESS];
+  uint32 threshold = 2;
+}
+
+// @description Replace the signers and threshold. Needs the current quorum.
+// @read-only false
+// @result empty_object
+message set_signers_arguments {
+  repeated bytes signers = 1 [(koinos.btype) = ADDRESS];
+  uint32 threshold = 2;
+}
+
+// Emitted by setup and set_signers.
+message signers_event {
+  repeated bytes signers = 1 [(koinos.btype) = ADDRESS];
+  uint32 threshold = 2;
+}

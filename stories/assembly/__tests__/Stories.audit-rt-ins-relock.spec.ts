@@ -65,16 +65,6 @@ function bobRemoves(): void {
 }
 // What the pre-upgrade code left for a part the admin hid: hidden, not by
 // reports, and no hidden_by (new field, 0).
-function asOlderCodeLeftIt(): void {
-  const segs = new Storage.Map<Uint8Array, stories.segment>(STORIES, SEGMENTS_SPACE_ID, stories.segment.decode, stories.segment.encode, null);
-  const key = pairKey(gId, gSeq);
-  const seg = segs.get(key)!;
-  seg.hidden_by = 0;
-  seg.hidden_by_reports = false;
-  segs.put(key, seg);
-  checkpoint();
-}
-
 describe("RT-INS relock: the admin takes over a hide without unhiding the part", () => {
   beforeEach(() => {
     reset(); configure();
@@ -95,21 +85,5 @@ describe("RT-INS relock: the admin takes over a hide without unhiding the part",
     expect(segment(gId, gSeq).hidden_by).toBe(3, "RT-INS relock: the admin's hold was not recorded");
     expect(aliceRestores).toThrow("RT-INS relock: the opener restored a part the admin is holding");
     MockVM.rollbackTransaction();
-  });
-
-  it("(b) a part the admin hid before the upgrade can be re-locked without a visible, refundable window", () => {
-    hideAs(STORIES);
-    checkpoint();
-    asOlderCodeLeftIt();
-    expect(segment(gId, gSeq).hidden).toBe(true, "precondition: the legacy part is hidden");
-    expect(adminLocks).not.toThrow(
-      "RT-INS relock: the runbook's only route is unhide (tx 1) then hide (tx 2); in between the writer removes it for a full refund");
-    checkpoint();
-    expect(aliceRestores).toThrow("RT-INS relock: the opener can still restore the legacy admin-hidden part");
-    MockVM.rollbackTransaction();
-    const before = mintsTo(BOB);
-    bobRemoves();
-    checkpoint();
-    expect(mintsTo(BOB) - before).toBe(0, "RT-INS relock: the admin-held part was refunded on removal");
   });
 });

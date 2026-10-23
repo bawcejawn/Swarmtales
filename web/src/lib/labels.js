@@ -10,7 +10,6 @@ export const STORY_STATUS = {
 export const VISIBILITY = {
   0: "Unset",
   1: "Public",
-  2: "Private", // older "unlisted" stories work exactly like private ones
   3: "Private",
 };
 

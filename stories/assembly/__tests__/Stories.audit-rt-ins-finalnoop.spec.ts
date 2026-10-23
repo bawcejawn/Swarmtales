@@ -21,6 +21,7 @@ import {
   ALICE, BOB, COPYRIGHT, STORIES, allowCalls, authorize, checkpoint, configure, openPublic, reset, segment, story, strikes,
   versions, write,
 } from "./auditFixHelpers";
+import { reviewedTakedown } from "./reviewed";
 
 const LINE = "Bob's own scene, which nobody else ever touches.";
 let gId: u64 = 0;
@@ -43,7 +44,7 @@ function closedStoryWithBobsPart(): void {
   openerWrites(gId, "e".repeat(<i32>(st.max_chars - st.used_chars)));
   expect(story(gId).status).toBe(stories.story_status.STATUS_LOCKED);
   authorize(ALICE);
-  new Stories().close_story(new stories.close_story_arguments(ALICE, gId, null));
+  new Stories().close_story(new stories.close_story_arguments(ALICE, gId));
   checkpoint();
   expect(story(gId).status).toBe(stories.story_status.STATUS_EDITING);
 }
@@ -61,11 +62,11 @@ function noOpFinalEdit(): void {
 
 function takedownStrikingAlice(): void {
   authorize(STORIES);
-  new Stories().takedown_segment(new stories.takedown_segment_arguments(gId, gSeq, COPYRIGHT, "notice 2026-301", ALICE, false));
+  new Stories().takedown_segment(reviewedTakedown(gId, gSeq, COPYRIGHT, "notice 2026-301", ALICE, false));
 }
 function takedownDefault(): void {
   authorize(STORIES);
-  new Stories().takedown_segment(new stories.takedown_segment_arguments(gId, gSeq, COPYRIGHT, "notice 2026-302", new Uint8Array(0), false));
+  new Stories().takedown_segment(reviewedTakedown(gId, gSeq, COPYRIGHT, "notice 2026-302", new Uint8Array(0), false));
 }
 
 describe("RT-INS final no-op: an unchanged 'final edit' marks the part as changed by others", () => {

@@ -111,6 +111,7 @@ const SOURCES = {
   ink: "assembly/proto/ink.proto",
   shop: "shop/assembly/proto/shop.proto",
   stories: "stories/assembly/proto/stories.proto",
+  sponsor: "sponsor/assembly/proto/sponsor.proto",
 };
 
 export function buildAll() {

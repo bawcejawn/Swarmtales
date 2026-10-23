@@ -3,12 +3,16 @@ syntax = "proto3";
 // =====================================================================
 // SwarmTales Shop — interface definition
 //
-// The Shop sells memberships and Ink packs, collects story open/close
-// fees for the Stories contract, and runs promo-code Ink grants.
+// The Shop sells memberships and Ink packs, collects the story open fee
+// for the Stories contract, and runs promo-code Ink grants.
 //
 // Payments are stablecoins only. The admin turns each token on and sets
 // every price in that token's own base units (its decimals). Nothing
 // here is hard-wired to a mainnet address, so a testnet token works.
+// After the Shop's first sale, a newly enabled token can't be used for 7
+// days, and it is announced with a public event, so buyers and the site can
+// check it first (C1-01). Tokens set up before any sale work at once, since
+// no buyer is exposed yet. Turning a token off works at once.
 //
 // Every payment is split in the same transaction:
 //   founder_amount = floor(price * fee_bps / 10000)
@@ -58,8 +62,7 @@ enum item {
   ITEM_PACK_L = 5;
   ITEM_OPEN_BOOK = 6;
   ITEM_OPEN_SHORT = 7;
-  ITEM_CLOSE_BOOK = 8;
-  ITEM_CLOSE_SHORT = 9;
+  reserved 8, 9;                 // were the close fees (closing is free)
 }
 
 enum story_kind {
@@ -97,12 +100,16 @@ message config {
   uint64 starter_book = 14 [jstype = JS_STRING];
   uint64 starter_short = 15 [jstype = JS_STRING];
   bytes pending_admin = 16 [(koinos.btype) = ADDRESS];  // proposed by set_admin, waiting for accept_admin
+  bool sold = 17;                // the Shop has taken a payment; from then on a newly enabled token waits 7 days (C1-01)
 }
 
 message asset {
   bool enabled = 1;
   uint32 decimals = 2;
   string symbol = 3;
+  // When an enabled token may first be used (seconds). Enabling a token
+  // after the Shop's first sale sets it 7 days ahead (C1-01).
+  uint64 usable_from = 4 [jstype = JS_STRING];
 }
 
 message membership {
@@ -114,6 +121,10 @@ message membership {
   // change Ink already paid for. A new term, after this one ends, uses
   // the catalog amount at that purchase.
   uint64 ink_per_month = 5 [jstype = JS_STRING];
+  // Seconds of Reader membership that were left when a Writer term began
+  // (bought or gifted). They resume as Reader time when the Writer term
+  // ends, so a gift never wipes Reader months (C1-03).
+  uint64 reader_left = 6 [jstype = JS_STRING];
 }
 
 message campaign {
@@ -148,7 +159,7 @@ message ink_mint_call {
 // @result config
 message get_config_arguments {}
 
-// @description Accepted stablecoin: enabled flag, decimals and symbol
+// @description Accepted stablecoin: enabled flag, decimals, symbol and the time it may first be used
 // @read-only true
 // @result asset
 message get_asset_arguments {
@@ -163,7 +174,7 @@ message get_price_arguments {
   bytes token = 2 [(koinos.btype) = ADDRESS];
 }
 
-// @description Membership record for an account
+// @description Membership record for an account (Reader time saved under a Writer term already resumed once that term ended)
 // @read-only true
 // @result membership
 message get_membership_arguments {
@@ -214,9 +225,12 @@ message buy_membership_arguments {
   // Optional gift: who gets the membership (and its Ink). Empty = the payer.
   bytes beneficiary = 5 [(koinos.btype) = ADDRESS];
   uint64 max_price = 6 [jstype = JS_STRING]; // the most the payer agreed to pay, in the token's base units; above it nothing is charged (AB-017)
+  // Writer only: the least Ink per Writer month the payer agreed to (the amount the page showed). If the month
+  // would bring less, nothing is charged (M-2). Reader: send 0.
+  uint64 min_ink = 7 [jstype = JS_STRING];
 }
 
-// @description Writers claim one prepaid month of Ink
+// @description Writers claim one prepaid month of Ink. A month not claimed before the Writer term ends is forfeited.
 // @read-only false
 // @result empty_object
 message claim_writer_ink_arguments {
@@ -231,6 +245,7 @@ message buy_pack_arguments {
   item pack = 2;
   bytes token = 3 [(koinos.btype) = ADDRESS];
   uint64 max_price = 4 [jstype = JS_STRING]; // the most the payer agreed to pay, in the token's base units; above it nothing is charged (AB-017)
+  uint64 min_ink = 5 [jstype = JS_STRING];   // the least Ink the payer agreed to receive; if the pack brings less, nothing is charged (M-2)
 }
 
 // @description Stories contract collects an open fee and Shop mints starter Ink
@@ -244,15 +259,7 @@ message pay_open_fee_arguments {
   // already has many projects open. At most 1024.
   uint32 price_multiplier = 4;
   uint64 max_price = 5 [jstype = JS_STRING]; // the most the payer agreed to pay, in the token's base units; above it nothing is charged (AB-017)
-}
-
-// @description Stories contract collects a close fee. No Ink is minted.
-// @read-only false
-// @result empty_object
-message pay_close_fee_arguments {
-  bytes payer = 1 [(koinos.btype) = ADDRESS];
-  story_kind kind = 2;
-  bytes token = 3 [(koinos.btype) = ADDRESS];
+  uint64 min_ink = 6 [jstype = JS_STRING];   // the least starter Ink the opener agreed to receive (M-2)
 }
 
 // ---------- Promo ----------
@@ -321,7 +328,8 @@ message claim_promo_arguments {
 
 // ---------- Admin ----------
 
-// @description Enable or disable a stablecoin and record its decimals and symbol
+// @description Enable or disable a stablecoin and record its decimals and symbol. After the Shop's first sale, enabling
+// starts a 7-day wait before it can be used; disabling is immediate. An enabled token's decimals and symbol can't change (disable it first).
 // @read-only false
 // @result empty_object
 message set_asset_arguments {
@@ -340,7 +348,8 @@ message set_price_arguments {
   uint64 amount = 3 [jstype = JS_STRING];
 }
 
-// @description Payment and partner addresses. Ink and Stories may be empty until they exist.
+// @description Payment and partner addresses. Ink and Stories may be empty until they exist; once set, each is fixed
+// for good (AB-050, C1-07). Treasury and founder stay changeable.
 // @read-only false
 // @result empty_object
 message set_addresses_arguments {
@@ -350,7 +359,7 @@ message set_addresses_arguments {
   bytes stories = 4 [(koinos.btype) = ADDRESS];
 }
 
-// @description Ink granted by Writer months, packs and story opens
+// @description Ink granted by Writer months, packs and story opens. Emits ink_amounts_event (M-2).
 // @read-only false
 // @result empty_object
 message set_ink_amounts_arguments {
@@ -461,4 +470,32 @@ message membership_gift_event {
   bytes beneficiary = 2 [(koinos.btype) = ADDRESS];
   tier tier = 3;
   uint32 months = 4;
+}
+
+// Ink amounts changed (M-2): what the next Writer month, pack or story open brings.
+message ink_amounts_event {
+  uint64 writer_month = 1 [jstype = JS_STRING];
+  uint64 pack_s = 2 [jstype = JS_STRING];
+  uint64 pack_m = 3 [jstype = JS_STRING];
+  uint64 pack_l = 4 [jstype = JS_STRING];
+  uint64 starter_book = 5 [jstype = JS_STRING];
+  uint64 starter_short = 6 [jstype = JS_STRING];
+}
+
+// A payment token was enabled or disabled (C1-01). An enabled token can be
+// used from usable_from on.
+message asset_event {
+  bytes token = 1 [(koinos.btype) = ADDRESS];
+  bool enabled = 2;
+  uint32 decimals = 3;
+  string symbol = 4;
+  uint64 usable_from = 5 [jstype = JS_STRING];
+}
+
+// Payment and partner addresses changed.
+message addresses_event {
+  bytes treasury = 1 [(koinos.btype) = ADDRESS];
+  bytes founder = 2 [(koinos.btype) = ADDRESS];
+  bytes ink = 3 [(koinos.btype) = ADDRESS];
+  bytes stories = 4 [(koinos.btype) = ADDRESS];
 }
