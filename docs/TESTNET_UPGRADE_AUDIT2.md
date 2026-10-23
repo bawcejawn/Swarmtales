@@ -134,7 +134,11 @@ with, the fingerprints were:
 ```
 Stories  26DF39A915AE84C898A988E53A663C457841F3807F8FA3B1AE8AD1FA6A84F0D6
 Shop     4EDF015169C85E2F3460ABEF85AAB0DDCBE279C58B074B5B0E208580E54846C6
+Ink      537F523396C1E195C0262E10DD574C28492B269D247A6025A10F30461B2308DC
 ```
+
+Ink is not upgraded here; its line is for checking. To build it, run the same two commands in
+`C:\swarmtales` itself (Ink **53 pass**) and `Get-FileHash build\release\contract.wasm`.
 
 If yours differ, stop and send me the output (a later commit on the branch changes them too).
 

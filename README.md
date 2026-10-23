@@ -10,10 +10,10 @@ Three contracts exist in this repository and have passing tests: **Ink**, **Shop
 
 | Piece | Status |
 |---|---|
-| Ink, the non-transferable writing allowance | Built and tested (49 checks) |
-| Shop, the cash register for memberships, packs, story fees, and promo links | Built and tested (64 checks) |
+| Ink, the non-transferable writing allowance | Built and tested (53 checks) |
+| Shop, the cash register for memberships, packs, story fees, and promo links | Built and tested (89 checks) |
 | A practice stablecoin inside this repo | Not included. On testnet, deploy the official Koinos token and point Shop at it |
-| Stories (the books themselves, trials, the 3-project limit, archive, refunds) | Built, tested in the mock chain (98 checks), and uploaded to the Foundation testnet |
+| Stories (the books themselves, trials, the 3-project limit, archive, refunds) | Built, tested in the mock chain (381 checks), and uploaded to the Foundation testnet |
 | Sponsor (paying Mana for someone else) | Optional, later, a separate contract, OFF by default. Not in Stories |
 | Books NFT | Planned |
 | Website | Static pages in `web/`. Reads the testnet. GitHub Pages publishing needs one repo setting (see docs/UI.md) |
@@ -177,7 +177,7 @@ These files are recreated by the build. Do not edit them, and they are not store
 
 ## Prerequisites and build
 
-Install [Node.js](https://nodejs.org/) 20 or newer, Git, Yarn 1 (classic), and the Koinos contract tool. These contracts were built and tested with Node.js 22.14.0, Yarn 1.22.22, and `@koinos/sdk-as-cli` 1.0.2. `yarn install` also puts SDK 1.0.0 in the project, which is the version the template pins. Do not use Yarn 2 or later. The Koinos tools call `yarn`.
+Install [Node.js](https://nodejs.org/) 20 or newer, Git, Yarn 1 (classic), and the Koinos contract tool. These contracts were built and tested with Node.js 22.14.0, Yarn 1.22.22, and `@koinos/sdk-as-cli` 1.0.2. The release builds reproduce on Node.js 22 and 24: the same commit gives the same sha256 (see `AUDIT_SCOPE.md`). `yarn install` also puts SDK 1.0.0 in the project, which is the version the template pins. Do not use Yarn 2 or later. The Koinos tools call `yarn`.
 
 ### Windows (PowerShell)
 
@@ -220,7 +220,7 @@ yarn test
 
 `yarn build:debug` is `koinos-sdk-as-cli build-all debug 0 ink.proto`. The `0` is not a version. Leaving it out makes the tool print help and stop. `yarn install` runs `scripts/patch-protoc-stdin.js`, which keeps the code generators from crashing with `EAGAIN` on Node.js 20 and later.
 
-Success means `build/debug/contract.wasm` exists and the test report ends with **49 pass** and **0 fail**.
+Success means `build/debug/contract.wasm` exists and the test files together report **53 pass** and **0 fail**.
 
 ### Shop
 
@@ -231,7 +231,7 @@ yarn build:debug
 yarn test
 ```
 
-Success means `shop/build/debug/contract.wasm` exists and the test report ends with **64 pass** and **0 fail**.
+Success means `shop/build/debug/contract.wasm` exists and the test files together report **89 pass** and **0 fail**.
 
 ### Stories
 
@@ -242,9 +242,23 @@ yarn build:release
 yarn test
 ```
 
-Success means `stories/build/release/contract.wasm` exists and the test report ends with **98 pass** and **0 fail**.
+Success means `stories/build/release/contract.wasm` exists and the test files together report **381 pass** and **0 fail**.
 
 `yarn build:release` in any of the three folders makes the smaller wasm used for an upload. Tests use the debug build.
+
+### Website, copy checker and deploy tool
+
+Run the website step **first**: `npm test` generates `web/src/generated/`, which the website tests and the copy checker import. Running `node --test` in `web` directly fails until it exists.
+
+```bash
+cd web
+npm ci
+npm test
+cd ..
+node --test checker/__tests__/*.test.mjs deploy/__tests__/*.test.js
+```
+
+Success means the website reports **128 pass** and the checker and deploy tool **180 pass**, both with **0 fail**. (`yarn test:deploy` in the root `package.json` runs only `deploy/__tests__/lib.test.js`; use the command above for all of them.)
 
 ## Testnet
 

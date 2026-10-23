@@ -22,10 +22,12 @@ pasted there, one block at a time.
 
 ## Wallets
 
+> **Retired addresses (history only, not used by the site):** the first, pre-fix testnet contracts were Ink `195trftAvPnqeoPmHeGmxtwNYVUVdghm5x`, Shop `1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth` and Stories `1JHakWJRXpAExjEuBik1posc8PXYYpugeN`. The security-fixed contracts were deployed fresh on 19 October 2026; their first Stories, `15YAvN…`, was replaced on 20 October 2026 by the moderation release. The addresses in this guide are the current ones (see `web/src/config.js`).
+
 | Role | Address | Funded with | Signs |
 |---|---|---|---|
-| Ink contract | `195trftAvPnqeoPmHeGmxtwNYVUVdghm5x` | 50 tKOIN | Ink upload, Ink set_admin |
-| Shop contract | `1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth` | 950 tKOIN | Shop upload, Shop set_admin |
+| Ink contract | `1EbuyYK1kso7GbZamHCU2LRhXaEyePkXpf` | 50 tKOIN | Ink upload, Ink set_admin |
+| Shop contract | `14zbNPeH6Janw4gneuEhieXVmaQBsk8WDD` | 950 tKOIN | Shop upload, Shop set_admin |
 | Admin (your main testnet wallet) | `18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6` | 1000 tKOIN | wire, test-asset |
 | Test user (a normal reader/writer) | `12SVw65QpMjFo9fnc651V7LhXKqVLg15Ww` | 100 tKOIN | test-buy, claim-promo, user-checks |
 
@@ -181,7 +183,7 @@ cd ..
 
 ```powershell
 cd C:\swarmtales
-node deploy/deploy.js status --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6 --ink 195trftAvPnqeoPmHeGmxtwNYVUVdghm5x --shop 1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth
+node deploy/deploy.js status --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6 --ink 1EbuyYK1kso7GbZamHCU2LRhXaEyePkXpf --shop 14zbNPeH6Janw4gneuEhieXVmaQBsk8WDD
 ```
 
 **Expect:** `(chain id verified)`, then mana about 1000 / 50 / 950. The contract lines say
@@ -191,7 +193,7 @@ node deploy/deploy.js status --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6 --ink 19
 
 ```powershell
 cd C:\swarmtales
-node deploy/deploy.js upload ink --expect 195trftAvPnqeoPmHeGmxtwNYVUVdghm5x
+node deploy/deploy.js upload ink --expect 1EbuyYK1kso7GbZamHCU2LRhXaEyePkXpf
 ```
 
 Paste the **Ink wallet's** private key at the prompt and press Enter.
@@ -202,8 +204,8 @@ Type `SEND` and press Enter. Then you see `Transaction id: 0x...` and `included 
 ## Step 7. Make your main wallet the Ink admin (signed by the Ink wallet)
 
 ```powershell
-node deploy/deploy.js set-admin ink --contract 195trftAvPnqeoPmHeGmxtwNYVUVdghm5x --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
-node deploy/deploy.js accept-admin ink --contract 195trftAvPnqeoPmHeGmxtwNYVUVdghm5x --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
+node deploy/deploy.js set-admin ink --contract 1EbuyYK1kso7GbZamHCU2LRhXaEyePkXpf --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
+node deploy/deploy.js accept-admin ink --contract 1EbuyYK1kso7GbZamHCU2LRhXaEyePkXpf --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
 ```
 
 `set-admin` only proposes: paste the **Ink wallet's** key, then type `SEND`.
@@ -214,9 +216,9 @@ After this, Ink admin actions are signed by your main wallet, not the Ink wallet
 ## Step 8. Upload Shop and make your main wallet its admin (signed by the Shop wallet)
 
 ```powershell
-node deploy/deploy.js upload shop --expect 1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth
-node deploy/deploy.js set-admin shop --contract 1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
-node deploy/deploy.js accept-admin shop --contract 1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
+node deploy/deploy.js upload shop --expect 14zbNPeH6Janw4gneuEhieXVmaQBsk8WDD
+node deploy/deploy.js set-admin shop --contract 14zbNPeH6Janw4gneuEhieXVmaQBsk8WDD --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
+node deploy/deploy.js accept-admin shop --contract 14zbNPeH6Janw4gneuEhieXVmaQBsk8WDD --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
 ```
 
 The first two use the **Shop wallet's** key; `accept-admin` uses your **main wallet's** key. The Shop upload uses about 5 to 8 mana.
@@ -225,7 +227,7 @@ The first two use the **Shop wallet's** key; `accept-admin` uses your **main wal
 ## Step 9. Connect Shop to Ink (signed by your main wallet)
 
 ```powershell
-node deploy/deploy.js wire --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6 --ink 195trftAvPnqeoPmHeGmxtwNYVUVdghm5x --shop 1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth --treasury 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6 --founder 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
+node deploy/deploy.js wire --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6 --ink 1EbuyYK1kso7GbZamHCU2LRhXaEyePkXpf --shop 14zbNPeH6Janw4gneuEhieXVmaQBsk8WDD --treasury 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6 --founder 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6
 ```
 
 Paste your **main wallet's** key (`18Mh...`). One transaction does three things:
@@ -243,7 +245,7 @@ on, so for testing it uses **tKOIN**, which has 8 decimals. Prices are small tes
 (Writer month = 2 tKOIN). These are **not** launch prices.
 
 ```powershell
-node deploy/deploy.js test-asset --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6 --shop 1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth
+node deploy/deploy.js test-asset --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6 --shop 14zbNPeH6Janw4gneuEhieXVmaQBsk8WDD
 ```
 
 **Send back:** the transaction id.
@@ -251,7 +253,7 @@ node deploy/deploy.js test-asset --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6 --sh
 ## Step 11. Check everything
 
 ```powershell
-node deploy/deploy.js status --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6 --ink 195trftAvPnqeoPmHeGmxtwNYVUVdghm5x --shop 1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth
+node deploy/deploy.js status --admin 18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6 --ink 1EbuyYK1kso7GbZamHCU2LRhXaEyePkXpf --shop 14zbNPeH6Janw4gneuEhieXVmaQBsk8WDD
 ```
 
 **Expect:**
@@ -274,8 +276,8 @@ only. Never put a key in a variable like this.
 
 ```powershell
 cd C:\swarmtales
-$INK  = "195trftAvPnqeoPmHeGmxtwNYVUVdghm5x"
-$SHOP = "1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth"
+$INK  = "1EbuyYK1kso7GbZamHCU2LRhXaEyePkXpf"
+$SHOP = "14zbNPeH6Janw4gneuEhieXVmaQBsk8WDD"
 $ADMIN = "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6"
 $USER = "12SVw65QpMjFo9fnc651V7LhXKqVLg15Ww"
 ```
@@ -372,7 +374,7 @@ ones such as ⭐ cost 1, skin tones and flags such as 👍🏽 and 🇺🇸 cost
 👨‍👩‍👧 costs 8. Stories counts this itself and refuses the text if the website's number
 disagrees, so nobody is charged a surprise amount.
 
-The steps below are in **section 13**. The Stories contract is already on testnet at `1JHakWJRXpAExjEuBik1posc8PXYYpugeN`.
+The steps below are in **section 13**. The Stories contract is already on testnet at `1MJz8k1jSgbf1QU9Zdyfip1M7nuXJP3eCZ`.
 
 ---
 
@@ -381,24 +383,24 @@ The steps below are in **section 13**. The Stories contract is already on testne
 Testnet coins are play money. Nothing in this step uses real money. Each signed step is a dry run
 first, and nothing is sent until you type `SEND`.
 
-These are the addresses in use on testnet now (19 October 2026):
+These are the addresses in use on testnet now (Ink and Shop since 19 October 2026, Stories since 20 October):
 
 | Role | Address |
 |---|---|
-| Ink (already uploaded) | `195trftAvPnqeoPmHeGmxtwNYVUVdghm5x` |
-| Shop (already uploaded) | `1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth` |
+| Ink (already uploaded) | `1EbuyYK1kso7GbZamHCU2LRhXaEyePkXpf` |
+| Shop (already uploaded) | `14zbNPeH6Janw4gneuEhieXVmaQBsk8WDD` |
 | Admin, treasury and founder | `18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6` |
 | Test user | `12SVw65QpMjFo9fnc651V7LhXKqVLg15Ww` |
-| Stories | `1JHakWJRXpAExjEuBik1posc8PXYYpugeN` |
+| Stories | `1MJz8k1jSgbf1QU9Zdyfip1M7nuXJP3eCZ` |
 
 Set them once in the PowerShell window (public addresses only, never a key):
 
 ```powershell
-$INK = "195trftAvPnqeoPmHeGmxtwNYVUVdghm5x"
+$INK = "1EbuyYK1kso7GbZamHCU2LRhXaEyePkXpf"
 ```
 
 ```powershell
-$SHOP = "1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth"
+$SHOP = "14zbNPeH6Janw4gneuEhieXVmaQBsk8WDD"
 ```
 
 ```powershell
@@ -410,7 +412,7 @@ $USER = "12SVw65QpMjFo9fnc651V7LhXKqVLg15Ww"
 ```
 
 ```powershell
-$STORIES = "1JHakWJRXpAExjEuBik1posc8PXYYpugeN"
+$STORIES = "1MJz8k1jSgbf1QU9Zdyfip1M7nuXJP3eCZ"
 ```
 
 ### 13a. Build and test Stories
