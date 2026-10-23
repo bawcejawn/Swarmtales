@@ -1456,7 +1456,7 @@ async function cmdSetTerms(args) {
   });
   const txId = await dryRunThenSend(signer, provider, net, [op],
     "stories.set_terms: version " + version + ", sha256 " + Buffer.from(hash).toString("hex") + ", link " + uri);
-  console.log("Send back: the transaction id (" + txId + "). Then update TERMS_VERSION in web/src/config.js to " + version + ".");
+  console.log("Send back: the transaction id (" + txId + "). The website reads the new version from the chain by itself.");
 }
 
 async function cmdNewModeratorKey() {

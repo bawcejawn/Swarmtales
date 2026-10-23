@@ -76,8 +76,9 @@ controls it. With this rule, nothing reaches `main` without a pull request that 
 
 ## B. Fresh testnet deploy
 
-Follow `docs/TESTNET_DEPLOY.md` (about 30 minutes). Send me the three new contract addresses;
-I switch the website to them. Then update the GitHub variable `STORIES_ADDRESS`
+**Done 23 October 2026.** Ink `1JXZiYaymCCG61YtfBF4L5bnbxem11rTFk`, Shop
+`13i2g8x9CxKXhuo3EiPbUE6P5G5QDRgqwQ`, Stories `1Ebsy7ERirZWZwAio8Jz1zueuxQwNfKisR`, moderator
+`1AaN68ttQtmhG3HQpGoQr2iuSsYiTxbEsD`; the website now points at them. Then update the GitHub variable `STORIES_ADDRESS`
 (https://github.com/bawcejawn/Swarmtales/settings/variables/actions) to the new Stories address.
 
 ---

@@ -88,10 +88,13 @@ The Stories suite takes about an hour on a two-core machine.
 
 ## Deployments
 
-- **Testnet:** being redeployed fresh with this build (`docs/TESTNET_DEPLOY.md`); the new
-  addresses go into `web/src/config.js`. A throwaway preflight deploy of exactly these hashes
-  (Ink `1E6NEt6XdP6UeB7uZzQFQ5ovWie9mJtuy`, Shop `14oJ1fQEyFUXR3S3oknYhMXWrSDj38twFY`, Stories
-  `1EzAZTf58wajDKnZPKtTASp62CTNtAP4iv`) was used for the end-to-end checks.
+- **Testnet:** redeployed fresh with this build on 23 October 2026 (`docs/TESTNET_DEPLOY.md`):
+  Ink `1JXZiYaymCCG61YtfBF4L5bnbxem11rTFk`, Shop `13i2g8x9CxKXhuo3EiPbUE6P5G5QDRgqwQ`, Stories
+  `1Ebsy7ERirZWZwAio8Jz1zueuxQwNfKisR`, admin `18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6`, moderator
+  `1AaN68ttQtmhG3HQpGoQr2iuSsYiTxbEsD`. The website points at these. A throwaway preflight
+  deploy of exactly these hashes (Ink `1E6NEt6XdP6UeB7uZzQFQ5ovWie9mJtuy`, Shop
+  `14oJ1fQEyFUXR3S3oknYhMXWrSDj38twFY`, Stories `1EzAZTf58wajDKnZPKtTASp62CTNtAP4iv`) was used
+  for the end-to-end checks.
 - **Mainnet:** not deployed.
 
 ## Keys and roles
