@@ -81,5 +81,5 @@ The contract key is the only key that can do this, and the stored data (stories,
 - [ ] Every box above is ticked.
 - [x] [ADMIN_POWERS.md](ADMIN_POWERS.md) is published and linked from the site footer.
 - [ ] `deploy/release-hashes.json` holds the reviewed release hashes, and `MAINNET_PINNED` the uploaded addresses.
-- [ ] The mainnet payment token is checked before it is enabled: does it let Shop's transfer go through on the buyer's signature alone, or does it need an earlier approval? Either works with Shop; record which. Enabling it starts a 7-day wait.
+- [ ] The mainnet payment token is checked before it is enabled: does it let Shop's transfer go through on the buyer's signature alone, or does it need an earlier approval? Either works with Shop; record which. Enable it before launch: after the Shop's first sale, a newly enabled token waits 7 days.
 - [ ] A full rehearsal on testnet used the same key setup (hardware wallets, multisig admin, two-step admin handover).

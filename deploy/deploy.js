@@ -43,7 +43,7 @@
  *   node deploy/deploy.js wire     --admin <addr> --ink <addr> --shop <addr> --treasury <addr> --founder <addr>
  *       (Shop's Ink address and Stories' Shop address are set once and never change (AB-050))
  *   node deploy/deploy.js set-asset --admin <addr> --shop <addr> --token <addr> --symbol <text> --decimals <n> | --disable
- *       (enabling a payment token starts the Shop's 7-day wait: buyers can use it only after that. Off is at once)
+ *       (after the Shop's first sale, enabling a payment token starts a 7-day wait before buyers can use it. Off is at once)
  *   node deploy/deploy.js test-asset --admin <addr> --shop <addr> [--token <addr>] [--symbol tKOIN] [--decimals 8]
  *   node deploy/deploy.js test-buy --user <addr> --shop <addr> [--tier writer|reader] [--token <addr>]
  *   node deploy/deploy.js test-promo --admin <addr> --shop <addr>
@@ -796,7 +796,8 @@ async function cmdTestAsset(args) {
     if (Number(current.decimals) !== 8) lib.fail("That token is enabled with " + current.decimals + " decimals; the test prices assume 8.");
     what = "set small test prices for " + token + " (already enabled; usable from " + lib.utcTime(current.usable_from || 0) + ")";
   } else {
-    const plan = lib.planAsset(current, { token, enabled: true, decimals, symbol }, nowSec());
+    const sold = !!(await readOnly(provider, "shop", shop, "get_config", {})).sold;
+    const plan = lib.planAsset(current, { token, enabled: true, decimals, symbol }, nowSec(), sold);
     ops.push(await shopC.encodeOperation({ name: "set_asset", args: plan.args }));
     what = plan.summary + ", and set small test prices";
   }
@@ -808,7 +809,7 @@ async function cmdTestAsset(args) {
   console.log("Send back: the transaction id (" + txId + "). test-buy and test-open work once the token is usable.");
 }
 
-/** set-asset: the admin turns a payment token on (after the Shop's 7-day wait) or off (at once). */
+/** set-asset: the admin turns a payment token on (at once before the Shop's first sale, after 7 days later) or off (at once). */
 async function cmdSetAsset(args) {
   const f = args.flags;
   const admin = lib.requireAddress(f.admin, "admin");
@@ -818,7 +819,8 @@ async function cmdSetAsset(args) {
   if (!enabled && (f.symbol !== undefined || f.decimals !== undefined)) lib.fail("--disable takes no --symbol or --decimals.");
   const { net, provider } = await connect(f);
   const current = await readOnly(provider, "shop", shop, "get_asset", { token });
-  const plan = lib.planAsset(current, { token, enabled, decimals: f.decimals, symbol: f.symbol }, nowSec());
+  const sold = !!(await readOnly(provider, "shop", shop, "get_config", {})).sold;
+  const plan = lib.planAsset(current, { token, enabled, decimals: f.decimals, symbol: f.symbol }, nowSec(), sold);
   const signer = await getSigner(provider, admin, "the admin wallet");
   const op = await contractOf("shop", shop, provider).encodeOperation({ name: "set_asset", args: plan.args });
   const txId = await dryRunThenSend(signer, provider, net, [op], "shop.set_asset: " + plan.summary);

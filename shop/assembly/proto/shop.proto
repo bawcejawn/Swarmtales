@@ -9,9 +9,10 @@ syntax = "proto3";
 // Payments are stablecoins only. The admin turns each token on and sets
 // every price in that token's own base units (its decimals). Nothing
 // here is hard-wired to a mainnet address, so a testnet token works.
-// A newly enabled token can't be used for 7 days, and it is announced
-// with a public event, so buyers and the site can check it first (C1-01).
-// Turning a token off works at once.
+// After the Shop's first sale, a newly enabled token can't be used for 7
+// days, and it is announced with a public event, so buyers and the site can
+// check it first (C1-01). Tokens set up before any sale work at once, since
+// no buyer is exposed yet. Turning a token off works at once.
 //
 // Every payment is split in the same transaction:
 //   founder_amount = floor(price * fee_bps / 10000)
@@ -99,6 +100,7 @@ message config {
   uint64 starter_book = 14 [jstype = JS_STRING];
   uint64 starter_short = 15 [jstype = JS_STRING];
   bytes pending_admin = 16 [(koinos.btype) = ADDRESS];  // proposed by set_admin, waiting for accept_admin
+  bool sold = 17;                // the Shop has taken a payment; from then on a newly enabled token waits 7 days (C1-01)
 }
 
 message asset {
@@ -106,7 +108,7 @@ message asset {
   uint32 decimals = 2;
   string symbol = 3;
   // When an enabled token may first be used (seconds). Enabling a token
-  // sets it 7 days ahead (C1-01).
+  // after the Shop's first sale sets it 7 days ahead (C1-01).
   uint64 usable_from = 4 [jstype = JS_STRING];
 }
 
@@ -326,8 +328,8 @@ message claim_promo_arguments {
 
 // ---------- Admin ----------
 
-// @description Enable or disable a stablecoin and record its decimals and symbol. Enabling starts a 7-day wait before
-// it can be used; disabling is immediate. An enabled token's decimals and symbol can't change (disable it first).
+// @description Enable or disable a stablecoin and record its decimals and symbol. After the Shop's first sale, enabling
+// starts a 7-day wait before it can be used; disabling is immediate. An enabled token's decimals and symbol can't change (disable it first).
 // @read-only false
 // @result empty_object
 message set_asset_arguments {

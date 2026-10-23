@@ -114,7 +114,7 @@ for (const [name, addr] of [["ink", ink], ["shop", shop], ["stories", stories]])
 console.log("3. Fund the admin wallet, then wire everything (admin key):");
 run("wire --admin " + admin + " --ink " + ink + " --shop " + shop + " --treasury " + treasury + " --founder " + founder);
 run("wire-stories --admin " + admin + " --ink " + ink + " --shop " + shop + " --stories " + stories);
-console.log("4. Turn on the test payment token. The Shop makes everyone wait 7 days before a new token can be used:");
+console.log("4. Turn on the test payment token (usable at once on a fresh Shop; after its first sale a new token waits 7 days):");
 run("test-asset --admin " + admin + " --shop " + shop);
 console.log("5. Check:");
 run("status --admin " + admin + " --ink " + ink + " --shop " + shop + " --stories " + stories);

@@ -39,7 +39,7 @@ The Ink admin **cannot** move or burn anyone's Ink directly. Ink cannot be trans
 ## Shop admin
 
 - Set **prices** for each item and payment token. Every purchase carries the buyer's two limits: the **most they pay** and the **least Ink they get**. If a price went up or an Ink amount went down after they looked, nothing is charged.
-- Turn **payment tokens** on or off. A token that is turned on can't be used for **7 days**, and the change is a public event, so anyone can check the token first. Turning a token off works at once. An enabled token's decimals and symbol can't be changed (turn it off first, which restarts the 7 days).
+- Turn **payment tokens** on or off. Once the Shop has made its first sale, a token that is turned on can't be used for **7 days**, and the change is a public event, so anyone can check the token first. (Tokens set up before the first sale work at once; no buyer is exposed yet.) Turning a token off works at once. An enabled token's decimals and symbol can't be changed (turn it off first, which restarts the 7 days).
 - Set the **treasury and founder addresses** that receive payments, and the **founder fee** (0% to 5%, checked again on every payment). Neither can be the Shop itself.
 - Set the **Ink amounts** for a Writer month, packs and starter Ink. Each change is a public event. A Writer term keeps the amount it started with.
 - **Promo campaigns:** turn promos on or off, create campaigns of **any size**, change their budget, daily cap and end time, switch a campaign off, and add single-use link keys. Each wallet may claim each campaign once. Promo Ink is free Ink for whoever holds a link the admin made.

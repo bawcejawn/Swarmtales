@@ -111,7 +111,7 @@ Edit only `web/src/config.js`.
 
 1. Set `ACTIVE` to `"mainnet"`.
 2. Replace every address under `contracts` with the mainnet contract. Leave none of the testnet addresses in place. A testnet address can belong to someone else on mainnet, and the page refuses to run if any of them are still there.
-3. Set `paymentSymbol` and `paymentDecimals` to the token the Shop actually charges (KOIN, vUSDT, or vUSDC). At startup the page reads the token's decimals and the Shop's record of it, and refuses to show prices if they don't match. A newly enabled token can't be used for 7 days; the page shows the date.
+3. Set `paymentSymbol` and `paymentDecimals` to the token the Shop actually charges (KOIN, vUSDT, or vUSDC). At startup the page reads the token's decimals and the Shop's record of it, and refuses to show prices if they don't match. A token enabled after the Shop's first sale can't be used for 7 days; the page shows the date.
 
 No other file needs to change for the addresses. Build again with `npm run build`.
 

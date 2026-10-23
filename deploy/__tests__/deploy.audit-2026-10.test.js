@@ -542,11 +542,12 @@ test("a stale contract build that would drop an argument is refused, not silentl
 
 // ---------------------------------------------------------------- Shop
 
-test("Shop: set-asset explains the 7-day wait, never restarts it, and close fees are gone", () => {
+test("Shop: set-asset explains the wait (7 days after the first sale), never restarts it, and close fees are gone", () => {
   const now = 1_800_000_000;
   const plan = lib.planAsset({}, { token: TOKEN, enabled: true, decimals: "6", symbol: "USDT" }, now);
   assert.deepStrictEqual(plan.args, { token: TOKEN, enabled: true, decimals: 6, symbol: "USDT" });
-  assert.match(plan.summary, /wait 7 days: it can be used from about 2027-01-22T08:00:00Z/);
+  assert.match(plan.summary, /waits 7 days: it can be used from about 2027-01-22T08:00:00Z/);
+  assert.match(lib.planAsset({}, { token: TOKEN, enabled: true, decimals: "6", symbol: "USDT" }, now, false).summary, /no sale yet, so it can be used at once/);
   const on = { enabled: true, decimals: 6, symbol: "USDT", usable_from: String(now + 100) };
   assert.throws(() => lib.planAsset(on, { token: TOKEN, enabled: true, decimals: "6", symbol: "USDT" }, now), /already enabled/);
   assert.throws(() => lib.planAsset(on, { token: TOKEN, enabled: true, decimals: "8", symbol: "USDT" }, now), /Turn it off \(--disable\) first/);

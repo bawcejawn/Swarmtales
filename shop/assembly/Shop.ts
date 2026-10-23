@@ -18,9 +18,9 @@
 //   - It does not hold customer funds and it has no withdraw.
 //   - It does not mint Ink by itself. Ink decides whether the mint is legal.
 //   - It does not hardcode a token address. The admin enables each
-//     stablecoin and sets each price in that token's base units. A newly
-//     enabled token can't be used for 7 days and is announced with a public
-//     event (C1-01); disabling one works at once.
+//     stablecoin and sets each price in that token's base units. After the
+//     first sale, a newly enabled token can't be used for 7 days and is
+//     announced with a public event (C1-01); disabling one works at once.
 //   - Every purchase carries the buyer's limits: the most they pay
 //     (max_price) and the least Ink they get (min_ink). Outside either,
 //     nothing is charged (AB-017, M-2).
@@ -520,8 +520,10 @@ export class Shop {
     const symbol = this.text(args.symbol);
     System.require(symbol.length > 0 && symbol.length <= MAX_SYMBOL_LENGTH, "SHOP: symbol must be 1 to 16 characters");
     // Turning a token on starts a public 7-day wait before anyone can pay
-    // with it (C1-01). An enabled token keeps its wait, and its decimals and
-    // symbol can't change under buyers; turn it off first. Off is immediate.
+    // with it (C1-01), once the Shop has made its first sale: before that no
+    // buyer is exposed, so the tokens set up for launch work at once. An
+    // enabled token keeps its wait, and its decimals and symbol can't change
+    // under buyers; turn it off first. Off is immediate.
     const found = this.assets.get(assetId);
     const wasOn = found != null && found.enabled;
     let usableFrom: u64 = 0;
@@ -531,7 +533,8 @@ export class Shop {
           "SHOP: turn the token off before changing its decimals or symbol");
         usableFrom = found!.usable_from;
       } else {
-        usableFrom = SafeMath.add(this.now(), ASSET_WAIT);
+        const cfg = this.loadConfig();
+        usableFrom = cfg.sold ? SafeMath.add(this.now(), ASSET_WAIT) : this.now();
       }
     }
     const row = new shop.asset(args.enabled, args.decimals, symbol, usableFrom);
@@ -799,6 +802,10 @@ export class Shop {
     inkTo: Uint8Array | null = null
   ): void {
     const cfg = this.loadConfig();
+    if (!cfg.sold) {
+      cfg.sold = true;
+      this.saveConfig(cfg);
+    }
     const treasury = this.requireAddress(cfg.treasury, "SHOP: treasury is not set");
     const founder = this.requireAddress(cfg.founder, "SHOP: founder is not set");
     System.require(cfg.fee_bps <= MAX_FEE_BPS, "SHOP: fee is above the cap");

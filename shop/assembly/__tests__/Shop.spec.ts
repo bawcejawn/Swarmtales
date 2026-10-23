@@ -156,8 +156,8 @@ function setTime(at: u64): void {
   MockVM.setHeadInfo(new chain.head_info(null, at * 1000, 0));
 }
 
-// Payment tokens wait 7 days after they are enabled (C1-01): enable them
-// 8 days before START so purchases at START work.
+// Payment tokens enabled after the Shop's first sale wait 7 days (C1-01):
+// enable them 8 days before START so purchases at START always work.
 function setAssetEarly(token: Uint8Array, decimals: u32, symbol: string): void {
   setTime(START - 8 * 86400);
   new Shop().set_asset(new shop.set_asset_arguments(token, true, decimals, symbol));
@@ -2015,7 +2015,23 @@ describe("Shop: a new payment token waits 7 days (audit C1-01)", () => {
     configure();
   });
 
-  it("enabling announces the token and starts a 7-day wait; disabling is immediate", () => {
+  it("before the Shop's first sale, a token works as soon as it is enabled", () => {
+    authorize(SHOP);
+    new Shop().set_asset(new shop.set_asset_arguments(USDT, false, 6, "USDT"));
+    new Shop().set_asset(new shop.set_asset_arguments(USDT, true, 6, "USDT"));
+    checkpoint();
+    expect(new Shop().get_asset(new shop.get_asset_arguments(USDT)).usable_from).toBe(START);
+    expect(new Shop().get_config(new shop.get_config_arguments()).sold).toBe(false);
+    allowPay(USDT, ONE_6, 0);
+    buyReader(1, USDT);
+    checkpoint();
+    expect(new Shop().get_config(new shop.get_config_arguments()).sold).toBe(true);
+  });
+
+  it("after the first sale, enabling announces the token and starts a 7-day wait; disabling is immediate", () => {
+    allowPay(USDT, ONE_6, 0);
+    buyReader(1, USDT);                    // the Shop's first sale
+    checkpoint();
     const before = eventCount("shop.asset_event");
     authorize(SHOP);
     new Shop().set_asset(new shop.set_asset_arguments(USDT, false, 6, "USDT"));
@@ -2047,7 +2063,7 @@ describe("Shop: a new payment token waits 7 days (audit C1-01)", () => {
     assetDecimals = 6;
     reEnableUsdt();   // same values: allowed, and the old usable_from stays
     checkpoint();
-    expect(new Shop().get_asset(new shop.get_asset_arguments(USDT)).usable_from).toBe(START - 8 * DAY + 7 * DAY);
+    expect(new Shop().get_asset(new shop.get_asset_arguments(USDT)).usable_from).toBe(START - 8 * DAY);   // enabled before any sale: usable at once
     assetDecimals = 8;
     expect(() => { reEnableUsdt(); }).toThrow();
     expect(MockVM.getErrorMessage()).toBe("SHOP: turn the token off before changing its decimals or symbol");

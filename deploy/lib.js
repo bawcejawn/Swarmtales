@@ -962,12 +962,13 @@ function utcTime(sec) {
 }
 
 /**
- * What set-asset will do. Enabling starts the Shop's 7-day wait; an enabled
+ * What set-asset will do. After the Shop's first sale (`sold`), enabling starts
+ * its 7-day wait; before it, a token works at once. An enabled
  * token's decimals and symbol can't change; turning a token off is at once.
  * Re-enabling an enabled token is refused, so the wait is never restarted
  * by mistake. Returns { args, summary }.
  */
-function planAsset(current, wanted, nowSec) {
+function planAsset(current, wanted, nowSec, sold = true) {
   const cur = current || {};
   const token = requireAddress(wanted.token, "token");
   if (!wanted.enabled) {
@@ -983,22 +984,24 @@ function planAsset(current, wanted, nowSec) {
   if (cur.enabled) {
     if (Number(cur.decimals) !== decimals || cur.symbol !== symbol) {
       fail("That token is enabled as " + cur.symbol + " with " + cur.decimals + " decimals; an enabled token's decimals and symbol " +
-        "can't change. Turn it off (--disable) first; enabling it again starts a new 7-day wait. Nothing was sent.");
+        "can't change. Turn it off (--disable) first; after the Shop's first sale, enabling it again starts a new 7-day wait. Nothing was sent.");
     }
     fail("That token is already enabled (usable from " + utcTime(cur.usable_from || 0) + "). Nothing to send.");
   }
   return {
     args: { token, enabled: true, decimals, symbol },
-    summary: "ENABLE payment token " + symbol + " (" + token + ", " + decimals + " decimals). The Shop makes everyone wait 7 days: " +
-      "it can be used from about " + utcTime(nowSec + ASSET_WAIT_SECONDS) + " (the exact time is set when the transaction is in a block)",
+    summary: "ENABLE payment token " + symbol + " (" + token + ", " + decimals + " decimals). " + (sold
+      ? "The Shop has made sales, so everyone waits 7 days: it can be used from about " + utcTime(nowSec + ASSET_WAIT_SECONDS) +
+        " (the exact time is set when the transaction is in a block)"
+      : "The Shop has made no sale yet, so it can be used at once"),
   };
 }
 
-/** A purchase needs the token enabled and past its 7-day wait. */
+/** A purchase needs the token enabled and past its wait (7 days when enabled after the first sale). */
 function requireUsableAsset(asset, nowSec, token) {
   if (!asset || !asset.enabled) fail("The Shop does not accept " + token + ". Run test-asset (testnet) or set-asset first.");
   if (Number(asset.usable_from || 0) > nowSec) {
-    fail("The Shop accepts " + token + " only from " + utcTime(asset.usable_from) + " (the 7-day wait after enabling a token). Nothing was sent.");
+    fail("The Shop accepts " + token + " only from " + utcTime(asset.usable_from) + " (the 7-day wait after enabling a token once the Shop has made sales). Nothing was sent.");
   }
 }
 
