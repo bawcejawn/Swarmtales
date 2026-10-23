@@ -2,7 +2,7 @@
 
 SwarmTales runs on three Koinos contracts: **Ink** (the writing allowance), **Shop** (payments, memberships, promos) and **Stories** (the books and stories). This page lists, in plain words, everything a privileged key can do. It is meant to be public: if a power is not on this page, no key has it.
 
-Last checked against the code: October 2026 (audit fixes AB-001 to AB-058).
+Last checked against the code: October 2026, through the fifth audit fix check (findings AB-001 to AB-083).
 
 ## The keys
 
@@ -12,7 +12,7 @@ Last checked against the code: October 2026 (audit fixes AB-001 to AB-058).
 | Shop contract key | Founder, offline | The key of the address Shop was uploaded to |
 | Stories contract key | Founder, offline | The key of the address Stories was uploaded to |
 | Admin (one per contract) | Founder | Runs day-to-day settings. Can be a multisig wallet |
-| Moderator | The automated copy checker | Can only hide parts (and take over a hide writer reports made), unhide parts the admin didn't hide, add source notes and clear a story's summary |
+| Moderator | The automated copy checker | Can only hide parts (and take over a hide writer reports made), unhide parts the admin didn't hide, add, replace or clear source notes (the admin's too) and clear a story's summary |
 | Treasury, founder | Founder | Only receive payments. They have no powers in the contracts |
 
 ## Contract keys: the strongest power
@@ -71,7 +71,7 @@ The Stories admin **cannot** mint or burn Ink, refund outside the rules, or fina
 
 ## The moderator (copy checker)
 
-The moderator key can hide parts, take over a hide writer reports made (in one transaction it becomes the checker's hide: removing the part refunds nothing and restoring it gives up the refund), unhide any part the admin didn't hide (not a hide from before the audit-2 upgrade that reports didn't make), add a public "this text also appears in…" note, and clear any story's summary ("the story so far"), even while Stories is paused. The copy checker only ever unhides parts it hid itself, and only hides it actually sent count as its own. It can't take a part down or delete a part's text, write a summary of its own, touch Ink, or change any setting. It runs in GitHub Actions and signs only for the chain id it expects.
+The moderator key can hide parts, take over a hide writer reports made (in one transaction it becomes the checker's hide: removing the part refunds nothing and restoring it gives up the refund), unhide any part the admin didn't hide (not a hide from before the audit-2 upgrade that reports didn't make), add, replace or clear a part's public "this text also appears in…" note (also one the admin set), and clear any story's summary ("the story so far"), even while Stories is paused. The copy checker only ever unhides parts it hid itself, and only hides it actually sent count as its own. It takes over a writer-reports hide only when writers reported the part as copied (copyright or duplicate); a hide reported for abuse, spam or anything else stays the reports' hide, and the checker never lifts it. It can't take a part down or delete a part's text, write a summary of its own, touch Ink, or change any setting. It runs in GitHub Actions and signs only for the chain id it expects.
 
 ## How you can check
 

@@ -77,9 +77,19 @@ The checker is set to be gentle. Most of the time it does nothing, or only adds 
   the new text is checked like any other. Writer reports can still hide it, but only 3 new
   reports count.
 - **Checked again after a change.** The checker checks a part again whenever its text or its
-  citation changes, and it checks parts writer reports hid too: a copy hidden by reports becomes
-  the checker's hide. If the writer clears the citation that brought a part back, it is hidden
-  again.
+  citation changes, and it checks parts writer reports hid too: a copy that writers reported as
+  copied becomes the checker's hide. A part reported for anything else (abuse, spam) stays the
+  reports' hide; a citation never brings it back. If the writer clears the citation that brought
+  a part back, it is hidden again.
+
+**Which text came first.** Two matching texts are dated by when their words were first written
+(from the part's history), not by its last edit, so a typo fix or a paid change to an original
+never makes it look like a copy of its copies.
+
+**Out of searches.** A long part is never passed without its phrase search. If a run has no
+searches left, or the search service fails, the part waits and is searched first in the next
+run; the parts after it wait with it, so a copy is never checked before the text it copied. If
+the month's free searches run out, the checker waits at the first long part until the next month.
 - **The admin's legal takedown stays final.** Use it for a rights holder's notice. A taken-down
   part can't be restored.
 

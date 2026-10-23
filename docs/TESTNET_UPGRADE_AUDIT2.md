@@ -31,8 +31,12 @@ What changes for people using the site:
   Someone else's paid removal of such a part gives no Ink back either.
 - The copy checker checks a part again whenever its text or citation changes, so rewording a part
   after its check doesn't get copied text past it. It also checks parts that writer reports hid:
-  a copy becomes the checker's hide in place (no refund on removal; restoring it gives up the
-  refund). A part whose checker hide its opener restored is never hidden again for the same text.
+  a copy writers reported as copied becomes the checker's hide in place (no refund on removal;
+  restoring it gives up the refund); one reported for anything else stays the reports' hide, and
+  a citation never lifts it. A part whose checker hide its opener restored is never hidden again
+  for the same text. It dates matching text by when its words were first written, not by the last
+  edit, and a long part it couldn't search (no searches left, or the service failed) waits for the
+  next run instead of passing unsearched.
 - Blocked openers and editors can't create invites or remove other writers' hidden parts.
 - Blocked wallets also can't add editors or change a story's allow-list.
 - Only someone with a live part of their own (or the opener or an editor) can update the story
@@ -68,8 +72,9 @@ The new code reads three new segment fields that are 0 on every part written bef
 - **Copy checker:** it now only brings back parts it hid itself (`hidden_by` 2), so it forgets the
   parts it hid before the upgrade (they stay hidden until the admin unhides them). Its saved state
   gains each part's text key: on the first run after the merge, parts it already checked and
-  nobody edited count as checked; parts edited since they were written, and parts it found hidden,
-  are checked once (web search included, within the usual search budget).
+  nobody edited count as checked; parts edited since they were written, parts it found hidden,
+  and parts with a citation (it kept no record of the ones it brought back on a citation) are
+  checked once (web search included, within the usual search budget).
 - **Takedown tool:** for old parts it lists changers from the versions and `last_edited_by`; it
   can't see a citation-only changer from before the upgrade and says so.
 
@@ -91,6 +96,20 @@ chain's default limits, where a version page failed above about 6,000 three-byte
 version (AB-070). This build stops a page at about 64 KB of text, which reads there even at
 10,000, but public nodes' limits weren't measured.
 
+### For the next contract upgrade (not in this build)
+
+These need a change to the Stories contract. This build is final for this upgrade, so they wait:
+
+- **AB-079 (Low):** a wallet that wrote before the upgrade keeps the summary right by its Ink
+  total, and that total includes Ink it paid to change other writers' parts. So it keeps the right
+  after removing all its own parts. Fix: don't add `revise_part`'s added letters to the by-total
+  figure of a pre-upgrade writer (or drop the flag once its last pre-upgrade part is gone). Test:
+  OW-3 in the fifth fix check's `Stories.audit-fc5-attacks.spec.ts`, and `rt5-ins-oldtotal`.
+- **AB-081 (Low):** invite links an opener made before the admin blocked them still add wallets
+  to the allow-list. Fix: `requireNotBlocked(opener)` in `join_with_invite`. Until then, such
+  links keep working until they expire or run out of uses (only the opener can revoke them).
+  Test: `rt5-sab-blockedinvite`.
+
 ## 1. Get the branch and build (folder `C:\swarmtales`)
 
 ```powershell
@@ -109,7 +128,7 @@ Get-FileHash stories\build\release\contract.wasm
 Get-FileHash shop\build\release\contract.wasm
 ```
 
-**Expect:** Stories **374 pass**, Shop **89 pass**, 0 fail. On the build this branch was made
+**Expect:** Stories **381 pass**, Shop **89 pass**, 0 fail. On the build this branch was made
 with, the fingerprints were:
 
 ```
