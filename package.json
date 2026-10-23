@@ -24,7 +24,7 @@
     "build:debug": "koinos-sdk-as-cli build-all debug 0 ink.proto",
     "build:release": "koinos-sdk-as-cli build-all release 0 ink.proto",
     "test": "koinos-sdk-as-cli run-tests",
-    "test:deploy": "node --test deploy/__tests__/lib.test.js",
+    "test:deploy": "node --test \"deploy/__tests__/*.test.js\"",
     "web:test": "npm test --prefix web",
     "web:build": "npm run build --prefix web",
     "deploy": "node deploy/deploy.js"

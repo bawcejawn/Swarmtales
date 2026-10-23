@@ -10,7 +10,7 @@
 //      when the moderator wallet has no mana, when the chain refused the hide,
 //      and in every report-only run (no MODERATOR_WIF yet).
 //      (A part the checker DID hide that the admin then re-hides with the
-//      admin key, unhide+hide in one transaction as docs/TESTNET_UPGRADE_AUDIT2.md
+//      admin key, unhide+hide in one transaction (deploy.js hide)
 //      tells the admin to do to lock old hides, gets the same entry.)
 //   2. The admin hides P with the admin key (hidden_by 3) after a complaint,
 //      so that the opener cannot restore it (AB-053).
