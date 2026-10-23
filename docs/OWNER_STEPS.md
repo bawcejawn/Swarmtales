@@ -78,15 +78,34 @@ controls it. With this rule, nothing reaches `main` without a pull request that 
 
 **Done 23 October 2026.** Ink `1JXZiYaymCCG61YtfBF4L5bnbxem11rTFk`, Shop
 `13i2g8x9CxKXhuo3EiPbUE6P5G5QDRgqwQ`, Stories `1Ebsy7ERirZWZwAio8Jz1zueuxQwNfKisR`, moderator
-`1AaN68ttQtmhG3HQpGoQr2iuSsYiTxbEsD`; the website now points at them. Then update the GitHub variable `STORIES_ADDRESS`
-(https://github.com/bawcejawn/Swarmtales/settings/variables/actions) to the new Stories address.
+`1AaN68ttQtmhG3HQpGoQr2iuSsYiTxbEsD`; the website now points at them.
+
+On the day pull request #25 is merged, also update the GitHub variable `STORIES_ADDRESS`
+(https://github.com/bawcejawn/Swarmtales/settings/variables/actions) to
+`1Ebsy7ERirZWZwAio8Jz1zueuxQwNfKisR`, so the copy checker on `main` and the new contracts
+switch together.
 
 ---
 
-## C. Live checks on testnet (after B, with the website updated)
+## C. Live checks on testnet (after B)
+
+The public site only changes once pull request #25 is merged, so run the new site on your own PC:
+
+```powershell
+cd C:\swarmtales
+git pull
+cd web
+npm.cmd ci
+npm.cmd run build
+npm.cmd run preview
+```
+
+Open http://127.0.0.1:4173/ in the browser where Kondor is installed. Leave PowerShell open while you test; Ctrl+C
+stops it.
 
 ### C1. What Kondor shows (audit M-9)
-1. In Kondor (testnet), on the site: **Membership** → buy a pack (you need an active Writer month).
+1. In Kondor (testnet), on the local site: **Membership** → buy a Writer month first (2 tKOIN), then
+   buy a **Small** pack (0.5 tKOIN).
 2. When Kondor's confirm window opens, look at it before approving. It should list **two**
    operations by name: `approve` (spender = the Shop, value) and `buy_pack` with `max_price`
    and `min_ink` shown as readable fields, not just raw bytes.
