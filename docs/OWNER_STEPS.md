@@ -164,7 +164,8 @@ Mainnet goes ahead only when **every** box is ticked:
 
 - [ ] **Re-audit done**: the auditor reviewed `audit-2026-10-fixes` and every finding is closed
       (send them `AUDIT_SCOPE.md` and `docs/AUDIT_2026_10_STATUS.md`).
-- [ ] The pull request into `main` is merged (after the re-audit passes).
+- [ ] The pull request into `main` is merged (after the re-audit passes), and the same day
+      `STORIES_ADDRESS` is set to `1Ebsy7ERirZWZwAio8Jz1zueuxQwNfKisR` (section B).
 - [ ] **Separate keys on hardware wallets**: the Ink, Shop and Stories contract keys (new, mainnet
       only), treasury, founder; recovery phrases on paper in two places (`docs/KEY_CUSTODY.md`).
 - [ ] **2-of-3 multisig admin** chosen and rehearsed on testnet (C3).
