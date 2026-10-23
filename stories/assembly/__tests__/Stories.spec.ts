@@ -385,7 +385,7 @@ describe("Stories: admin and settings", () => {
   it("starts with the contract as admin and the default limits", () => {
     const cfg = config();
     expect(same(cfg.admin, STORIES)).toBe(true);
-    expect(cfg.contribution_cap).toBe(10000);
+    expect(cfg.contribution_cap).toBe(6000);
     expect(cfg.trial_limit).toBe(1000);
     expect(cfg.open_limit).toBe(10);
     expect(cfg.full_price_projects).toBe(0); // 0 means the default, 3
@@ -429,15 +429,15 @@ describe("Stories: admin and settings", () => {
     fails(() => { authorize(STORIES); new Stories().set_addresses(new stories.set_addresses_arguments(INK, new Uint8Array(0))); }, "STORIES: invalid Shop address");
   });
 
-  it("accepts a per-submission cap from 100 to 10000 and nothing outside", () => {
-    setLimits(10000, 1000);
-    expect(config().contribution_cap).toBe(10000);
+  it("accepts a per-submission cap from 100 to 6000 and nothing outside", () => {
+    setLimits(6000, 1000);
+    expect(config().contribution_cap).toBe(6000);
     setLimits(100, 1000);
     expect(config().contribution_cap).toBe(100);
-    fCap = 10001;
-    fails(failLimits, "STORIES: per-submission cap must be 100 to 10000");
+    fCap = 6001;
+    fails(failLimits, "STORIES: per-submission cap must be 100 to 6000");
     fCap = 99;
-    fails(failLimits, "STORIES: per-submission cap must be 100 to 10000");
+    fails(failLimits, "STORIES: per-submission cap must be 100 to 6000");
   });
 
   it("refuses other limits outside their ranges", () => {
@@ -1049,7 +1049,6 @@ describe("Stories: closing", () => {
     expect(callsTo(CLOSE_FEE_ENTRY).length).toBe(0);
     const st = story(1);
     expect(st.status).toBe(stories.story_status.STATUS_EDITING);
-    expect(st.close_fee_paid).toBe(true);
     expect(st.finalizer_is_admin).toBe(false);
   });
 

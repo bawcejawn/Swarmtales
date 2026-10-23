@@ -53,7 +53,7 @@ The Shop admin **cannot** take back a payment that has already been split, or se
 
 - **Moderation:**
   - Hide or unhide any part, at any stage. A part the admin hid can be unhidden only by the admin. The admin can also take over a hide the checker or writer reports made, in one transaction.
-  - **Take a part down for good:** its text and every kept version are cleared from contract storage and no Ink is refunded. The takedown names the text and version count the admin reviewed; if the part changed since, nothing happens. A part nobody else changed is a strike against its writer. Once anyone else changed it (a paid change, the finalizer's edit, or a citation someone else set), the admin must name who gets the strike (the writer or a wallet that changed it) or choose no strike. At the strike limit the wallet is blocked. Text that was taken down can't be added to that story again.
+  - **Take a part down for good:** its text and every kept version are cleared from contract storage and no Ink is refunded. The takedown names the text and version count the admin reviewed; if the part changed since, nothing happens. A part nobody else changed is a strike against its writer. Once anyone else changed it (a paid change, the finalizer's edit, or a citation someone else set), the admin must name who gets the strike (the writer or a wallet that changed it) or choose no strike. At the strike limit the wallet is blocked.
   - After a takedown in a finished book, publish a replacement book link and text hash. The contract does not recompute the hash; `deploy.js replace-pdf` computes it from the chain and shows it before signing.
   - **Block or unblock** a wallet. A blocked wallet can't open, write, edit, change or report text, join with an invite, revive a story, set a citation (it may clear one), restore a hidden part, rename its story, change editors or the allow-list, create invites, or make text changes or remove visible parts in a final edit. It may still remove its own parts, and a blocked finalizer may still remove hidden parts so the book can be finished.
   - Clear a story's summary. The moderator can too. This works while paused.
@@ -66,6 +66,8 @@ The Shop admin **cannot** take back a payment that has already been split, or se
 - **Propose a new admin** (two steps).
 
 The Stories admin **cannot** mint or burn Ink, refund outside the rules, or finalize a story outside the admin-finalize rule.
+
+**One text, once.** The same exact text can go into a story only once: text that was ever in it, even if it was edited away, removed or taken down, can't be added, edited in or changed in again.
 
 **Hidden is not erased.** A hidden part is left out of the site and the book, but its text stays readable on the public chain until it is taken down. Text removed by its writer also stays readable in the part's kept versions.
 

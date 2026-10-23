@@ -28,9 +28,9 @@
 //   - Every new part carries the writer's "I wrote this, or I have the
 //     right to use it" confirmation and the Terms of Use version they
 //     accepted. The contract refuses a part without both.
-//   - The same exact text cannot be in one story twice at the same time,
-//     whether it is added, edited in or changed in (audit F-03). Text that
-//     was taken down stays blocked in that story.
+//   - The same exact text can go into one story only once, whether it is
+//     added, edited in or changed in (audit F-03). Text that was in the
+//     story once, even if it was edited away or removed, stays blocked.
 //   - Any wallet may report a part of a story that is not finalized, once.
 //     Reports from wallets that have written on SwarmTales count; enough of
 //     them hide the part. Finished books are reported off-chain (audit M-3).
@@ -943,7 +943,7 @@ export class Stories {
       st.total_burned = SafeMath.add(st.total_burned, growth);
     }
     seg.text = text;
-    seg.text_hash = this.swapTextHash(args.story_id, seg.text_hash, text);
+    seg.text_hash = this.newTextHash(args.story_id, text);
     seg.current_cost = newCost;
     seg.last_edited_by = editor;
     seg.last_edited_at = now;
@@ -1157,7 +1157,7 @@ export class Stories {
           this.recordChanger(key, seg, finalizer, false);
         }
         seg.text = text;
-        if (text != oldText) seg.text_hash = this.swapTextHash(args.story_id, seg.text_hash, text);
+        if (text != oldText) seg.text_hash = this.newTextHash(args.story_id, text);
         seg.current_cost = newCost;
         seg.charged = seg.charged - refund;
         seg.last_edited_by = finalizer;
@@ -1380,7 +1380,6 @@ export class Stories {
     st.total_burned = SafeMath.add(st.total_burned, price);
 
     if (removing) {
-      this.releaseTextHash(args.story_id, seg.text_hash);
       this.dropLivePart(args.story_id, seg);
       this.clearSegment(seg, writer, now);
     } else {
@@ -1402,7 +1401,7 @@ export class Stories {
       this.authorCount.put(writer, count);
       seg.charged = seg.charged - refund;
       seg.text = text;
-      seg.text_hash = this.swapTextHash(args.story_id, seg.text_hash, text);
+      seg.text_hash = this.newTextHash(args.story_id, text);
       seg.current_cost = newCost;
       seg.last_edited_by = writer;
       seg.last_edited_at = now;
@@ -2008,7 +2007,7 @@ export class Stories {
     const now = this.now();
     const seq = st.segment_count + 1;
     const chapter = startsChapter || seq == 1;
-    const hash = this.swapTextHash(storyId, null, text);
+    const hash = this.newTextHash(storyId, text);
     const seg = new stories.segment();
     seg.author = author;
     seg.text = text;
@@ -2160,31 +2159,22 @@ export class Stories {
   // What every free removal of a live part does besides the refund: the
   // removed text stays on record as the version before a "removed" version,
   // so a later takedown still has it to review (audit F-06); a hidden part
-  // stops blocking the book, while a visible part's text leaves the story's
-  // duplicate list (hidden text stays blocked, so it can't come straight back,
-  // audit F-03); and its writer has one live part less.
+  // stops blocking the book; and its writer has one live part less.
   private removePart(storyId: u64, seq: u64, st: stories.story, seg: stories.segment, by: Uint8Array, now: u64): void {
     const oldText = seg.text != null ? seg.text! : "";
     this.keepVersion(storyId, seq, seg, oldText, VERSION_REMOVED, by, "", 0, now, "", false);
     if (seg.hidden) this.unhideCount(st);
-    else this.releaseTextHash(storyId, seg.text_hash);
     this.dropLivePart(storyId, seg);
   }
 
-  // "The same exact text can't be in one story twice" (audit F-03): new text
-  // takes its place in the story's list, and the text it replaces (if any)
-  // leaves it. Returns the new text's hash.
-  private swapTextHash(storyId: u64, oldHash: Uint8Array | null, text: string): Uint8Array {
+  // The same exact text goes into one story only once, however it gets there
+  // (added, edited in or changed in, audit F-03). Returns the text's hash.
+  private newTextHash(storyId: u64, text: string): Uint8Array {
     const hash = this.sha256(StringBytes.stringToBytes(text));
     const key = this.join(this.u64Key(storyId), hash);
     System.require(!this.textHashes.get(key)!.value, "STORIES: this exact text is already in this story");
     this.textHashes.put(key, new stories.boole(true));
-    this.releaseTextHash(storyId, oldHash);
     return hash;
-  }
-
-  private releaseTextHash(storyId: u64, hash: Uint8Array | null): void {
-    if (hash != null && hash.length > 0) this.textHashes.remove(this.join(this.u64Key(storyId), hash));
   }
 
   // Every change to a part's text is kept as a version naming who made it

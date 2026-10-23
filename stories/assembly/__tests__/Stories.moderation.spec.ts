@@ -778,13 +778,15 @@ describe("Moderation: a part nobody else changed strikes its writer", () => {
     expect(strikes(BOB)).toBe(1);
   });
 
-  it("strikes the writer when an editor only removed the hidden part", () => {
+  it("strikes the writer when the hidden part was only removed (an editor may not remove an admin hide)", () => {
     open(OPENING);
     writerWrites(BOB, 1, "Bob pastes a paragraph from a novel.");   // 2
     addEditor(1, CAROL);
     hide(STORIES, 1, 2, true);
-    directly(); authorize(CAROL); allowCalls(1);
-    c().remove_segment(new stories.remove_segment_arguments(CAROL, 1, 2));
+    fails(() => { directly(); authorize(CAROL); allowCalls(1); c().remove_segment(new stories.remove_segment_arguments(CAROL, 1, 2)); },
+      "STORIES: only the part's writer may remove it for free; others can remove it for Ink");
+    directly(); authorize(BOB); allowCalls(1);
+    c().remove_segment(new stories.remove_segment_arguments(BOB, 1, 2));
     checkpoint();
     takedown(1, 2);
     expect(strikes(BOB)).toBe(1);
@@ -928,32 +930,32 @@ describe("Moderation: once someone else changed a part, the admin decides", () =
 
 // ---------- 10,000-character parts and adding text between parts ----------
 
-describe("Writing: 10,000-character parts and adding text between parts", () => {
+describe("Writing: 6,000-character parts and adding text between parts", () => {
   beforeEach(() => { reset(); });
 
-  it("starts with a 10,000 per-part cap, and the admin may set up to 10,000", () => {
+  it("starts with a 6,000 per-part cap, and the admin may set up to 6,000", () => {
     MockVM.reset();
     MockVM.setContractId(STORIES);
     setTime(START);
     directly();
     checkpoint();
-    expect(cfg().contribution_cap).toBe(10000);
+    expect(cfg().contribution_cap).toBe(6000);
     authorize(STORIES);
-    c().set_limits(new stories.set_limits_arguments(10000, 1000, 3, 60, 30));
+    c().set_limits(new stories.set_limits_arguments(6000, 1000, 3, 60, 30));
     checkpoint();
-    fails(() => { authorize(STORIES); c().set_limits(new stories.set_limits_arguments(10001, 1000, 3, 60, 30)); },
-      "STORIES: per-submission cap must be 100 to 10000");
+    fails(() => { authorize(STORIES); c().set_limits(new stories.set_limits_arguments(6001, 1000, 3, 60, 30)); },
+      "STORIES: per-submission cap must be 100 to 6000");
   });
 
-  it("accepts a 10,000-character part at the default cap", () => {
+  it("accepts a 6,000-character part at the default cap", () => {
     directly(); authorize(STORIES);
-    c().set_limits(new stories.set_limits_arguments(10000, 1000, 3, 60, 30));
+    c().set_limits(new stories.set_limits_arguments(6000, 1000, 3, 60, 30));
     checkpoint();
     directly(); authorize(ALICE); allowCalls(2);
-    const big = chars(10000);
-    c().open_story(new stories.open_story_arguments(ALICE, SHORT, "Big", 99999, 1, 0, PUBLIC, 0, 0, big, false, 10000, USDT, true, 0));
+    const big = chars(6000);
+    c().open_story(new stories.open_story_arguments(ALICE, SHORT, "Big", 99999, 1, 0, PUBLIC, 0, 0, big, false, 6000, USDT, true, 0));
     checkpoint();
-    expect(story(1).used_chars).toBe(10000);
+    expect(story(1).used_chars).toBe(6000);
   });
 
   it("adds text right after a chosen part, and records where", () => {

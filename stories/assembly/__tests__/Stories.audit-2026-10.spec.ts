@@ -5,7 +5,7 @@
 //   M-3  no reports on finished books; an admin hide there still can't be restored
 //   M-4  a writer taken off a private story's list can't edit, only remove
 //   M-5  get_segments stops at a byte budget and says where to go on
-//   F-03 the same text can't be edited or changed into a story twice
+//   F-03 the same text can't be edited or changed into a story it was ever in
 //   F-04 own-part edits need the rights confirmation and the current Terms
 //   F-05 an opener removes only report-hidden parts; the writer keeps the refund
 //   F-06 a removal keeps the removed text as a version, and a takedown wipes it
@@ -321,7 +321,7 @@ describe("M-5: get_segments stops at a byte budget", () => {
 describe("F-03: the same text can't be in one story twice", () => {
   beforeEach(() => { reset(); configure(); });
 
-  it("an edit can't copy another part's text; edited-away text is free again", () => {
+  it("an edit can't copy another part's text, nor bring back text edited away", () => {
     gId = openPublic();
     gSeq = write(BOB, gId, "Bob's original words here!!");
     write(CARA, gId, "Cara's words for the story.");
@@ -330,7 +330,8 @@ describe("F-03: the same text can't be in one story twice", () => {
     expect(editAs).toThrow();
     errorIs("STORIES: this exact text is already in this story");
     ownerEdit(BOB, gId, gSeq, "Bob's new words here, edited.");
-    expect(() => { write(CARA, gId, "Bob's original words here!!"); }).not.toThrow("text that left the story may be written again");
+    expect(() => { write(CARA, gId, "Bob's original words here!!"); }).toThrow("text that was in the story once stays blocked");
+    errorIs("STORIES: this exact text is already in this story");
   });
 
   it("a paid change can't copy another part's text either", () => {
@@ -341,7 +342,7 @@ describe("F-03: the same text can't be in one story twice", () => {
     errorIs("STORIES: this exact text is already in this story");
   });
 
-  it("text that was taken down stays blocked; text its writer removed while visible doesn't", () => {
+  it("text that was taken down or removed stays blocked", () => {
     gId = openPublic();
     gSeq = write(BOB, gId, "Copied words from a famous novel.");
     takedown(gId, gSeq, BOB);
@@ -349,7 +350,8 @@ describe("F-03: the same text can't be in one story twice", () => {
     errorIs("STORIES: this exact text is already in this story");
     const seq = write(BOB, gId, "Bob's honest words, later removed.");
     ownerRemove(BOB, gId, seq);
-    expect(() => { write(CARA, gId, "Bob's honest words, later removed."); }).not.toThrow();
+    expect(() => { write(CARA, gId, "Bob's honest words, later removed."); }).toThrow();
+    errorIs("STORIES: this exact text is already in this story");
   });
 });
 
