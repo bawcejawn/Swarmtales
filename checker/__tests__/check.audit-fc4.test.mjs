@@ -132,7 +132,9 @@ const notes = (ops) => ops.filter((o) => o.op === "set_source_note" && String(o.
 
 test("a part hidden by reports when first read is checked at once; a deferred check waits for the next run", () => {
   const dir = workdir();
-  const reportsHidden = part({ hidden: true, hidden_by: 1, hidden_by_reports: true });
+  // Writers reported it as copied (every reports hide carries the last reporter's reason; only one
+  // for copying is taken over, AB-078).
+  const reportsHidden = part({ hidden: true, hidden_by: 1, hidden_by_reports: true, moderation_reason: 1 });
   // Too few searches left this run for the part's phrases: nothing happens, nothing is marked done.
   const first = run(dir, { config, stories: story(), segments: reportsHidden }, { SEARCH_PER_RUN: "1" });
   assert.equal(first.ops.length, 0);
