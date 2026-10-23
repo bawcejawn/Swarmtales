@@ -20,7 +20,27 @@ Order: **A** (GitHub settings, 10 minutes) → **B** (fresh testnet deploy, `doc
 5. Name: `CHECKER_STATE_KEY` · Value: the password · **Add secret**.
 
 While you're on that page, check that **Deployment branches and tags** says only `main` is
-allowed, and that `MODERATOR_WIF` is listed there as an environment secret.
+allowed.
+
+### A1b. The moderator key (`MODERATOR_WIF`)
+
+The checker signs its hides with this key, and it must be an **environment** secret of
+`copy-checker`. If it isn't listed there, make a fresh one (testnet is being reset anyway, so the
+fresh deploy simply uses the new moderator):
+
+1. In PowerShell, in `C:\swarmtales`:
+   ```powershell
+   node deploy/deploy.js new-moderator-key
+   ```
+   It prints a **moderator address** (public, safe to share) and a **private key** once.
+2. Copy the **address** into a note: you need it in the testnet deploy (Step 6) and you can send
+   it to me.
+3. On the `copy-checker` environment page → **Add environment secret** → Name `MODERATOR_WIF`,
+   Value: the **private key** → **Add secret**.
+4. Close PowerShell and clear the clipboard (Win+V → Clear all). Don't save the key anywhere else:
+   if it's ever lost, you make a new one the same way and point the contract at it with
+   `set-moderation`.
+5. If `MODERATOR_WIF` also exists under **Repository secrets** (A2), delete that copy.
 
 ### A2. Search keys must be repository secrets
 

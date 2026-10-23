@@ -144,10 +144,17 @@ that the release hashes aren't pinned yet; that's expected until mainnet.)
 
 ## Step 6. Payment token, Terms and moderator (admin key)
 
+`$MODERATOR` is the copy checker's **public** moderator address, the one shown when you made the
+key in `docs/OWNER_STEPS.md` step A1b. Set it first:
+
+```powershell
+$MODERATOR = "<moderator address>"
+```
+
 ```powershell
 node deploy/deploy.js test-asset --admin $ADMIN --shop $SHOP
 node deploy/deploy.js set-terms --admin $ADMIN --stories $STORIES --version 2 --file web/public/terms/v2.md --uri https://bawcejawn.github.io/Swarmtales/terms/
-node deploy/deploy.js set-moderation --admin $ADMIN --stories $STORIES --moderator 112LsjvgYPLDw5xep3P2Yi2TSThxebaekU
+node deploy/deploy.js set-moderation --admin $ADMIN --stories $STORIES --moderator $MODERATOR
 ```
 
 **Expect:**
