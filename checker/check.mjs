@@ -56,9 +56,10 @@ import { createHash } from "crypto";
 import fs from "fs";
 import { createRequire } from "module";
 import {
-  HIDE_FOUND, Index, REASON, WEB_MIN_CHARS, budget, checkChainId, checkOrder, citationCovers, decide, expectedChainId, fingerprint, isDuplicate, isPartialDuplicate,
-  normalizeResults, pickPhrases, resultMatches, worthAsking,
+  HIDE_FOUND, Index, REASON, WEB_MIN_CHARS, budget, checkChainId, checkOrder, citationCovers, dateOf, decide, expectedChainId, fingerprint, isDuplicate,
+  isPartialDuplicate, normalizeResults, pickPhrases, resultMatches, worthAsking,
 } from "./lib.mjs";
+import { readAllVersions } from "../web/src/lib/versions.js";
 
 const require = createRequire(new URL("../web/package.json", import.meta.url));
 const { Contract, Provider, Signer, Transaction } = require("koilib");
@@ -109,7 +110,11 @@ function textKey(text) {
   return createHash("sha256").update(String(text || "")).digest("base64").slice(0, 16);
 }
 
-/** When a part's current text was written: its last edit, or when it was added. */
+/**
+ * When a part's text last changed: its last edit, or when it was added. Used
+ * for the order parts are checked in, and as the time of words nothing older
+ * shows (AB-076: words are compared by when they were first written).
+ */
 function textAt(seg) {
   const created = Number(seg.created_at || 0);
   const edited = Number(seg.last_edited_at || 0);
@@ -217,23 +222,23 @@ async function searchOnce(service, phrase) {
 }
 
 /**
- * A phrase counts as found when any service finds it. Books are asked first
- * (the free quota is large and copied book text is the main risk), then the web.
- */
-/**
- * Search up to five phrases of a part. Returns null (nothing worth noting),
- * "defer" (not enough free searches left this run: try next run), or
+ * Search up to five phrases of a part. A phrase counts as found when any
+ * service finds it. Books are asked first (the free quota is large and copied
+ * book text is the main risk), then the web. Returns null (nothing worth
+ * noting), "defer" (a phrase that mattered went unanswered: no free searches
+ * left this run, or every service failed; try next run, AB-083), or
  * { action: "hide" | "note", found, same, label, cited }.
  */
 async function webCheck(text, spendable, citation) {
   const phrases = pickPhrases(text);
   if (phrases.length < HIDE_FOUND) return null;
-  if (spendable.leftThisRun() < phrases.length) return "defer";
+  if (!spendable.any() || spendable.leftThisRun() < phrases.length) return "defer";
   const found = [];
   const labels = new Map();
   for (let i = 0; i < phrases.length; i++) {
     if (!worthAsking(found.filter(Boolean).length, i, phrases.length)) break;
     let hit = null;
+    let answered = false;
     for (const service of spendable.services()) {
       if (!spendable.ok(service)) continue;
       spendable.spend(service);
@@ -242,11 +247,14 @@ async function webCheck(text, spendable, citation) {
         spendable.disable(service);
         continue;
       }
+      answered = true;
       if (result) {
         hit = result;
         break;
       }
     }
+    // Nobody could answer: never judged on the phrases asked so far (AB-083).
+    if (!answered) return "defer";
     if (hit) {
       let host = "";
       try { host = new URL(hit.url).host; } catch { host = hit.url || "a website"; }
@@ -256,7 +264,6 @@ async function webCheck(text, spendable, citation) {
     } else {
       found.push(null);
     }
-    if (!spendable.any()) break;
   }
   const d = decide(found);
   if (d.action === "none") return null;
@@ -391,18 +398,57 @@ async function main() {
   }
 
   /**
+   * A part's fingerprint, with when each of its hashes was first written
+   * (AB-076): an edit or a paid change never makes the words it left alone
+   * look new. Words the part had when it was last checked keep their time;
+   * for a part never checked, its kept versions say when each first
+   * appeared. Words nothing older shows are dated by the part's last change.
+   * Returns { hashes, at, newer } in the index's form.
+   */
+  async function dateText(storyId, seq, seg) {
+    const hashes = fingerprint(seg.text);
+    const now = textAt(seg);
+    const first = new Map();
+    const prev = index.parts.get(storyId + ":" + seq);
+    if (prev) {
+      for (const h of prev.hashes) first.set(h, dateOf(prev, h));
+    } else if (now > Number(seg.created_at || 0) && Number(seg.version_count || 0) > 0) {
+      try {
+        const ask = (from, count) => read("get_versions", { story_id: String(storyId), seq: String(seq), from, count });
+        for (const v of await readAllVersions(ask, seg.version_count)) {
+          for (const h of fingerprint(v.text)) if (!first.has(h)) first.set(h, Number(v.at || 0));
+        }
+      } catch (error) {
+        note("  could not read the versions of story " + storyId + " part " + seq + ": " + (error && error.message ? error.message : String(error)));
+      }
+    }
+    const when = hashes.map((h) => first.get(h) || now);
+    const at = when.length ? Math.min(...when) : now;
+    const newer = {};
+    hashes.forEach((h, i) => { if (when[i] > at) newer[h] = when[i]; });
+    return { hashes, at, newer };
+  }
+
+  /** Indexes a part's dated text; `skip` keeps only the dates (a copy, or a part with a note). */
+  function indexText(key, seg, dated, skip, copyOf = undefined) {
+    index.add(key, seg.author, dated.hashes, dated.at, copyOf, { newer: dated.newer, skip });
+  }
+
+  /**
    * Compares one part's text with SwarmTales and, with alsoWeb, the web.
    * Adds a source note for a partial match. Returns "defer" (search budget
    * used up: try next run) or a verdict: { v: "clean" }, { v: "note" },
    * { v: "copy", reason, why, note, src, label, copyOf } (a clear copy, to be
    * hidden) or { v: "cited", ... } (a clear copy of a source the writer cited:
-   * left alone while the citation names it). `at`: when the text was written.
+   * left alone while the citation names it). `dated`: the text's hashes and
+   * when each was first written (dateText).
    */
-  async function checkPart(storyId, seq, seg, alsoWeb, at) {
+  async function checkPart(storyId, seq, seg, alsoWeb, dated) {
     const key = storyId + ":" + seq;
-    const hashes = fingerprint(seg.text);
-    // Only text written before this part counts, so an original is never
-    // flagged for a copy made after it (AB-005).
+    const { hashes } = dated;
+    const at = (h) => dateOf(dated, h);
+    // Only words written before this part's count, so an original is never
+    // flagged for a copy made after it (AB-005), even after an edit (AB-076).
     const match = index.bestMatch(hashes, seg.author, key, at);
     if (match && (isDuplicate(hashes, match) || isPartialDuplicate(hashes, match))) {
       const [srcStory, srcSeq] = match.key.split(":");
@@ -434,7 +480,9 @@ async function main() {
       }
       return { v: "note" };
     }
-    if (alsoWeb && String(seg.text).length >= WEB_MIN_CHARS && spendable.any()) {
+    // With a search key set, a long part is never judged without its search:
+    // out of searches, it waits for the next run (AB-083).
+    if (alsoWeb && String(seg.text).length >= WEB_MIN_CHARS && searchKeys.length) {
       const web = await webCheck(seg.text, spendable, seg.citation);
       if (web === "defer") return "defer";
       if (web && web.action === "hide") {
@@ -464,7 +512,10 @@ async function main() {
     const key = storyId + ":" + seq;
     if (seen.v === "overruled") {
       // Indexed after all, so a copy of it made later is still caught.
-      if (!index.parts.has(key)) index.add(key, seg.author, fingerprint(seg.text), textAt(seg), seen.copyOf);
+      const entry = index.parts.get(key);
+      if (!entry || entry.skip) {
+        indexText(key, seg, entry || { hashes: fingerprint(seg.text), at: textAt(seg) }, false, seen.copyOf);
+      }
       if (seen.note) await sourceNote(storyId, seq, seg, seen.note);
       return;
     }
@@ -480,8 +531,14 @@ async function main() {
         seen.admin = true;
         return;
       }
-    } else if (seen.admin && !seg.restored) {
-      // The admin looked at it and unhid it.
+      // A hide writer reports made for anything but copying (abuse, spam) is
+      // never taken over, so no citation can lift it (AB-078). If its opener
+      // restores it, the copy is hidden then.
+      const reason = Number(seg.moderation_reason || 0);
+      if (reason !== REASON.COPYRIGHT && reason !== REASON.DUPLICATE) return;
+    } else if (seen.admin) {
+      // The admin looked at it and unhid it: only the admin can unhide the
+      // admin's hide, whatever `restored` says from an older restore (AB-077).
       seen.v = "overruled";
       await enforce(storyId, seq, seg, seen);
       return;
@@ -507,12 +564,12 @@ async function main() {
     // Recorded by the hide re-check without the text: it is the text hidden then.
     if (seen && seen.t === undefined) seen.t = t;
     if (!seen || seen.t !== t) {
-      const at = textAt(seg);
-      const verdict = await checkPart(storyId, seq, seg, alsoWeb, at);
+      const dated = await dateText(storyId, seq, seg);
+      const verdict = await checkPart(storyId, seq, seg, alsoWeb, dated);
       if (verdict === "defer") return "defer";
       seen = state.seen[key] = { t, c, ...verdict };
-      if (verdict.v === "clean" || verdict.v === "cited") index.add(key, seg.author, fingerprint(seg.text), at);
-      else index.remove(key);
+      // Only clean and cited text counts as an original; the rest keeps its dates (AB-076).
+      indexText(key, seg, dated, !(verdict.v === "clean" || verdict.v === "cited"));
     } else if (seen.c !== c) {
       seen.c = c;
       // A cited source counts only while the citation still names it (AB-067).
@@ -534,10 +591,13 @@ async function main() {
         return true;
       }
       // Checked by an older checker, which kept no text key: its text counts
-      // as checked unless it was edited after it was written, or was hidden
-      // when that checker read it (and so never checked).
+      // as checked unless it was edited after it was written, was hidden
+      // when that checker read it (and so never checked), or has a citation:
+      // that checker kept no record of the parts it brought back because
+      // their writer cited the source, so clearing the citation must find
+      // them uncited (AB-080).
       const edited = Number(seg.last_edited_at || 0) > Number(seg.created_at || 0);
-      if (seq <= checkedUpTo && !neverChecked.has(key) && !edited) {
+      if (seq <= checkedUpTo && !neverChecked.has(key) && !edited && !seg.citation) {
         state.seen[key] = { t: textKey(seg.text), c: textKey(seg.citation), v: "clean" };
         return false;
       }
@@ -565,14 +625,13 @@ async function main() {
       if (!seg.hidden || Number(seg.hidden_by || 0) !== 2) {
         // Its opener restored it (which forfeits the refund), or the admin
         // took it over or unhid it: the checker never hides this text again.
-        // A restore that forfeited nothing undid writer reports' hide, so a
-        // hide the checker sent and never saw in place never landed (AB-071).
-        const keptRefund = !seg.hidden && seg.restored && !seg.refund_forfeited;
-        if (seen && (entry.held || !keptRefund)) seen.v = "overruled";
+        // Only a hide the chain accepted is recorded here, so it landed;
+        // `restored` may be left over from an older restore and says nothing
+        // about this one (AB-077).
+        if (seen) seen.v = "overruled";
         delete state.hiddenByChecker[key];
         continue;
       }
-      entry.held = true;
       if (seg.citation && citationCovers(seg.citation, entry.source)) {
         note("  UNHIDE story " + sid + " part " + sq + ": the writer named the source (" + seg.citation.slice(0, 80) + ")");
         const ok = await sendAsModerator("set_segment_hidden", {
@@ -652,17 +711,26 @@ async function main() {
   // A story's new parts stay in part order, so state.checked stays a safe
   // "done up to" mark when the run stops early. Hidden parts are checked
   // too: one hidden by writer reports is taken over if it is a copy (AB-071).
+  // A part that waited for its search last run is checked first (AB-083).
   const stopped = new Set();
-  const order = checkOrder(fresh);
+  state.pending = state.pending || {};
+  const waiting = (p) => (state.pending[p.story + ":" + p.seq] ? 1 : 0);
+  const order = checkOrder(fresh).sort((a, b) => waiting(b) - waiting(a));
   const left = new Map();
   for (const p of order) left.set(p.story, (left.get(p.story) || 0) + 1);
   for (const { story: id, seq, seg, isNew } of order) {
     if (stopped.has(id)) continue;
+    const key = id + ":" + seq;
     try {
       if (Number(seg.status) === 1 && seg.text) {
-        // Out of free searches for this run: this part and everything after it waits for the next run.
-        if (await review(id, seq, seg, true) === "defer") break;
+        // Out of free searches for this run: this part and everything after
+        // it waits for the next run, still unchecked.
+        if (await review(id, seq, seg, true) === "defer") {
+          state.pending[key] = true;
+          break;
+        }
       }
+      delete state.pending[key];
       if (isNew) state.checked[id] = seq;
       left.set(id, left.get(id) - 1);
     } catch (error) {
@@ -692,10 +760,11 @@ async function main() {
           const t = textKey(seg.text);
           const seen = state.seen[key];
           if (seen && seen.t === t && (seen.v === "copy" || seen.v === "overruled")) continue;
-          const verdict = await checkPart(id, seg._seq, seg, false, textAt(seg));
+          const dated = await dateText(id, seg._seq, seg);
+          const verdict = await checkPart(id, seg._seq, seg, false, dated);
           if (verdict === "defer" || verdict.v !== "copy") continue;
           state.seen[key] = { t, c: textKey(seg.citation), ...verdict };
-          index.remove(key);
+          indexText(key, seg, dated, true);
           await enforce(id, seg._seq, seg, state.seen[key]);
         }
       }
