@@ -152,8 +152,10 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Install
         working-directory: web
-        # No install scripts: this job holds the moderator key.
-        run: npm ci --ignore-scripts && npm run abi
+        # No install scripts: this job holds the moderator key. No ABI build
+        # either: the checker uses the committed, hash-checked
+        # checker/stories.abi.json (audit L-12).
+        run: npm ci --ignore-scripts
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         continue-on-error: true   # no plan: nothing to apply or save
         with:

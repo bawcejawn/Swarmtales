@@ -365,3 +365,24 @@ test("I-14: the mainnet community node koinos.armana.io maps to the mainnet chai
   assert.equal(NETWORKS.mainnet.rpc, "https://koinos.armana.io");
   assert.equal(NETWORKS.mainnet.chainId, MAINNET);
 });
+
+test("L-12: the checker's Stories ABI is the committed, hash-checked file, built from stories.proto", async () => {
+  const fsMod = await import("node:fs");
+  const { STORIES_ABI_SHA256, abiHash, loadStoriesAbi } = await import("../chain.mjs");
+  const { buildAbi } = await import("../../web/scripts/build-abi.mjs");
+  const text = fsMod.readFileSync(new URL("../stories.abi.json", import.meta.url), "utf8");
+  assert.equal(abiHash(text), STORIES_ABI_SHA256, "run node checker/make-abi.mjs and update STORIES_ABI_SHA256");
+  assert.deepEqual(loadStoriesAbi(), buildAbi("stories/assembly/proto/stories.proto"), "the committed ABI is the one stories.proto builds");
+  assert.equal(abiHash(text.replace(/\n/g, "\r\n")), STORIES_ABI_SHA256, "line endings don't matter");
+  const tampered = text.replace('"set_segment_hidden"', '"set_segment_hidden2"');
+  assert.throws(() => loadStoriesAbi(tampered), /not the reviewed Stories ABI/);
+});
+
+test("L-12: the apply job (moderator key) builds no ABI at run time", async () => {
+  const fs = await import("node:fs");
+  const yml = fs.readFileSync(new URL("../../.github/workflows/copy-checker.yml", import.meta.url), "utf8");
+  const apply = yml.slice(yml.indexOf("\n  apply:"), yml.indexOf("\n  keep-schedule:"));
+  assert.doesNotMatch(apply, /npm run abi/);
+  assert.match(apply, /npm ci --ignore-scripts/);
+  assert.doesNotMatch(fs.readFileSync(new URL("../chain.mjs", import.meta.url), "utf8"), /generated\/abis/);
+});
