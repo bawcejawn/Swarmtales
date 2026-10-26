@@ -1294,6 +1294,29 @@ function planPrices(flags, decimals, cfg) {
   return items.map((item) => ({ item, amount: prices[item], name: names[item] }));
 }
 
+/**
+ * A warning when a Poem's starter Ink is worth more than opening a Poem costs
+ * (audit I-7): then opening Poems is a cheaper way to get Ink than buying it.
+ * Worth is counted at the cheapest pack (price per Ink), so the warning only
+ * fires when it is clear. All amounts in base units (Ink has no decimals).
+ * packs: [{ price, ink }]. Returns a sentence, or null.
+ */
+function starterPoemWarning({ starterPoem, poemPrice, packs }) {
+  const starter = BigInt(starterPoem || 0);
+  const price = BigInt(poemPrice || 0);
+  if (starter === 0n || price === 0n) return null;
+  let best = null;
+  for (const p of packs || []) {
+    const pp = BigInt(p.price || 0);
+    const ink = BigInt(p.ink || 0);
+    if (pp === 0n || ink === 0n) continue;
+    if (!best || pp * best.ink < best.price * ink) best = { price: pp, ink };
+  }
+  if (!best || starter * best.price <= price * best.ink) return null;
+  return "A Poem's starter Ink (" + starter + ") is worth more than opening a Poem costs, at the cheapest pack's price: " +
+    "opening Poems would be a cheaper way to get Ink. Lower starter_poem or raise the Poem price.";
+}
+
 /** set_ink_amounts arguments: each flag given, else what the chain has. */
 function planInkAmounts(flags, cfg) {
   if (!cfg) fail("Could not read the Shop's settings. Nothing was sent.");
@@ -1845,6 +1868,7 @@ module.exports = {
   entryPoint,
   planPrices,
   planInkAmounts,
+  starterPoemWarning,
   parseTokenAmount,
   planMultisigSigners,
   codeHashFromMeta,

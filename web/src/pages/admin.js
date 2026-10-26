@@ -14,7 +14,7 @@ import {
   planBlock, planCampaignEnabled, planCampaignLimits, planCategory, planCategoryActive, planClearSummary, planFee, planHide,
   planInkAmounts, planLimits, planMinContribution, planModeration, planPause, planPrice, planPromo, planPromoSwitch, planSetAdmin,
   planSourceNote, planTakedown, planTakeOver, planTerms, preparedFile, promoLink, SPONSOR_DEFAULT_CAPS, sponsorCommand, strikeChoices, toBaseUnits,
-  ADMIN_METHODS, canAdminister, planAddToken, preparedRcLimit, ratePrice, RATE_ITEMS,
+  ADMIN_METHODS, canAdminister, planAddToken, preparedRcLimit, ratePrice, RATE_ITEMS, starterPoemWarning,
 } from "../lib/admin.js";
 import { canonicalBase } from "../lib/site.js";
 import { formatUtc } from "../lib/money.js";
@@ -388,9 +388,20 @@ function pricesSection(d) {
   });
   return section("Prices", "Prices of every item, per payment token. 0 takes an item off sale for that token. One confirmation saves every changed price.", [
     field("Token", pick),
+    poemNotice(d),
     h("table", { class: "admin-table" }, [h("tr", {}, ["Item", "Now", "New price (" + sym + ")"].map((x) => h("th", {}, [x]))), ...rows]),
     save,
   ]);
+}
+
+/** Warns when a Poem's starter Ink is worth more than a Poem costs, in the token shown (audit I-7). */
+function poemNotice(d) {
+  const c = d.shopCfg;
+  const w = starterPoemWarning({
+    starterPoem: c.starter_poem, poemPrice: d.prices[10],
+    packs: [{ price: d.prices[3], ink: c.pack_s_ink }, { price: d.prices[4], ink: c.pack_m_ink }, { price: d.prices[5], ink: c.pack_l_ink }],
+  });
+  return w ? notice("warn", h("p", {}, [d.priceToken.symbol + ": " + w])) : null;
 }
 
 function inkAmountsSection(d) {
@@ -406,6 +417,7 @@ function inkAmountsSection(d) {
   });
   const fee = input(String(d.shopCfg.fee_bps || 0));
   return section("Ink amounts and founder fee", "How much Ink a Writer month, each pack and each kind of story opening brings. Buyers are protected: if the Ink drops below what their page showed, their purchase fails and nothing is charged.", [
+    poemNotice(d),
     h("div", { class: "admin-grid" }, fields),
     save,
     row(field("Founder fee (basis points, 100 = 1%, at most 500)", fee)),

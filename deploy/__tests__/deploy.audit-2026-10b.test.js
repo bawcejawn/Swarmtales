@@ -480,3 +480,25 @@ test("L-8: the pin override names the role it lets through, and tokens are a lis
     lib.TOKEN_PINS.mainnet.push(...savedTokens);
   }
 });
+
+// ---------------------------------------------------------------- I-7
+
+test("I-7: a warning when a Poem's starter Ink is worth more than a Poem costs (tool and page agree)", async () => {
+  const packs = [{ price: "200000000", ink: "5000" }, { price: "500000000", ink: "15000" }, { price: "1200000000", ink: "45000" }];
+  // The cheapest pack: 12 tokens for 45,000 Ink. 2,000 Ink is then worth about 0.53 tokens.
+  assert.match(lib.starterPoemWarning({ starterPoem: "2000", poemPrice: "30000000", packs }), /worth more than opening a Poem costs/);
+  assert.strictEqual(lib.starterPoemWarning({ starterPoem: "2000", poemPrice: "60000000", packs }), null);
+  assert.strictEqual(lib.starterPoemWarning({ starterPoem: "0", poemPrice: "1", packs }), null);
+  assert.strictEqual(lib.starterPoemWarning({ starterPoem: "2000", poemPrice: "0", packs }), null, "not for sale");
+  assert.strictEqual(lib.starterPoemWarning({ starterPoem: "2000", poemPrice: "1", packs: [] }), null, "no pack to value Ink by");
+  const web = await import(require("node:url").pathToFileURL(path.join(REPO, "web", "src", "lib", "admin.js")).href);
+  for (const poemPrice of ["30000000", "60000000", "53333333", "53333334"]) {
+    assert.strictEqual(web.starterPoemWarning({ starterPoem: "2000", poemPrice, packs }), lib.starterPoemWarning({ starterPoem: "2000", poemPrice, packs }), poemPrice);
+  }
+  // Both commands that change these numbers check them before sending.
+  const src = fs.readFileSync(path.join(__dirname, "..", "deploy.js"), "utf8").replace(/\r\n/g, "\n");
+  for (const fn of ["cmdSetInkAmounts", "cmdSetPrice"]) {
+    const body = src.slice(src.indexOf("async function " + fn + "("), src.indexOf("\n}\n", src.indexOf("async function " + fn + "(")));
+    assert.ok(body.indexOf("warnStarterPoem(") > 0 && body.indexOf("warnStarterPoem(") < body.indexOf("dryRunThenSend("), fn);
+  }
+});

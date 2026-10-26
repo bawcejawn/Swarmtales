@@ -1120,6 +1120,7 @@ async function cmdSetPrice(args) {
   if (!asset || !asset.symbol) lib.fail("The Shop has no record of token " + token + ". Turn it on first with set-asset. Nothing was sent.");
   const cfg = await readOnly(provider, "shop", shop, "get_config", {});
   const plan = lib.planPrices(f, Number(asset.decimals || 0), cfg);
+  await warnStarterPoem(provider, shop, {}, token, Object.fromEntries(plan.map((p) => [p.item, p.amount])));
   const shopC = contractOf("shop", shop, provider);
   const ops = [];
   for (const p of plan) ops.push(await shopC.encodeOperation({ name: "set_price", args: { item: p.item, token, amount: p.amount } }));
@@ -1130,12 +1131,36 @@ async function cmdSetPrice(args) {
 }
 
 /** Ink each Writer month, pack and story opening brings. Flags not given keep the chain's value. */
+/**
+ * Prints a warning for each enabled token in which a Poem's starter Ink is
+ * worth more than a Poem's open price (audit I-7). cfgOver: Shop settings
+ * about to change; token + priceOver: prices about to change in that token.
+ */
+async function warnStarterPoem(provider, shop, cfgOver, token, priceOver) {
+  try {
+    const cfg = Object.assign({}, await readOnly(provider, "shop", shop, "get_config", {}), cfgOver);
+    const listed = (await readOnly(provider, "shop", shop, "get_assets", {})).tokens || [];
+    for (const t of token ? [token] : listed) {
+      const price = async (item) => (token === t && priceOver[item] !== undefined ? priceOver[item]
+        : ((await readOnly(provider, "shop", shop, "get_price", { item, token: t })) || {}).value || "0");
+      const w = lib.starterPoemWarning({
+        starterPoem: cfg.starter_poem, poemPrice: await price(10),
+        packs: [{ price: await price(3), ink: cfg.pack_s_ink }, { price: await price(4), ink: cfg.pack_m_ink }, { price: await price(5), ink: cfg.pack_l_ink }],
+      });
+      if (w) console.log("WARNING (" + t + "): " + w);
+    }
+  } catch (e) {
+    console.log("Could not check the Poem's starter Ink against its price (" + (e && e.message ? e.message : String(e)) + ").");
+  }
+}
+
 async function cmdSetInkAmounts(args) {
   const f = args.flags;
   const admin = lib.requireAddress(f.admin, "admin");
   const shop = lib.requireAddress(f.shop, "shop");
   const { net, provider } = await connect(f);
   const plan = lib.planInkAmounts(f, await readOnly(provider, "shop", shop, "get_config", {}));
+  await warnStarterPoem(provider, shop, { starter_poem: plan.starter_poem, pack_s_ink: plan.pack_s, pack_m_ink: plan.pack_m, pack_l_ink: plan.pack_l }, null, {});
   const op = await contractOf("shop", shop, provider).encodeOperation({ name: "set_ink_amounts", args: plan });
   const txId = await dryRunThenSend(await getSigner(provider, admin, "the admin wallet"), provider, net, [op], "shop.set_ink_amounts: " + JSON.stringify(plan));
   console.log("Send back: the transaction id (" + txId + ").");
