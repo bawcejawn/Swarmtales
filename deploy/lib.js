@@ -1616,6 +1616,21 @@ function newMultisigSigners(ops, needs) {
   return added;
 }
 
+/**
+ * Before a takedown (audit L-3): a part that is not hidden can still be
+ * edited by its writer, and any edit makes a takedown that names the
+ * reviewed text fail. With a slow (multisig) admin, hide it first with the
+ * moderator key: hidden parts can't be edited. Returns the note, or null
+ * when the part is already hidden.
+ */
+function takedownHideFirst(seg, storiesAddr, storyId, seq) {
+  if (seg && seg.hidden) return null;
+  return "NOTE: this part is not hidden, so its writer can still edit it, and an edit before this takedown lands makes it fail\n" +
+    "(it names the text reviewed above). With a multisig admin, hide it first with the moderator key; hidden parts can't be edited:\n" +
+    "  node deploy/deploy.js hide --actor <moderator> --stories " + storiesAddr + " --story " + storyId + " --seq " + seq + " --reason <1-5>\n" +
+    "Then review it again and prepare the takedown.";
+}
+
 // Setters that replace a whole group of settings at once (audit L-10): each
 // argument and the get_config field it replaces. A file prepared earlier
 // silently undoes any change made between prepare and submit, so submit
@@ -1795,6 +1810,7 @@ module.exports = {
   terminalSafe,
   preparedTargets,
   replacesSettings,
+  takedownHideFirst,
   settingsChanges,
   DEFAULT_PREPARED_RC,
   preparedRcLimit,

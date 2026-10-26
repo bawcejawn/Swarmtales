@@ -1867,7 +1867,7 @@ async function cmdTakedown(args) {
   console.log("Last edited by:    " + (seg.last_edited_by || who.writer) + (seg.last_edited_by && seg.last_edited_by !== who.writer ? "" : " (the writer)"));
   console.log("Changed by others: " + (who.changed ? (who.changers.join(", ") || "yes") : "no"));
   if (who.unseen) console.log("                   " + lib.UNSEEN_CHANGER);
-  console.log("Live text:         " + JSON.stringify(String(seg.text || "")));
+  console.log("Live text:         " + lib.terminalSafe(JSON.stringify(String(seg.text || ""))));
   console.log("Text fingerprint:  " + Buffer.from(review.reviewed_hash, "base64url").toString("hex") + ", " + review.reviewed_versions +
     " kept version(s). The takedown is refused if either changes before it lands.");
   if (historyError) {
@@ -1899,6 +1899,8 @@ async function cmdTakedown(args) {
       "Nothing was sent. Check its history on a block explorer (stories.revise_event and stories.segment_changed_event\n" +
       "for this part), then run this command again with --strike <wallet> or --no-strike.");
   }
+  const hideFirst = lib.takedownHideFirst(seg, stories, storyId, seq);
+  if (hideFirst) console.log(hideFirst);
   if (strike && !who.candidates.includes(strike)) {
     console.log("--strike " + strike + " is not the writer or a wallet seen above. The contract accepts it only if that wallet changed this part; the dry run checks this before anything is sent.");
   }

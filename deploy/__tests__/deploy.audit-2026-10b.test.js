@@ -408,3 +408,17 @@ test("L-10: submit shows what a whole-settings setter changes, against the chain
   assert.match(r.out, /strike_limit: 5 \(unchanged\)/);
   assert.ok(r.out.includes("moderator: " + BOB_ADDR + " -> " + MOD));
 });
+
+// ---------------------------------------------------------------- L-3
+
+test("L-3: takedown says to hide the part first when it isn't hidden, before any key is asked for", () => {
+  const note = lib.takedownHideFirst({ hidden: false }, STORIES, "7", "3");
+  assert.match(note, /not hidden, so its writer can still edit it/);
+  assert.ok(note.includes("node deploy/deploy.js hide --actor <moderator> --stories " + STORIES + " --story 7 --seq 3"));
+  assert.strictEqual(lib.takedownHideFirst({ hidden: true }, STORIES, "7", "3"), null);
+  const src = fs.readFileSync(path.join(__dirname, "..", "deploy.js"), "utf8");
+  const body = src.slice(src.indexOf("async function cmdTakedown("), src.indexOf("async function cmdReplacePdf("));
+  assert.ok(body.indexOf("lib.takedownHideFirst(") > 0 && body.indexOf("lib.takedownHideFirst(") < body.indexOf("getSigner("));
+  // The live text of a part is printed with control characters made visible (H-2's rule).
+  assert.match(body, /lib\.terminalSafe\(JSON\.stringify\(String\(seg\.text/);
+});
