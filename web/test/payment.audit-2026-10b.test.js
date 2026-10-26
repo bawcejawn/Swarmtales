@@ -67,3 +67,17 @@ test("H-3: the admin page turns a token on only with its pin and its pinned code
   // Turning off never needs the pin: it must always work.
   assert.equal(planAsset({ token: T, enabled: false }).args.enabled, false);
 });
+
+test("I-2: no two tokens may share a display symbol (page and config)", () => {
+  const T = "1FaSvLjQJsCJKq5ybmGsMMQs8RQYyVv8ju";
+  const pin = pinnedToken(T);
+  throwsInput(() => planAsset({ token: T, enabled: true, decimals: "8", symbol: "tKOIN", pin, codeHash: CODE,
+    others: [{ address: "1PJLazQ9eg25WRsBbcgVfc9ng2cR1cRT52", symbol: "TKOIN" }] }), /already has a token called TKOIN/);
+  PAYMENT_TOKENS[ACTIVE].push({ address: "1PJLazQ9eg25WRsBbcgVfc9ng2cR1cRT52", symbol: "tkoin", decimals: 8, codeHash: CODE });
+  try {
+    assert.match(configProblems().join(" "), /twice/);
+  } finally {
+    PAYMENT_TOKENS[ACTIVE].pop();
+  }
+  assert.deepEqual(configProblems(), []);
+});

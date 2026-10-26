@@ -219,7 +219,7 @@ test("M-C: an operation whose number does not survive encoding is refused before
   assert.deepStrictEqual(lib.numberMismatch({ b: [{ c: "7" }] }, { b: [{ c: "8" }] }), { field: "b[0].c", sent: "7", got: "8" });
 });
 
-// ---------------------------------------------------------------- H-3 (token pins)
+// ---------------------------------------------------------------- H-3, I-2 (token pins)
 
 const TKOIN = "1FaSvLjQJsCJKq5ybmGsMMQs8RQYyVv8ju";
 const TKOIN_CODE = "4251a6e9d9c9a37f3bbf67e171f63a7dcad62309e4be7d9da85a74f68520edf7";
@@ -283,4 +283,12 @@ test("H-3: an unpinned token is refused on mainnet and only warned about on test
   // The deploy tool and the website pin the same tokens.
   const web = fs.readFileSync(path.join(REPO, "web", "src", "config.js"), "utf8");
   for (const t of lib.TOKEN_PINS.testnet) assert.ok(web.includes('codeHash: "' + t.codeHash + '"'), t.symbol + " is pinned on the website too");
+});
+
+test("I-2: set-asset refuses a symbol another of the Shop's tokens already uses", async () => {
+  const node = assetNode({ records: { [TOKEN]: { enabled: true, decimals: 6, symbol: "TKOIN" } }, code: { [TKOIN]: TKOIN_CODE } });
+  const r = await run(setAsset([]), { node, answers: ["SEND"], secret: ADMIN.getPrivateKey("wif") });
+  assert.match(r.error.message, /already has a token called TKOIN/);
+  assert.deepStrictEqual(node.log.sent, []);
+  assert.throws(() => lib.planAsset({}, { token: TKOIN, enabled: true, decimals: "8", symbol: "tKOIN" }, 0, true, [{ token: TOKEN, symbol: "tkoin" }]), /already has a token/);
 });

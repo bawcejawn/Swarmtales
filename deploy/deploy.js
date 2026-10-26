@@ -988,7 +988,7 @@ async function cmdTestAsset(args) {
     what = "set small test prices for " + token + " (already enabled; usable from " + lib.utcTime(current.usable_from || 0) + ")";
   } else {
     const sold = !!(await readOnly(provider, "shop", shop, "get_config", {})).sold;
-    const plan = lib.planAsset(current, { token, enabled: true, decimals, symbol }, nowSec(), sold);
+    const plan = lib.planAsset(current, { token, enabled: true, decimals, symbol }, nowSec(), sold, await otherAssets(provider, shop, token));
     await checkTokenCode(provider, net, token, plan.args);
     ops.push(await shopC.encodeOperation({ name: "set_asset", args: plan.args }));
     what = plan.summary + ", and set small test prices";
@@ -1002,6 +1002,18 @@ async function cmdTestAsset(args) {
 }
 
 /** set-asset: the admin turns a payment token on (at once before the Shop's first sale, after 7 days later) or off (at once). */
+/** The Shop's other token records, { token, symbol }, for the one-symbol-per-token check (audit I-2). */
+async function otherAssets(provider, shop, token) {
+  const listed = await readOnly(provider, "shop", shop, "get_assets", {});
+  const out = [];
+  for (const t of listed.tokens || []) {
+    if (t === token) continue;
+    const a = await readOnly(provider, "shop", shop, "get_asset", { token: t });
+    out.push({ token: t, symbol: a.symbol || "" });
+  }
+  return out;
+}
+
 /** The token's code must be its pinned code before it is enabled (audit H-3). */
 async function checkTokenCode(provider, net, token, wanted) {
   let hash = null;
@@ -1025,7 +1037,7 @@ async function cmdSetAsset(args) {
   const { net, provider } = await connect(f);
   const current = await readOnly(provider, "shop", shop, "get_asset", { token });
   const sold = !!(await readOnly(provider, "shop", shop, "get_config", {})).sold;
-  const plan = lib.planAsset(current, { token, enabled, decimals: f.decimals, symbol: f.symbol }, nowSec(), sold);
+  const plan = lib.planAsset(current, { token, enabled, decimals: f.decimals, symbol: f.symbol }, nowSec(), sold, await otherAssets(provider, shop, token));
   if (enabled) await checkTokenCode(provider, net, token, plan.args);
   const signer = await getSigner(provider, admin, "the admin wallet");
   const op = await contractOf("shop", shop, provider).encodeOperation({ name: "set_asset", args: plan.args });

@@ -228,9 +228,10 @@ export function planFee(bps) {
  * Turn a payment token on or off. Turning one on needs its pin from config.js
  * PAYMENT_TOKENS (`pin`) and its code hash read from the chain (`codeHash`):
  * the code must be the pinned code, and the symbol and decimals the pinned
- * ones (audit H-3).
+ * ones (audit H-3). `others` are the Shop's other tokens, { address, symbol }:
+ * no two may share a symbol (audit I-2).
  */
-export function planAsset({ token, enabled, decimals, symbol, pin, codeHash }) {
+export function planAsset({ token, enabled, decimals, symbol, pin, codeHash, others }) {
   const t = requireAddress(token, "Token");
   if (!enabled) return call("shop", "set_asset", { token: t, enabled: false, decimals: 0, symbol: "" }, "Turn OFF payment token " + t);
   const d = whole(decimals, "Decimals", 0, 18);
@@ -240,6 +241,8 @@ export function planAsset({ token, enabled, decimals, symbol, pin, codeHash }) {
   if (!codeHash) fail("There is no token contract at " + t + ", or the node would not give its code hash.");
   if (codeHash !== pin.codeHash) fail("The code at " + t + " is not the pinned code (its issuer changed it). Review the new code and update the pin first.");
   if (s !== pin.symbol || Number(d) !== pin.decimals) fail("This token is pinned as " + pin.symbol + " with " + pin.decimals + " decimals.");
+  const clash = (others || []).find((o) => o.address !== t && String(o.symbol || "").toLowerCase() === s.toLowerCase());
+  if (clash) fail("The Shop already has a token called " + clash.symbol + " (" + clash.address + "). Use another symbol.");
   return call("shop", "set_asset", { token: t, enabled: true, decimals: Number(d), symbol: s },
     "Turn ON payment token " + s + " (" + t + ", " + d + " decimals). After the Shop's first sale, a newly enabled token waits 7 days.");
 }
@@ -272,8 +275,8 @@ export const RATE_ITEMS = [
  * Add a payment token: turn it on, then set its prices, in one transaction.
  * `prices` maps item id to a price in whole tokens ("" = not for sale).
  */
-export function planAddToken({ token, symbol, decimals, prices, pin, codeHash }) {
-  const plans = [planAsset({ token, enabled: true, decimals, symbol, pin, codeHash })];
+export function planAddToken({ token, symbol, decimals, prices, pin, codeHash, others }) {
+  const plans = [planAsset({ token, enabled: true, decimals, symbol, pin, codeHash, others })];
   const d = Number(decimals);
   for (const item of SHOP_ITEMS) {
     const v = prices && prices[item.id] != null ? String(prices[item.id]).trim() : "";

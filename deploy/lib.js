@@ -1085,7 +1085,7 @@ function utcTime(sec) {
  * Re-enabling an enabled token is refused, so the wait is never restarted
  * by mistake. Returns { args, summary }.
  */
-function planAsset(current, wanted, nowSec, sold = true) {
+function planAsset(current, wanted, nowSec, sold = true, others = []) {
   const cur = current || {};
   const token = requireAddress(wanted.token, "token");
   if (!wanted.enabled) {
@@ -1098,6 +1098,9 @@ function planAsset(current, wanted, nowSec, sold = true) {
   const decimals = wholeInRange(wanted.decimals, "--decimals", 0, 18);
   const symbol = String(wanted.symbol || "");
   if (!/^[\x21-\x7e]{1,16}$/.test(symbol)) fail("--symbol must be 1 to 16 plain characters.");
+  // Two tokens with one display symbol would let a buyer pay with the wrong one (audit I-2).
+  const clash = others.find((o) => o.token !== token && String(o.symbol || "").toLowerCase() === symbol.toLowerCase());
+  if (clash) fail("The Shop already has a token called " + clash.symbol + " (" + clash.token + "). Use another symbol. Nothing was sent.");
   if (cur.enabled) {
     if (Number(cur.decimals) !== decimals || cur.symbol !== symbol) {
       fail("That token is enabled as " + cur.symbol + " with " + cur.decimals + " decimals; an enabled token's decimals and symbol " +

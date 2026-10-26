@@ -155,6 +155,11 @@ async function prepare(plans, ops, status) {
   return true;
 }
 
+/** The Shop's other tokens, for the one-symbol-per-token check (audit I-2). */
+function otherTokens(address) {
+  return ((admin.data && admin.data.tokens) || []).filter((t) => t.address !== address).map((t) => ({ address: t.address, symbol: t.symbol }));
+}
+
 function actionButton(text, getPlans, opts = {}) {
   const status = statusBox();
   const button = h("button", { type: "button", class: "btn " + (opts.danger ? "btn-danger" : "btn-primary") + " btn-small" }, [text]);
@@ -532,7 +537,7 @@ function tokensSection(d) {
       h("td", {}, [t.enabled
         ? actionButton("Turn off", () => planAsset({ token: t.address, enabled: false }), { danger: true })
         : actionButton("Turn on", async () => planAsset({ token: t.address, enabled: true, decimals: t.decimals, symbol: t.symbol,
-          pin: pinnedToken(t.address), codeHash: await codeHashOf(t.address) }))]),
+          pin: pinnedToken(t.address), codeHash: await codeHashOf(t.address), others: otherTokens(t.address) }))]),
     ])),
   ]);
 
@@ -583,7 +588,7 @@ function tokensSection(d) {
     for (const item of SHOP_ITEMS) p[item.id] = prices[item.id].value;
     const token = addr.value.trim();
     return planAddToken({ token, symbol: symbol.value, decimals: decimals.value, prices: p,
-      pin: pinnedToken(token), codeHash: await codeHashOf(token) });
+      pin: pinnedToken(token), codeHash: await codeHashOf(token), others: otherTokens(token) });
   });
   return section("Payment tokens", "Tokens buyers can pay with. Buyers pick one on the Membership and Open pages. After the Shop's first sale, a newly added token can be used only 7 days later (everyone can see it coming). Turning one off works at once.", [
     list,

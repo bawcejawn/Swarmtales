@@ -158,8 +158,10 @@ export function configProblems() {
       problems.push("Each PAYMENT_TOKENS entry needs an address, a symbol, decimals (0 to 18) and a 64-character lowercase hex code hash.");
       continue;
     }
-    if (seen.has(t.address)) problems.push("PAYMENT_TOKENS lists " + t.address + " twice.");
+    // One display symbol per token, so a buyer can't pay with the wrong one (audit I-2).
+    if (seen.has(t.address) || seen.has(t.symbol.toLowerCase())) problems.push("PAYMENT_TOKENS lists " + t.address + " or the symbol " + t.symbol + " twice.");
     seen.add(t.address);
+    seen.add(t.symbol.toLowerCase());
   }
   const pin = pinnedToken(contracts.paymentToken);
   if (!pin) problems.push("paymentToken must be pinned, with its code hash, in PAYMENT_TOKENS." + ACTIVE + ".");
