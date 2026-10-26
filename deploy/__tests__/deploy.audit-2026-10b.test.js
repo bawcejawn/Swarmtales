@@ -227,11 +227,18 @@ const TKOIN_CODE = "4251a6e9d9c9a37f3bbf67e171f63a7dcad62309e4be7d9da85a74f68520
 const ADMIN = KEY1;
 
 /** A node for set-asset: the Shop's records, and each address's code hash ("" = no contract). */
-function assetNode({ records = {}, code = {} } = {}) {
+function assetNode({ records = {}, code = {}, info = { [TKOIN]: { decimals: 8, symbol: "tKOIN" } } } = {}) {
   const node = fakeNode();
   const shopAbi = ABI("shop");
   class AssetProvider extends node.FakeProvider {
     async readContract(call) {
+      if (info[call.contract_id]) {
+        // The token's own decimals() and symbol() (audit L-9).
+        const t = new koilib.Contract({ id: call.contract_id, abi: koilib.utils.tokenAbi });
+        const { name } = await t.decodeOperation({ call_contract: call });
+        const value = { value: info[call.contract_id][name] };
+        return { result: koilib.utils.encodeBase64url(await t.serializer.serialize(value, t.abi.methods[name].return)) };
+      }
       const c = new koilib.Contract({ id: call.contract_id, abi: shopAbi });
       const { name, args } = await c.decodeOperation({ call_contract: call });
       let value;
@@ -421,4 +428,19 @@ test("L-3: takedown says to hide the part first when it isn't hidden, before any
   assert.ok(body.indexOf("lib.takedownHideFirst(") > 0 && body.indexOf("lib.takedownHideFirst(") < body.indexOf("getSigner("));
   // The live text of a part is printed with control characters made visible (H-2's rule).
   assert.match(body, /lib\.terminalSafe\(JSON\.stringify\(String\(seg\.text/);
+});
+
+// ---------------------------------------------------------------- L-9
+
+test("L-9: set-asset reads the token's own decimals and symbol and refuses typed values that differ", async () => {
+  // The pin says tKOIN / 8; a token that answers 6 decimals is refused, so is another symbol.
+  let node = assetNode({ code: { [TKOIN]: TKOIN_CODE }, info: { [TKOIN]: { decimals: 6, symbol: "tKOIN" } } });
+  let r = await run(setAsset([]), { node, answers: ["SEND"], secret: ADMIN.getPrivateKey("wif") });
+  assert.match(r.error.message, /says it has 6 decimals, not 8/);
+  assert.deepStrictEqual(node.log.sent, []);
+  node = assetNode({ code: { [TKOIN]: TKOIN_CODE }, info: { [TKOIN]: { decimals: 8, symbol: "KOIN" } } });
+  r = await run(setAsset([]), { node, answers: ["SEND"], secret: ADMIN.getPrivateKey("wif") });
+  assert.match(r.error.message, /calls itself "KOIN", not "tKOIN"/);
+  assert.throws(() => lib.checkTokenInfo(TKOIN, { decimals: 8, symbol: "tKOIN" }, { decimals: NaN, symbol: "tKOIN" }), /decimals/);
+  assert.doesNotThrow(() => lib.checkTokenInfo(TKOIN, { decimals: "8", symbol: "tKOIN" }, { decimals: 8, symbol: "tKOIN" }));
 });

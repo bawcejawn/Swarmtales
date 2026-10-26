@@ -1023,6 +1023,7 @@ async function cmdTestAsset(args) {
     const sold = !!(await readOnly(provider, "shop", shop, "get_config", {})).sold;
     const plan = lib.planAsset(current, { token, enabled: true, decimals, symbol }, nowSec(), sold, await otherAssets(provider, shop, token));
     await checkTokenCode(provider, net, token, plan.args);
+    await checkTokenInfo(provider, token, plan.args);
     ops.push(await shopC.encodeOperation({ name: "set_asset", args: plan.args }));
     what = plan.summary + ", and set small test prices";
   }
@@ -1045,6 +1046,25 @@ async function otherAssets(provider, shop, token) {
     out.push({ token: t, symbol: a.symbol || "" });
   }
   return out;
+}
+
+/**
+ * The token's own decimals() and symbol() must be what --decimals and
+ * --symbol say (audit L-9): prices are stored in the token's base units, so
+ * a typed decimals value off by two would price everything 100x off.
+ */
+async function checkTokenInfo(provider, token, wanted) {
+  const { Contract, utils } = koilib();
+  const c = new Contract({ id: token, abi: utils.tokenAbi, provider });
+  let decimals;
+  let symbol;
+  try {
+    decimals = Number(((await c.functions.decimals({})).result || {}).value);
+    symbol = String(((await c.functions.symbol({})).result || {}).value || "");
+  } catch (e) {
+    lib.fail("Could not read the token's decimals and symbol from " + token + " (" + (e && e.message ? e.message : String(e)) + "). Nothing was sent.");
+  }
+  lib.checkTokenInfo(token, wanted, { decimals, symbol });
 }
 
 /** The token's code must be its pinned code before it is enabled (audit H-3). */
@@ -1071,7 +1091,10 @@ async function cmdSetAsset(args) {
   const current = await readOnly(provider, "shop", shop, "get_asset", { token });
   const sold = !!(await readOnly(provider, "shop", shop, "get_config", {})).sold;
   const plan = lib.planAsset(current, { token, enabled, decimals: f.decimals, symbol: f.symbol }, nowSec(), sold, await otherAssets(provider, shop, token));
-  if (enabled) await checkTokenCode(provider, net, token, plan.args);
+  if (enabled) {
+    await checkTokenCode(provider, net, token, plan.args);
+    await checkTokenInfo(provider, token, plan.args);
+  }
   const signer = await getSigner(provider, admin, "the admin wallet");
   const op = await contractOf("shop", shop, provider).encodeOperation({ name: "set_asset", args: plan.args });
   const txId = await dryRunThenSend(signer, provider, net, [op], "shop.set_asset: " + plan.summary);

@@ -873,6 +873,18 @@ function checkTokenPins(pins) {
 }
 checkTokenPins(TOKEN_PINS);
 
+/** --decimals and --symbol must be the token's own (audit L-9). */
+function checkTokenInfo(token, wanted, onChain) {
+  if (!Number.isInteger(onChain.decimals) || Number(wanted.decimals) !== onChain.decimals) {
+    fail("Token " + token + " says it has " + onChain.decimals + " decimals, not " + wanted.decimals + ". Prices are in its base units, so " +
+      "this must match. Nothing was sent.");
+  }
+  if (String(wanted.symbol) !== onChain.symbol) {
+    fail("Token " + token + " calls itself " + JSON.stringify(onChain.symbol) + ", not " + JSON.stringify(String(wanted.symbol)) +
+      ". Use its own symbol. Nothing was sent.");
+  }
+}
+
 /**
  * Before a token is enabled (audit H-3): `hashHex` is its code hash from the
  * chain (codeHashFromMeta), null when there is no contract (or the node did
@@ -1769,6 +1781,7 @@ module.exports = {
   checkPinned,
   TOKEN_PINS,
   checkTokenCode,
+  checkTokenInfo,
   checkPinnedFlags,
   refuseCrossNetworkKey,
   parseReleaseHashes,
