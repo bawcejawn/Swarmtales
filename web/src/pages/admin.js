@@ -21,6 +21,7 @@ import { formatUtc } from "../lib/money.js";
 import { append, h, replace } from "../ui/dom.js";
 import { currentAddress, state } from "../app/state.js";
 import { send } from "../app/send.js";
+import { renderPage } from "../app/shell.js";
 import { connectButton, failure, field, loadingLine, notice, setMeta, statusBox } from "../app/ui.js";
 
 const CONTRACT_LABEL = { ink: "Ink", shop: "Shop", stories: "Stories", sponsor: "Mana sponsor" };
@@ -79,7 +80,7 @@ function reload() {
     .catch((e) => { admin.error = e && e.message ? e.message : String(e); })
     .finally(() => {
       admin.loading = false;
-      if (location.hash.startsWith("#/admin")) import("../app/shell.js").then((m) => m.renderPage());
+      if (location.hash.startsWith("#/admin")) renderPage();
     });
 }
 

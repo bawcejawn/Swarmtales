@@ -6,13 +6,12 @@ import { listStories, loadAccount, loadOverview, loadSegment, read, writerFlags 
 import { explainFailure } from "../lib/errors.js";
 import { currentAddress, state } from "./state.js";
 import { checkPayment } from "./payment.js";
-import { renderChip } from "./shell.js";
+import { renderChip, renderPage } from "./shell.js";
 
 /** After the buyer picks another payment token: prices, balance, page. */
 export async function switchPaymentToken() {
   await reloadOverview();
   if (currentAddress()) await refreshAccount();
-  const { renderPage } = await import("./shell.js");
   renderPage();
 }
 

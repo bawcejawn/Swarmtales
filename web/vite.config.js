@@ -89,6 +89,20 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
     target: "es2020",
+    rollupOptions: {
+      output: {
+        // The libraries in their own files, so the site's own code stays small
+        // and a site update doesn't make browsers download them again.
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (/[\\/]node_modules[\\/]koilib[\\/]/.test(id)) return "koilib";
+          if (/[\\/]node_modules[\\/]google-protobuf[\\/]/.test(id)) return "google-protobuf";
+          if (/[\\/]node_modules[\\/](protobufjs|@protobufjs|long)[\\/]/.test(id)) return "protobuf";
+          if (/[\\/]node_modules[\\/](@noble|@scure|bs58|base-x|multibase|multiformats)/.test(id)) return "crypto";
+          return "vendor";
+        },
+      },
+    },
   },
   server: {
     host: "127.0.0.1",
