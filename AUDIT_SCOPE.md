@@ -1,9 +1,13 @@
 # Audit scope
 
-For the independent auditor. This is the version we intend to deploy: branch
-`audit-2026-10-fixes`, the fixes for the 2026-10 mainnet audit (report "SwarmTales Mainnet Audit —
-audit-2026-10 (16de9dc)"). A targeted re-audit of the diff from `16de9dc` is what is asked for; the
-finding-by-finding status is in `docs/AUDIT_2026_10_STATUS.md`.
+For the independent auditor. This is the version we intend to deploy: the `main` branch, into which
+the fixes for the 2026-10 mainnet audit (report "SwarmTales Mainnet Audit — audit-2026-10 (16de9dc)")
+were merged on 25 October 2026 (pull request #25, branch `audit-2026-10-fixes`; this note was updated
+in pull request #26, documentation only). What is asked for: a re-audit of the diff from `16de9dc`,
+**plus a full review of everything added since that audit** (listed under "New since the audit"
+below: the mana sponsor, the multisig wallet, the Poem story kind, several payment tokens, the admin
+page and the deploy tool's multisig signing). The finding-by-finding status is in
+`docs/AUDIT_2026_10_STATUS.md`.
 
 ## What SwarmTales is
 
@@ -69,7 +73,7 @@ Toolchain used for the figures below: Node.js 22.22.0, npm 10, Yarn 1.22.22 (via
 from the lockfiles, AssemblyScript 0.19.23.
 
 ```sh
-git clone --branch audit-2026-10-fixes https://github.com/bawcejawn/Swarmtales.git
+git clone https://github.com/bawcejawn/Swarmtales.git
 cd Swarmtales
 
 # Ink (repo root), then Stories, then Shop: build the release before testing
@@ -90,7 +94,7 @@ cd ../web && npm ci && npm test
 cd .. && node --test "checker/__tests__/*.test.mjs" "deploy/__tests__/*.test.js"
 ```
 
-Expected release sha256 (verified from a fresh clone of this branch):
+Expected release sha256 (verified from a fresh clone; the contracts are the same on `main`):
 
 | Contract | sha256 of `build/release/contract.wasm` |
 |---|---|
