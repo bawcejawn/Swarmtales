@@ -23,6 +23,7 @@ import {
   vaultPairingDecision,
   vaultRequest,
   vaultRequestStatus,
+  vaultWaitDeadline,
   vaultStatus,
   vaultTransactionMismatch,
 } from "./lib/vaultApi.js";
@@ -362,7 +363,8 @@ export function createVaultWallet(pageNetwork) {
       credentials = { sessionId: saved.sessionId, secret: saved.secret };
       expiresAt = saved.expiresAt || 0;
       pairingUri = uri;
-      address = saved.address || null;
+      // Only a real address from storage (audit I-17); poll() confirms it with Vault.
+      address = typeof saved.address === "string" && /^1[1-9A-HJ-NP-Za-km-z]{25,34}$/.test(saved.address) ? saved.address : null;
       await poll();
     },
     signAndSend: async (operations, hooks) => {
@@ -383,7 +385,8 @@ export function createVaultWallet(pageNetwork) {
         });
       }
       let sawSubmitting = false;
-      const deadline = created.expiresAt;
+      // Vault names the expiry; this page also stops on its own clock (audit I-17).
+      const deadline = vaultWaitDeadline(created.expiresAt, Date.now());
       while (Date.now() < deadline + 5000) {
         let status;
         try {

@@ -236,10 +236,27 @@ async function authedCall(path, fields, credentials, fetchImpl) {
   return json;
 }
 
+// A Koinos address, as KOIN Vault must report the connected account (audit I-17).
+const VAULT_ADDRESS_RE = /^1[1-9A-HJ-NP-Za-km-z]{25,34}$/;
+
+/**
+ * The longest this page waits for one KOIN Vault request, whatever expiry
+ * Vault names (audit I-17): 15 minutes.
+ */
+export const VAULT_MAX_WAIT_MS = 15 * 60 * 1000;
+
+/** When to stop waiting for a request Vault says expires at expiresAt (ms), from now (ms). */
+export function vaultWaitDeadline(expiresAt, now) {
+  return Math.min(Number(expiresAt) || 0, now + VAULT_MAX_WAIT_MS);
+}
+
 export async function vaultStatus(credentials, fetchImpl) {
   const json = await authedCall("status", {}, credentials, fetchImpl);
   if (typeof json.connected !== "boolean" || typeof json.expiresAt !== "number") {
     throw new VaultError("KOIN Vault returned an unexpected status.");
+  }
+  if (json.address != null && json.address !== "" && (typeof json.address !== "string" || !VAULT_ADDRESS_RE.test(json.address))) {
+    throw new VaultError("KOIN Vault returned an account that is not a Koinos address.");
   }
   return {
     connected: json.connected,
