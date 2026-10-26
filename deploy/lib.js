@@ -1289,6 +1289,29 @@ function isConfirmation(answer, word) {
 const PREPARED_FORMAT = "swarmtales-prepared-transaction/1";
 const PREPARED_HEADER_KEYS = ["chain_id", "rc_limit", "nonce", "operation_merkle_root", "payer", "payee"];
 const PREPARED_MAX_OPS = 64;
+// The commands that write a prepared file: deploy.js's --prepare commands and
+// the admin page. cosign and submit refuse any other name (audit H-2).
+const PREPARED_COMMANDS = [
+  "multisig-signers", "set-admin", "accept-admin", "pause", "unpause", "wire", "set-asset", "set-price", "set-ink-amounts",
+  "test-asset", "promo-new", "promo-on", "promo-off", "promo-end", "wire-stories", "stories-limits", "set-terms",
+  "set-moderation", "hide", "takedown", "replace-pdf", "block", "clear-summary", "admin-page",
+];
+// prepared_at as new Date().toISOString() writes it.
+const PREPARED_AT_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/;
+
+/**
+ * Text safe to print in a terminal (audit H-2): every control character
+ * (C0, DEL, C1, which includes the 8-bit CSI) and every bidirectional
+ * override is shown as a visible \u{..} escape instead of being sent to the
+ * terminal, so nothing in a prepared file can hide or redraw lines.
+ */
+function terminalSafe(text) {
+  return String(text).replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
+    (c) => "\\u{" + c.charCodeAt(0).toString(16) + "}");
+}
+
+/** Undo any colour, hidden-text or cursor state left in the terminal, before the operations are shown. */
+const TERMINAL_RESET = "\u001b[0m\u001b[?25h";
 // Mana limit for a prepared transaction unless --rc-limit is given (never above what the payer has).
 // Mana limit of a prepared transaction unless --rc-limit is given: 1 mana. Admin
 // calls use under 0.1 (measured on testnet, 25 Oct 2026: accept_admin 0.09, a
@@ -1369,6 +1392,11 @@ function checkNeeds(needs) {
 async function verifyPrepared(file, net, deps) {
   const { Transaction, Contract } = deps.koilib;
   if (!file || file.format !== PREPARED_FORMAT) fail("That is not a SwarmTales prepared transaction file.");
+  // The two free-text fields the summary prints (audit H-2).
+  if (!PREPARED_COMMANDS.includes(file.command)) fail("The file names an unknown command. It was changed or is not from this tool. Nothing was signed.");
+  if (typeof file.prepared_at !== "string" || !PREPARED_AT_RE.test(file.prepared_at) || Number.isNaN(Date.parse(file.prepared_at))) {
+    fail("The file's preparation time is not in the expected format. It was changed or is not from this tool. Nothing was signed.");
+  }
   if (file.network !== net.key) {
     fail("That file is for " + file.network + ", but this run is on " + net.key + ". Use --network " + file.network +
       (file.network === "mainnet" ? " " + MAINNET_FLAG : "") + ". Nothing was signed.");
@@ -1442,7 +1470,7 @@ function preparedSummary(net, file, checked, signedBy) {
   const h = checked.tx.header;
   const lines = [
     "Network:   " + net.name + " (chain id checked)",
-    "Prepared:  " + (file.prepared_at || "?") + " by the '" + (file.command || "?") + "' command",
+    "Prepared:  " + file.prepared_at + " by the '" + file.command + "' command",
     "Payer:     " + h.payer + "  (pays the mana)" + (h.payee ? "\nPayee:     " + h.payee + "  (its nonce is used)" : ""),
     "Nonce:     " + nonceNumber(h.nonce) + "  (of " + (h.payee || h.payer) + "; only one transaction can use it)",
     "Mana limit:" + " " + formatMana(h.rc_limit),
@@ -1463,7 +1491,12 @@ function preparedSummary(net, file, checked, signedBy) {
     }
   }
   lines.push("Signatures so far: " + (signedBy.length ? signedBy.join(", ") : "none"));
-  return lines;
+  return lines.map(terminalSafe);
+}
+
+/** What the SIGN prompt repeats: each operation's contract, address and method (audit H-2). */
+function preparedTargets(checked) {
+  return checked.ops.map((o, i) => terminalSafe((i + 1) + ". " + o.contract + " " + o.contractId + " ." + o.method));
 }
 
 module.exports = {
@@ -1558,6 +1591,10 @@ module.exports = {
   newLinkKeyHex,
   toKoilibAbi,
   PREPARED_FORMAT,
+  PREPARED_COMMANDS,
+  TERMINAL_RESET,
+  terminalSafe,
+  preparedTargets,
   DEFAULT_PREPARED_RC,
   nonceNumber,
   preparedFile,

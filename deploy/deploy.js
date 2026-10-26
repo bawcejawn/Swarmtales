@@ -610,10 +610,13 @@ async function cmdCosign(args) {
   const checked = await lib.verifyPrepared(data, net, verifyDeps(args.flags));
   const signedBy = await signersOf(checked.tx);
   console.log("");
-  for (const w of checked.warnings) console.log(w);
+  if (process.stdout.isTTY) process.stdout.write(lib.TERMINAL_RESET);
+  for (const w of checked.warnings) console.log(lib.terminalSafe(w));
   for (const line of lib.preparedSummary(net, data, checked, signedBy)) console.log(line);
   console.log("");
   console.log("Read every operation above. Sign only if it is exactly what the admins agreed to do.");
+  console.log("You are signing, paid by " + checked.tx.header.payer + ":");
+  for (const line of lib.preparedTargets(checked)) console.log("  " + line);
   const answer = await readLine("Type SIGN (capital letters) to add your signature, or anything else to stop: ");
   if (!lib.isConfirmation(answer, "SIGN")) lib.fail("Stopped. Nothing was signed.");
   const signer = await readKey();
@@ -670,7 +673,8 @@ async function cmdSubmit(args) {
     }
   }
   console.log("");
-  for (const w of checked.warnings) console.log(w);
+  if (process.stdout.isTTY) process.stdout.write(lib.TERMINAL_RESET);
+  for (const w of checked.warnings) console.log(lib.terminalSafe(w));
   for (const line of lib.preparedSummary(net, base, checked, unique)) console.log(line);
   const payer = tx.header.payer;
   let payerIsContract = false;

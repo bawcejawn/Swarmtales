@@ -1,0 +1,156 @@
+// Re-audit of main 98230a7 (docs/AUDIT_2026_10B_PLAN.md): the deploy tool's
+// fixes. No network and no real keys: commands run in-process against a fake
+// node, with keys derived from public test labels (never funded).
+// Run: node --test deploy/__tests__/*.test.js
+"use strict";
+const test = require("node:test");
+const assert = require("node:assert");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const koilib = require("koilib");
+const lib = require("../lib");
+const deploy = require("../deploy");
+
+const REPO = path.join(__dirname, "..", "..");
+const TESTNET = lib.NETWORKS.testnet;
+const INK = "1DdeLhBvZdMJtBUNZBEobkDPJ2jAu9BFCz";
+const SHOP = "1C72FDL8NV3MHG7urVgXyvLBjMoC2WPJc6";
+const STORIES = "16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt";
+const TOKEN = "1NRNShd6oHh1JCxfbnWj47PrgqvqeyK7w1";
+const KEY1 = koilib.Signer.fromSeed("swarmtales test signer 1");
+const KEY2 = koilib.Signer.fromSeed("swarmtales test signer 2");
+const KEY3 = koilib.Signer.fromSeed("swarmtales test signer 3");
+const MULTISIG = koilib.Signer.fromSeed("swarmtales test multisig").getAddress();
+const PAYER = koilib.Signer.fromSeed("swarmtales test mana payer");
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
+
+const ABI = (target) => lib.toKoilibAbi(JSON.parse(fs.readFileSync(path.join(REPO, target === "ink" ? "abi" : target, "abi", target + ".abi"), "utf8")));
+
+/** A fake node. `reads` maps "contract.method" to a result; `contractAccounts` have code. */
+function fakeNode(opts = {}) {
+  const log = { sent: [] };
+  const byAddr = { [INK]: "ink", [SHOP]: "shop", [STORIES]: "stories", [MULTISIG]: "multisig" };
+  class FakeProvider {
+    async getChainId() { return TESTNET.chainId; }
+    async getAccountRc() { return "1000000000"; }
+    async call(method, params) {
+      if (method === "mempool.get_reserved_account_rc") return { rc: "0" };
+      if (method === "contract_meta_store.get_contract_meta") {
+        if (opts.metaFails) throw new Error("node down");
+        return (opts.contractAccounts || []).includes(params.contract_id) ? { meta: { abi: "" } } : {};
+      }
+      throw new Error("unexpected node call " + method);
+    }
+    async getNextNonce() { return "KAU="; }
+    async readContract(call) {
+      const target = byAddr[call.contract_id];
+      const value = (opts.reads || {})[target + ".get_config"];
+      if (!target || value === undefined) throw new Error("no fake read");
+      const c = new koilib.Contract({ id: call.contract_id, abi: ABI(target) });
+      return { result: koilib.utils.encodeBase64url(await c.serializer.serialize(value, c.abi.methods.get_config.return)) };
+    }
+    async sendTransaction(tx, broadcast) {
+      log.sent.push({ tx: JSON.parse(JSON.stringify(tx)), broadcast });
+      return { receipt: { rc_used: "1000", reverted: false, logs: [] }, transaction: tx };
+    }
+    async wait() { return { blockNumber: 7 }; }
+  }
+  return { FakeProvider, log };
+}
+
+async function run(argv, { node, answers = [], secret } = {}) {
+  const out = [];
+  const origLog = console.log;
+  const origSecret = process.env[lib.SECRET_ENV];
+  console.log = (...a) => out.push(a.join(" "));
+  if (secret) process.env[lib.SECRET_ENV] = secret;
+  else delete process.env[lib.SECRET_ENV];
+  Object.assign(deploy.seams, { Provider: node ? node.FakeProvider : null, readLine: () => answers.shift(), releaseHashes: null });
+  try {
+    await deploy.main(argv);
+    return { out: out.join("\n") };
+  } catch (e) {
+    if (e instanceof deploy.Prepared) return { prepared: true, out: out.join("\n") };
+    return { error: e, out: out.join("\n") };
+  } finally {
+    console.log = origLog;
+    if (origSecret === undefined) delete process.env[lib.SECRET_ENV];
+    else process.env[lib.SECRET_ENV] = origSecret;
+    Object.assign(deploy.seams, { Provider: null, readLine: null, releaseHashes: null });
+  }
+}
+
+function tmpFile(name) {
+  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), "swarmtales-10b-")), name);
+}
+
+const MS_READS = { multisig: MULTISIG, reads: { "multisig.get_config": { signers: [KEY1.getAddress(), KEY2.getAddress(), KEY3.getAddress()], threshold: 2 } } };
+
+async function preparePause(file, extra = [], nodeOpts = MS_READS) {
+  return run(["pause", "stories", "--contract", STORIES, "--admin", MULTISIG, "--prepare", file, ...extra], { node: fakeNode(nodeOpts) });
+}
+
+// ---------------------------------------------------------------- H-2
+
+test("H-2: a prepared file whose command or prepared_at holds a control code (or anything unexpected) is refused", async () => {
+  const file = tmpFile("h2.json");
+  const r = await preparePause(file);
+  assert.ok(r.prepared, r.error && r.error.message);
+  const good = fs.readFileSync(file, "utf8");
+  const ESC = "\u001b";
+  const cases = [
+    ["command with ESC", (d) => { d.command = "pause" + ESC + "[8m"; }, /unknown command/],
+    ["command hiding text", (d) => { d.command = ESC + "[8m\n1. stories ... set_paused {\"paused\":true}"; }, /unknown command/],
+    ["unknown command", (d) => { d.command = "set-anything"; }, /unknown command/],
+    ["missing command", (d) => { delete d.command; }, /unknown command/],
+    ["prepared_at with ESC", (d) => { d.prepared_at = d.prepared_at + ESC + "[8m"; }, /preparation time/],
+    ["prepared_at with C1 CSI", (d) => { d.prepared_at = "\u009b8m"; }, /preparation time/],
+    ["prepared_at not ISO", (d) => { d.prepared_at = "yesterday"; }, /preparation time/],
+    ["prepared_at impossible date", (d) => { d.prepared_at = "2026-13-45T25:61:61.000Z"; }, /preparation time/],
+    ["prepared_at missing", (d) => { delete d.prepared_at; }, /preparation time/],
+  ];
+  for (const [label, change, why] of cases) {
+    const d = JSON.parse(good);
+    change(d);
+    fs.writeFileSync(file, JSON.stringify(d));
+    const c = await run(["cosign", file], { answers: ["SIGN"], secret: KEY1.getPrivateKey("wif") });
+    assert.ok(c.error, label + " was accepted");
+    assert.match(c.error.message, why, label);
+    assert.doesNotMatch(c.out, CONTROL, label + ": a control character reached the terminal");
+  }
+});
+
+test("H-2: every deploy.js --prepare command and the admin page are known command names", () => {
+  for (const [name, cmd] of Object.entries(deploy.COMMANDS)) {
+    if (cmd.prepare) assert.ok(lib.PREPARED_COMMANDS.includes(name), name);
+  }
+  assert.ok(lib.PREPARED_COMMANDS.includes("admin-page"));
+  assert.ok(!lib.PREPARED_COMMANDS.includes("cosign"));
+});
+
+test("H-2: the printed summary carries no control characters, even from decoded arguments", () => {
+  const net = TESTNET;
+  const file = { prepared_at: "2026-10-25T12:00:00.000Z", command: "set-terms" };
+  const checked = {
+    tx: { id: "0x1220ab", header: { payer: MULTISIG, nonce: "KAU=", rc_limit: "100000000" } },
+    ops: [{ contract: "stories", contractId: STORIES, method: "set_terms", description: "Set the terms",
+      args: { version: 2, terms_uri: "https://x/\u001b[8m\u009b2J\u202eevil\u0007" } }],
+    needs: { account: MULTISIG, signers: [KEY1.getAddress(), KEY2.getAddress(), KEY3.getAddress()], threshold: 2, newSigners: [] },
+  };
+  const lines = lib.preparedSummary(net, file, checked, []);
+  for (const line of lines) assert.doesNotMatch(line, CONTROL, line);
+  assert.ok(lines.some((l) => l.includes("\\u{9b}2J") && l.includes("\\u{202e}evil")), "the C1 CSI and the bidi override are shown, visibly");
+  assert.ok(lib.terminalSafe("ok \u202e").endsWith("\\u{202e}"));
+});
+
+test("H-2: cosign resets the terminal state and repeats the target contract and method at the SIGN prompt", async () => {
+  const file = tmpFile("prompt.json");
+  await preparePause(file);
+  const r = await run(["cosign", file], { answers: ["no"], secret: KEY1.getPrivateKey("wif") });
+  assert.match(r.error.message, /Nothing was signed/);
+  assert.match(r.out, /You are signing, paid by \S+:\n {2}1\. stories 16adhn\S* \.set_paused$/m);
+  assert.ok(lib.TERMINAL_RESET.includes("\u001b[0m"), "attributes (hidden text, colours) are reset");
+  const src = fs.readFileSync(path.join(__dirname, "..", "deploy.js"), "utf8");
+  assert.ok((src.match(/process\.stdout\.write\(lib\.TERMINAL_RESET\)/g) || []).length >= 2, "cosign and submit print the reset");
+});
