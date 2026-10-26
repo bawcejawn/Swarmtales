@@ -23,6 +23,7 @@ const KEY2 = koilib.Signer.fromSeed("swarmtales test signer 2");
 const KEY3 = koilib.Signer.fromSeed("swarmtales test signer 3");
 const MULTISIG = koilib.Signer.fromSeed("swarmtales test multisig").getAddress();
 const PAYER = koilib.Signer.fromSeed("swarmtales test mana payer");
+const BOB_ADDR = "1NJrBLUNiGRU66FNu1VmaTNsm8qs7ADXyf";
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
 
 const ABI = (target) => lib.toKoilibAbi(JSON.parse(fs.readFileSync(path.join(REPO, target === "ink" ? "abi" : target, "abi", target + ".abi"), "utf8")));
@@ -386,4 +387,24 @@ test("L-11: submit re-reads the account's next nonce and refuses a file for a us
   node = fakeNode({ ...MS_READS, contractAccounts: [MULTISIG] });
   r = await run(["submit", file], { node, answers: ["SEND"] });
   assert.ifError(r.error);
+});
+
+// ---------------------------------------------------------------- L-10
+
+test("L-10: submit shows what a whole-settings setter changes, against the chain now", async () => {
+  const MOD = koilib.Signer.fromSeed("swarmtales test moderator").getAddress();
+  const reads = (cfg) => ({ multisig: MULTISIG, contractAccounts: [MULTISIG], reads: { ...MS_READS.reads, "stories.get_config": cfg } });
+  const file = tmpFile("moderation.json");
+  // Prepared while the threshold is 3 and the strike limit 5; only the moderator changes.
+  let r = await run(["set-moderation", "--admin", MULTISIG, "--stories", STORIES, "--moderator", MOD, "--prepare", file],
+    { node: fakeNode(reads({ moderator: BOB_ADDR, report_threshold: 3, strike_limit: 5 })) });
+  assert.ok(r.prepared, r.error && r.error.message);
+  for (const k of [KEY1, KEY2]) assert.ifError((await run(["cosign", file], { answers: ["SIGN"], secret: k.getPrivateKey("wif") })).error);
+  // Meanwhile someone raised the threshold to 4: submit shows the file would put it back.
+  const node = fakeNode(reads({ moderator: BOB_ADDR, report_threshold: 4, strike_limit: 5 }));
+  r = await run(["submit", file], { node, answers: ["no"] });
+  assert.match(r.out, /stories\.set_moderation sets every one of these/);
+  assert.match(r.out, /report_threshold: 4 -> 3 {3}CHANGES/);
+  assert.match(r.out, /strike_limit: 5 \(unchanged\)/);
+  assert.ok(r.out.includes("moderator: " + BOB_ADDR + " -> " + MOD));
 });

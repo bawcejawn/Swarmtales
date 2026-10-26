@@ -738,6 +738,19 @@ async function cmdSubmit(args) {
     lib.fail("The payer has " + lib.formatMana(mana.free.toString()) + " mana free, less than this transaction's limit of " +
       lib.formatMana(tx.header.rc_limit) + ". Wait for it to refill (or add KOIN), then submit again. Nothing was sent.");
   }
+  // Whole-settings setters: show what each field is now and what it will be
+  // (audit L-10), so a change made after the file was prepared isn't undone unseen.
+  for (const o of checked.ops.filter(lib.replacesSettings)) {
+    let cfg;
+    try {
+      cfg = await readOnly(provider, o.contract, o.contractId, "get_config", {});
+    } catch (e) {
+      lib.fail("Could not read " + o.contract + ".get_config to show what " + o.method + " changes. Nothing was sent.");
+    }
+    console.log("");
+    console.log(o.contract + "." + o.method + " sets every one of these. Now on chain -> after this transaction:");
+    for (const line of lib.settingsChanges(o, cfg)) console.log(lib.terminalSafe(line));
+  }
   console.log("");
   console.log("What will happen: the operations above, signed by " + unique.length + " wallet(s).");
   const receipt = await dryRun(provider, tx);

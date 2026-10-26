@@ -1616,6 +1616,43 @@ function newMultisigSigners(ops, needs) {
   return added;
 }
 
+// Setters that replace a whole group of settings at once (audit L-10): each
+// argument and the get_config field it replaces. A file prepared earlier
+// silently undoes any change made between prepare and submit, so submit
+// shows "now -> after" for each field before SEND.
+const CONFIG_SETTERS = {
+  "shop.set_ink_amounts": {
+    writer_month: "writer_ink", pack_s: "pack_s_ink", pack_m: "pack_m_ink", pack_l: "pack_l_ink",
+    starter_book: "starter_book", starter_short: "starter_short", starter_poem: "starter_poem",
+  },
+  "stories.set_moderation": { moderator: "moderator", report_threshold: "report_threshold", strike_limit: "strike_limit" },
+  "stories.set_limits": {
+    contribution_cap: "contribution_cap", trial_limit: "trial_limit", open_limit: "open_limit", archive_days: "archive_days",
+    inactivity_days: "inactivity_days", full_price_projects: "full_price_projects", max_price_multiplier: "max_price_multiplier",
+  },
+};
+
+/** True when `o` (a checked operation) replaces a group of settings. */
+function replacesSettings(o) {
+  return Object.prototype.hasOwnProperty.call(CONFIG_SETTERS, o.contract + "." + o.method);
+}
+
+/**
+ * "now -> after" lines for a settings setter, from the contract's current
+ * get_config `cfg`: each field, marked when the operation changes it.
+ */
+function settingsChanges(o, cfg) {
+  const fields = CONFIG_SETTERS[o.contract + "." + o.method];
+  const show = (v) => (v === undefined || v === null || v === "" ? "0" : String(v));
+  const lines = [];
+  for (const [arg, field] of Object.entries(fields)) {
+    const now = show(cfg && cfg[field]);
+    const after = show(o.args[arg]);
+    lines.push("  " + arg + ": " + now + (now === after ? " (unchanged)" : " -> " + after + "   CHANGES"));
+  }
+  return lines;
+}
+
 /** The human summary every signer reads before signing, and `submit` shows before sending. */
 function preparedSummary(net, file, checked, signedBy) {
   const h = checked.tx.header;
@@ -1757,6 +1794,8 @@ module.exports = {
   TERMINAL_RESET,
   terminalSafe,
   preparedTargets,
+  replacesSettings,
+  settingsChanges,
   DEFAULT_PREPARED_RC,
   preparedRcLimit,
   nonceNumber,
