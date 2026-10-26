@@ -10,10 +10,19 @@ signed by that wallet's own key, so there's no moment without signers. After set
 
 - every call, payment or code upload by the multisig needs `threshold` distinct current signers on
   the transaction (the wallet's own key no longer counts);
-- `set_signers` changes the signers or threshold with the current quorum; with 2 of 3 this
-  replaces a lost or leaked signer;
-- 2 to 10 signers, threshold at least 2 and at most the number of signers, no duplicates, valid
-  addresses (checksum checked), and the multisig can't be its own signer.
+- a call counts only when the contract asking for the multisig's authority was called straight from
+  the transaction. Contract code running inside a signed transaction (a contract wallet as fee
+  payer, or a contract that one of the operations calls) gets nothing (audit H-1);
+- `set_signers` changes the signers or threshold with the current quorum **and the signature of
+  every signer it adds** (proof they hold the key; audit L-16), and only straight from the
+  transaction. With 2 of 3 this replaces a lost or leaked signer;
+- 3 to 10 signers, threshold at least 2 and **less than** the number of signers (so one lost key
+  never locks the wallet), no duplicates, valid addresses (checksum checked), and the multisig
+  can't be its own signer.
+
+What the signatures cover: the signers approve the whole transaction, so every operation in it
+and its payer. The multisig doesn't narrow that further; the deploy tool shows every decoded
+operation before anyone signs, and refuses a contract wallet as payer for a multisig transaction.
 
 The deploy tool's `--prepare` / `cosign` / `submit` flow collects the signatures.
 

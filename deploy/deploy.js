@@ -621,8 +621,8 @@ async function cmdCosign(args) {
   lib.refuseCrossNetworkKey(net, me);
   if (signedBy.includes(me)) lib.fail(me + " has already signed this transaction. Nothing was changed.");
   const needs = checked.needs;
-  if (needs && !needs.signers.includes(me) && me !== checked.tx.header.payer) {
-    lib.fail("That key is for " + me + ", which is not one of the signers this transaction needs:\n  " + needs.signers.join("\n  ") +
+  if (needs && !needs.signers.includes(me) && !needs.newSigners.includes(me) && me !== checked.tx.header.payer) {
+    lib.fail("That key is for " + me + ", which is not one of the signers this transaction needs:\n  " + needs.signers.concat(needs.newSigners).join("\n  ") +
       "\nPaste one of their keys instead (a contract wallet's or the admin's key doesn't count). Nothing was signed.");
   }
   await signer.signTransaction(checked.tx);
@@ -651,8 +651,10 @@ async function cmdSubmit(args) {
   const tx = Object.assign({}, checked.tx, { signatures });
   const signedBy = await signersOf(tx);
   const needs = checked.needs;
-  // Each signer once; with a known signer list, only its signers and the payer.
-  const keep = (who, i) => signedBy.indexOf(who) === i && (!needs || needs.signers.includes(who) || who === tx.header.payer);
+  // Each signer once; with a known signer list, only its signers, the new
+  // signers a set_signers adds, and the payer.
+  const keep = (who, i) => signedBy.indexOf(who) === i &&
+    (!needs || needs.signers.includes(who) || needs.newSigners.includes(who) || who === tx.header.payer);
   tx.signatures = signatures.filter((s, i) => keep(signedBy[i], i));
   const unique = [...new Set(signedBy.filter((who, i) => keep(who, i)))];
   if (needs) {
@@ -660,6 +662,11 @@ async function cmdSubmit(args) {
     if (have < needs.threshold) {
       for (const line of lib.preparedSummary(net, base, checked, unique)) console.log(line);
       lib.fail("It has " + have + " of the " + needs.threshold + " signer signatures it needs. Have more of the signers listed above run cosign. Nothing was sent.");
+    }
+    const missing = needs.newSigners.filter((s) => !unique.includes(s));
+    if (missing.length) {
+      for (const line of lib.preparedSummary(net, base, checked, unique)) console.log(line);
+      lib.fail("Each new signer must sign too (the multisig refuses otherwise). Not signed yet: " + missing.join(", ") + ". Nothing was sent.");
     }
   }
   console.log("");

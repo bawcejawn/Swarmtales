@@ -1136,21 +1136,24 @@ function planInkAmounts(flags, cfg) {
 }
 
 // ---- Multisig wallet (multisig/) ----
-const MULTISIG_MIN_SIGNERS = 2;
+const MULTISIG_MIN_SIGNERS = 3;
 const MULTISIG_MAX_SIGNERS = 10;
 
 /**
  * The signers and threshold for multisig setup / set_signers, checked the way
- * the contract checks them: 2 to 10 different addresses, none of them the
- * multisig itself, threshold 2 to the number of signers.
+ * the contract checks them: 3 to 10 different addresses, none of them the
+ * multisig itself, threshold from 2 to one less than the number of signers
+ * (so one lost key never locks the wallet; audit L-16).
  */
 function planMultisigSigners(signersFlag, thresholdFlag, multisigAddress) {
   const signers = String(signersFlag || "").split(",").map((s) => s.trim()).filter(Boolean).map((s) => requireAddress(s, "signers"));
-  if (signers.length < MULTISIG_MIN_SIGNERS || signers.length > MULTISIG_MAX_SIGNERS) fail("--signers takes 2 to 10 addresses, separated by commas.");
+  if (signers.length < MULTISIG_MIN_SIGNERS || signers.length > MULTISIG_MAX_SIGNERS) fail("--signers takes 3 to 10 addresses, separated by commas.");
   if (new Set(signers).size !== signers.length) fail("--signers lists the same address twice.");
   if (signers.includes(multisigAddress)) fail("The multisig can't be one of its own signers.");
   const threshold = thresholdFlag === undefined ? 2 : Number(thresholdFlag);
-  if (!Number.isInteger(threshold) || threshold < 2 || threshold > signers.length) fail("--threshold must be a whole number from 2 to the number of signers.");
+  if (!Number.isInteger(threshold) || threshold < 2 || threshold >= signers.length) {
+    fail("--threshold must be a whole number from 2 to one less than the number of signers (so one lost key never locks the wallet).");
+  }
   return {
     args: { signers, threshold },
     summary: threshold + " of " + signers.length + ": " + signers.join(", "),
@@ -1415,7 +1418,23 @@ async function verifyPrepared(file, net, deps) {
     if (decoded.name !== d.method) fail("Operation " + (i + 1) + " decodes as " + decoded.name + ", not " + d.method + ". Nothing was signed.");
     out.push({ contract: d.contract, contractId: call.contract_id, method: d.method, description: method.description || "", args: decoded.args || {} });
   }
-  return { tx, ops: out, warnings, needs: checkNeeds(file.needs) };
+  const needs = checkNeeds(file.needs);
+  if (needs) needs.newSigners = newMultisigSigners(out, needs);
+  return { tx, ops: out, warnings, needs };
+}
+
+/**
+ * The signers a multisig.set_signers in these (decoded) operations adds to
+ * the multisig in `needs`: each must sign too, or the contract refuses
+ * (audit L-16). Taken from the operation bytes, never from the file's word.
+ */
+function newMultisigSigners(ops, needs) {
+  const added = [];
+  for (const o of ops) {
+    if (o.contract !== "multisig" || o.method !== "set_signers" || o.contractId !== needs.account) continue;
+    for (const s of o.args.signers || []) if (!needs.signers.includes(s) && !added.includes(s)) added.push(s);
+  }
+  return added;
 }
 
 /** The human summary every signer reads before signing, and `submit` shows before sending. */
@@ -1438,6 +1457,10 @@ function preparedSummary(net, file, checked, signedBy) {
     const n = checked.needs;
     lines.push("Needs:     " + n.threshold + " of these " + n.signers.length + " signers of the multisig " + n.account + ":");
     n.signers.forEach((s, i) => lines.push("             " + (i + 1) + ". " + s + (signedBy.includes(s) ? "  (signed)" : "")));
+    if (n.newSigners && n.newSigners.length) {
+      lines.push("And:       each new signer it adds, to prove they hold the key:");
+      n.newSigners.forEach((s) => lines.push("             - " + s + (signedBy.includes(s) ? "  (signed)" : "")));
+    }
   }
   lines.push("Signatures so far: " + (signedBy.length ? signedBy.join(", ") : "none"));
   return lines;

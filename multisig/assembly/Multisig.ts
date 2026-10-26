@@ -11,7 +11,7 @@ import { multisig } from "./proto/multisig";
 
 const CONFIG_SPACE = 0;
 
-export const MIN_SIGNERS = 2;
+export const MIN_SIGNERS = 3;
 export const MAX_SIGNERS = 10;
 const ADDRESS_LENGTH = 25;
 const SIGNATURE_LENGTH = 65;
@@ -73,14 +73,21 @@ export class Multisig {
   }
 
   /**
-   * New signers or threshold. Needs the current quorum. With two of three
-   * signers, this replaces a lost or leaked third one.
+   * New signers or threshold. Needs the current quorum, and the signature of
+   * every signer being added, so a typo or a key nobody holds can't become a
+   * signer (audit L-16). With two of three signers, this replaces a lost or
+   * leaked third one.
    */
   set_signers(args: multisig.set_signers_arguments): multisig.empty_object {
+    requireDirectCall();
     const cfg = this.config.get()!;
     System.require(cfg.threshold > 0, "MULTISIG: not set up");
-    requireDirectCall();
     System.require(countSigners(cfg.signers) >= cfg.threshold, "MULTISIG: not enough signers signed");
+    const signed = signatureAddresses();
+    for (let i = 0; i < args.signers.length; i++) {
+      const s = args.signers[i];
+      if (!contains(cfg.signers, s)) System.require(contains(signed, s), "MULTISIG: every new signer must sign");
+    }
     this.save(args.signers, args.threshold);
     return new multisig.empty_object();
   }
@@ -94,11 +101,15 @@ export class Multisig {
   }
 }
 
-/** The rules for a signer list. Exported for the tests. */
+/**
+ * The rules for a signer list. Exported for the tests. The threshold is
+ * below the number of signers, so one lost key never locks the wallet
+ * (audit L-16); with a threshold of at least 2 that means 3 signers or more.
+ */
 export function validate(signers: Uint8Array[], threshold: u32, self: Uint8Array): void {
   const n = signers.length;
-  System.require(n >= MIN_SIGNERS && n <= MAX_SIGNERS, "MULTISIG: use 2 to 10 signers");
-  System.require(threshold >= 2 && threshold <= <u32>n, "MULTISIG: threshold must be at least 2 and at most the number of signers");
+  System.require(n >= MIN_SIGNERS && n <= MAX_SIGNERS, "MULTISIG: use 3 to 10 signers");
+  System.require(threshold >= 2 && threshold < <u32>n, "MULTISIG: threshold must be at least 2 and less than the number of signers");
   for (let i = 0; i < n; i++) {
     const s = signers[i];
     System.require(isAddress(s), "MULTISIG: invalid signer address");
@@ -159,9 +170,12 @@ export function countSigners(signers: Uint8Array[]): u32 {
 }
 
 function signedBy(account: Uint8Array): bool {
-  const signed = signatureAddresses();
-  for (let j = 0; j < signed.length; j++) {
-    if (Arrays.equal(account, signed[j])) return true;
+  return contains(signatureAddresses(), account);
+}
+
+function contains(list: Uint8Array[], account: Uint8Array): bool {
+  for (let j = 0; j < list.length; j++) {
+    if (Arrays.equal(account, list[j])) return true;
   }
   return false;
 }
