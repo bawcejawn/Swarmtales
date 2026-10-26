@@ -184,6 +184,12 @@ Every action takes the acting wallet as an argument and requires its signature. 
 | A long pause used against openers | Activity clock; take-over and archiving refused while paused |
 | A takedown racing an edit | Bound to the reviewed text hash and version count |
 | Hidden text | Left out of the site and the book, but readable on-chain until taken down |
+| A pending part's text taken first (audit I-4) | Anyone watching the mempool can post the same text first and become its first writer under F-03; the website shows each part's writer and time, reports and the checker still apply, and a writer can repost reworded text. Not prevented on chain. |
+
+**Known limits (documented, not changed):**
+- **Poems with refrains or short lines** (audit I-6): F-03 refuses a part that repeats any text the story ever had, and every new part needs the minimum length (20 characters by default, `set_min_contribution`). A refrain must therefore be varied, or written into one part together with its verse; very short lines go together in one part. The open page's Poem text says so.
+- **Invite links keep their own clock** (audit I-8): an invite's expiry is wall time, so it runs out during a pause like any other time; the opener makes a new invite after a long pause.
+- **An old caller of `set_ink_amounts`** that doesn't send `starter_poem` sets it to 0 (audit I-1): no starter Ink for a Poem, which fails closed (nothing extra is minted). The deploy tool and the admin page always send it.
 
 ## 9. Deliberately left out
 

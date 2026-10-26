@@ -21,7 +21,7 @@ const OPEN_KINDS = {
   book: { kind: 1, name: "book", title: "Open a book", min: 100000, max: 1000000, priceKey: "bookPrice", starterKey: "starter_book",
     blurb: "100,000 to 1,000,000 characters. A long project with many chapters and writers." },
   poem: { kind: 3, name: "poem", title: "Open a poem", min: 50, max: 25000, priceKey: "poemPrice", starterKey: "starter_poem",
-    blurb: "50 to 25,000 characters. From a haiku to a long poem, verse by verse." },
+    blurb: "50 to 25,000 characters. From a haiku to a long poem, verse by verse. Each part needs at least 20 characters and can't repeat text the poem already has, so put a refrain or very short lines together with their verse." },
 };
 
 export function renderOpen(page) {
