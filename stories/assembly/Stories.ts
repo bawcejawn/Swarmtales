@@ -1221,7 +1221,9 @@ export class Stories extends StoriesAdmin {
   // citation by anyone but the writer counts as a change to the part: the
   // admin can strike them on a takedown (AB-038). Setting the citation it
   // already has changes nothing and records no one (AB-048). A blocked wallet
-  // may only clear a citation (AB-046).
+  // may only clear a citation (AB-046), and so may a writer taken off a
+  // private story's list (audit L-1, as for edit_segment, M-4). Citations on
+  // hidden parts stay allowed: they are the writer's appeal against a hide.
   set_citation(args: stories.set_citation_arguments): stories.empty_object {
     this.enter();
     this.requireNotPaused();
@@ -1234,7 +1236,10 @@ export class Stories extends StoriesAdmin {
     System.require(Arrays.equal(account, seg.author!) || this.isPrivileged(args.story_id, st, account),
       "STORIES: only the part's writer, the opener or an editor may do this");
     const citation = requireCitation(args.citation);
-    if (citation.length > 0) this.requireNotBlocked(account);
+    if (citation.length > 0) {
+      this.requireNotBlocked(account);
+      this.requireMember(args.story_id, st, account);
+    }
     const before = seg.citation != null ? seg.citation! : "";
     if (citation != before) this.recordChanger(key, seg, account, !Arrays.equal(account, st.opener!));
     seg.citation = citation;
