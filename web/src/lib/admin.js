@@ -437,7 +437,18 @@ export function planAcceptAdmin(contract) {
 
 // ---------------------------------------------------------------- sponsor
 
-export function planSponsor({ enabled, ink, shop, stories, tokens, perTx, perAccount, perDay }) {
+/** Default sponsor caps in mana (audit M-A): about 1 mana a transaction. */
+export const SPONSOR_DEFAULT_CAPS = { perTx: "1", perAccount: "20", perDay: "300" };
+
+/**
+ * The deploy-tool command that changes the sponsor's settings (audit L-17).
+ * The sponsor key stays offline: the page never asks a wallet to sign
+ * set_config, it only shows this command, checked the way the contract
+ * checks the settings. The tool adds the list of sponsored calls itself.
+ * Returns { command, summary }.
+ */
+export function sponsorCommand({ sponsor, enabled, ink, shop, stories, tokens, perTx, perAccount, perDay, mainnet }) {
+  const s = requireAddress(sponsor, "Sponsor");
   const ids = [requireAddress(ink, "Ink"), requireAddress(shop, "Shop"), requireAddress(stories, "Stories")];
   const list = String(tokens || "").split(",").map((t) => t.trim()).filter(Boolean).map((t) => requireAddress(t, "Token"));
   if (list.length > 4) fail("At most 4 payment tokens.");
@@ -448,9 +459,11 @@ export function planSponsor({ enabled, ink, shop, stories, tokens, perTx, perAcc
   if (BigInt(a) > BigInt(b) || BigInt(b) > BigInt(c)) fail("Caps must be per transaction <= per wallet per day <= everyone per day.");
   if (BigInt(c) > 100000000000n) fail("The daily cap can be at most 1,000 mana.");
   if (enabled && BigInt(a) === 0n) fail("Switched on needs a per-transaction cap above 0.");
-  return call("sponsor", "set_config", {
-    config: { enabled: !!enabled, ink: ids[0], shop: ids[1], stories: ids[2], tokens: list, max_mana_per_tx: a, max_mana_per_account_day: b, max_mana_per_day: c },
-  }, "Mana sponsor " + (enabled ? "ON" : "OFF") + ": " + fromBaseUnits(a, 8) + " / " + fromBaseUnits(b, 8) + " / " + fromBaseUnits(c, 8) + " mana (per transaction / per wallet per day / everyone per day)");
+  const command = ["node deploy/deploy.js sponsor-config", "--sponsor " + s, "--ink " + ids[0], "--shop " + ids[1], "--stories " + ids[2],
+    list.length ? "--tokens " + list.join(",") : "", "--per-tx " + fromBaseUnits(a, 8), "--per-account " + fromBaseUnits(b, 8),
+    "--per-day " + fromBaseUnits(c, 8), enabled ? "" : "--disable", mainnet ? "--network mainnet --i-understand-this-is-mainnet" : ""].filter(Boolean).join(" ");
+  return { command, summary: "Mana sponsor " + (enabled ? "ON" : "OFF") + ": " + fromBaseUnits(a, 8) + " / " + fromBaseUnits(b, 8) + " / " +
+    fromBaseUnits(c, 8) + " mana (per transaction / per wallet per day / everyone per day)" };
 }
 
 // ---------------------------------------------------------------- any method

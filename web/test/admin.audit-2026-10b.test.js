@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Contract } from "koilib";
 import { abis } from "../src/generated/abis.js";
-import { AdminInputError, U64_MAX, numberMismatch, planAny, planPromo, planSponsor, ratePrice, toBaseUnits } from "../src/lib/admin.js";
+import { AdminInputError, U64_MAX, numberMismatch, planAny, planPromo, ratePrice, sponsorCommand, toBaseUnits } from "../src/lib/admin.js";
 
 const A = "1LrT3gTG9Rpf5zHf9DENaEgXEuhTdKxFtP";
 const B = "1C8hrrjXYykrDmPBioex7YRv7cEt1mBcEi";
@@ -19,7 +19,7 @@ test("M-C: base-unit amounts above 2^64-1 are refused by every helper, never wra
   assert.equal(toBaseUnits("18.446744073709551615", 18), "18446744073709551615");
   throwsInput(() => ratePrice("100000000", "0.00000001", 18), /too large/);
   throwsInput(() => planPromo({ inkPerClaim: "1", days: "1", budget: TOO_BIG, dailyCap: "0", nowSec: 1761450000, linkSigner: A }), /too large/);
-  throwsInput(() => planSponsor({ enabled: true, ink: A, shop: B, stories: C, tokens: "", perTx: "1", perAccount: "1", perDay: "184467440737.09551616" }), /too large/);
+  throwsInput(() => sponsorCommand({ sponsor: TOKEN, enabled: true, ink: A, shop: B, stories: C, tokens: "", perTx: "1", perAccount: "1", perDay: "184467440737.09551616" }), /too large/);
 });
 
 test("M-C: the 'any method' form refuses numbers JSON can't hold exactly and values above 2^64-1", () => {
@@ -37,6 +37,22 @@ test("M-C: decoding the encoded operation back finds a number that did not survi
   assert.deepEqual(await roundTrip("set_fee_bps", { fee_bps: 4294967296 }), { field: "fee_bps", sent: "4294967296", got: "0" });
   assert.equal(await roundTrip("set_price", { item: 1, token: TOKEN, amount: "18446744073709551615" }), null);
   assert.equal(await roundTrip("set_paused", { paused: false }), null);
+});
+
+test("L-17: the admin page never asks a wallet to sign the sponsor's settings; it shows the sponsor-config command", async () => {
+  const { appSource, fnBody } = await import("./helpers/appSource.js");
+  const section = fnBody(appSource().replace(/\r\n/g, "\n"), "sponsorSection");
+  assert.doesNotMatch(section, /actionButton\(/, "no signing button");
+  assert.doesNotMatch(section, /set_config/);
+  assert.match(section, /sponsorCommand\(/);
+  const S = "1De7ea6SyHRT7SsHNnwLzTBuqf5ixZ1ZyZ";
+  const c = sponsorCommand({ sponsor: S, enabled: false, ink: A, shop: B, stories: C, tokens: "", perTx: "1", perAccount: "20", perDay: "300", mainnet: true });
+  assert.match(c.command, /^node deploy\/deploy\.js sponsor-config --sponsor \S+ .* --disable --network mainnet --i-understand-this-is-mainnet$/);
+});
+
+test("M-A: the page's default sponsor caps are about 1 mana a transaction", async () => {
+  const { SPONSOR_DEFAULT_CAPS } = await import("../src/lib/admin.js");
+  assert.deepEqual(SPONSOR_DEFAULT_CAPS, { perTx: "1", perAccount: "20", perDay: "300" });
 });
 
 test("I-22: Kondor gets the sponsor's ABI for an operation that calls the sponsor", async () => {

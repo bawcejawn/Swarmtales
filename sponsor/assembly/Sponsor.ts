@@ -117,6 +117,10 @@ export class Sponsor {
   }
 
   set_config(args: sponsor.set_config_arguments): sponsor.empty_object {
+    // Straight from the transaction: no contract code running inside a
+    // transaction the sponsor key signed may change the settings (audit L-17).
+    const caller = System.getCaller().caller;
+    System.require(caller == null || caller.length == 0, "SPONSOR: call set_config directly from the transaction, not through another contract");
     System.require(
       System.checkAuthority(authority.authorization_type.contract_call, this.contractId),
       "SPONSOR: needs the sponsor account's own key"

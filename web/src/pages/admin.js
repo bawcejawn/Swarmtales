@@ -13,7 +13,7 @@ import {
   AdminInputError, DEFAULT_PREPARED_RC, INK_AMOUNT_FIELDS, REASONS, SHOP_ITEMS, fromBaseUnits, numberMismatch, planAcceptAdmin, planAny, planAsset,
   planBlock, planCampaignEnabled, planCampaignLimits, planCategory, planCategoryActive, planClearSummary, planFee, planHide,
   planInkAmounts, planLimits, planMinContribution, planModeration, planPause, planPrice, planPromo, planPromoSwitch, planSetAdmin,
-  planSourceNote, planSponsor, planTakedown, planTakeOver, planTerms, preparedFile, promoLink, strikeChoices, toBaseUnits,
+  planSourceNote, planTakedown, planTakeOver, planTerms, preparedFile, promoLink, SPONSOR_DEFAULT_CAPS, sponsorCommand, strikeChoices, toBaseUnits,
   planAddToken, ratePrice, RATE_ITEMS,
 } from "../lib/admin.js";
 import { canonicalBase } from "../lib/site.js";
@@ -614,18 +614,33 @@ function sponsorSection(d) {
   const mana = (v, dflt) => (v ? fromBaseUnits(v, 8) : dflt);
   const enabled = checkbox(s.enabled);
   const tokens = input((s.tokens || [contracts.paymentToken]).join(","));
-  const perTx = input(mana(s.max_mana_per_tx, "4"));
-  const perAccount = input(mana(s.max_mana_per_account_day, "20"));
-  const perDay = input(mana(s.max_mana_per_day, "300"));
-  return section("Mana sponsor", "Pays users' mana for SwarmTales transactions only. These settings must be signed by the SPONSOR wallet (" + contracts.sponsor + "), not the admin: connect it in Kondor first.", [
-    h("p", {}, ["Now: ", h("b", {}, [s.enabled ? "ON" : d.sponsorCfg ? "OFF" : "not set up yet"])]),
+  const perTx = input(mana(s.max_mana_per_tx, SPONSOR_DEFAULT_CAPS.perTx));
+  const perAccount = input(mana(s.max_mana_per_account_day, SPONSOR_DEFAULT_CAPS.perAccount));
+  const perDay = input(mana(s.max_mana_per_day, SPONSOR_DEFAULT_CAPS.perDay));
+  const out = h("div", {}, []);
+  const make = h("button", { type: "button", class: "btn btn-secondary btn-small" }, ["Show the command"]);
+  make.addEventListener("click", () => {
+    try {
+      const c = sponsorCommand({
+        sponsor: contracts.sponsor, enabled: enabled.checked, ink: contracts.ink, shop: contracts.shop, stories: contracts.stories,
+        tokens: tokens.value, perTx: perTx.value, perAccount: perAccount.value, perDay: perDay.value, mainnet: network.mainnet,
+      });
+      replace(out, notice("ok", [h("p", {}, [c.summary + ". Run this on the computer that holds the sponsor key:"]), h("pre", { class: "mono small" }, [c.command])]));
+    } catch (error) {
+      replace(out, notice("warn", h("p", {}, [error.message])));
+    }
+  });
+  // The sponsor key stays offline (audit L-17): this page only reads the
+  // settings and shows the deploy-tool command that changes them.
+  return section("Mana sponsor", "Pays users' mana for the SwarmTales actions new users need, and nothing else. Its settings are changed only with the deploy tool's sponsor-config, on the computer that holds the SPONSOR wallet's key (" + contracts.sponsor + "); this page never asks for that key.", [
+    h("p", {}, ["Now: ", h("b", {}, [s.enabled ? "ON" : d.sponsorCfg ? "OFF" : "not set up yet"]),
+      d.sponsorCfg ? " · " + mana(s.max_mana_per_tx, "0") + " / " + mana(s.max_mana_per_account_day, "0") + " / " + mana(s.max_mana_per_day, "0") +
+        " mana (per transaction / per wallet per day / everyone per day) · " + ((s.calls && s.calls.length) || 0) + " sponsored calls" : ""]),
     h("label", { class: "check" }, [enabled, " Switched on"]),
     field("Payment tokens (comma separated)", tokens),
     row(field("Mana per transaction", perTx), field("Per wallet per day", perAccount), field("Everyone per day", perDay)),
-    actionButton("Save sponsor settings", () => planSponsor({
-      enabled: enabled.checked, ink: contracts.ink, shop: contracts.shop, stories: contracts.stories,
-      tokens: tokens.value, perTx: perTx.value, perAccount: perAccount.value, perDay: perDay.value,
-    })),
+    make,
+    out,
   ]);
 }
 

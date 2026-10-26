@@ -8,7 +8,7 @@ import { Contract, Signer, Transaction } from "koilib";
 import { abis } from "../src/generated/abis.js";
 import {
   AdminInputError, DEFAULT_PREPARED_RC, SHOP_ITEMS, planAny, planAsset, planBlock, planFee, planHide, planInkAmounts, planLimits,
-  planModeration, planPause, planPrice, planPromo, planSponsor, planTakedown, planTerms, preparedFile, promoLink, strikeChoices, toBaseUnits,
+  planModeration, planPause, planPrice, planPromo, planTakedown, planTerms, preparedFile, promoLink, sponsorCommand, strikeChoices, toBaseUnits,
 } from "../src/lib/admin.js";
 import { NETWORKS } from "../src/config.js";
 
@@ -98,12 +98,12 @@ test("admin: a takedown is bound to the text read, and strikes only the writer o
 });
 
 test("admin: sponsor settings use mana units and the contract's cap rules", () => {
-  const s = planSponsor({ enabled: true, ink: A, shop: B, stories: C, tokens: TOKEN, perTx: "4", perAccount: "20", perDay: "300" });
-  assert.equal(s.contract, "sponsor");
-  assert.deepEqual(s.args.config.tokens, [TOKEN]);
-  assert.equal(s.args.config.max_mana_per_tx, "400000000");
-  throwsInput(() => planSponsor({ enabled: true, ink: A, shop: B, stories: C, tokens: "", perTx: "30", perAccount: "20", perDay: "300" }), /Caps must be/);
-  throwsInput(() => planSponsor({ enabled: true, ink: A, shop: B, stories: C, tokens: "", perTx: "1", perAccount: "2", perDay: "1001" }), /1,000 mana/);
+  const S = "1De7ea6SyHRT7SsHNnwLzTBuqf5ixZ1ZyZ";
+  const s = sponsorCommand({ sponsor: S, enabled: true, ink: A, shop: B, stories: C, tokens: TOKEN, perTx: "1", perAccount: "20", perDay: "300" });
+  assert.equal(s.command, "node deploy/deploy.js sponsor-config --sponsor " + S + " --ink " + A + " --shop " + B + " --stories " + C +
+    " --tokens " + TOKEN + " --per-tx 1 --per-account 20 --per-day 300");
+  throwsInput(() => sponsorCommand({ sponsor: S, enabled: true, ink: A, shop: B, stories: C, tokens: "", perTx: "30", perAccount: "20", perDay: "300" }), /Caps must be/);
+  throwsInput(() => sponsorCommand({ sponsor: S, enabled: true, ink: A, shop: B, stories: C, tokens: "", perTx: "1", perAccount: "2", perDay: "1001" }), /1,000 mana/);
 });
 
 test("admin: any other write method, with JSON arguments", () => {

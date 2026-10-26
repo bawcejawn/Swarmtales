@@ -21,8 +21,8 @@ syntax = "proto3";
 // (that is the owner topping up, changing settings or moving KOIN out).
 //
 // Settings change only with the sponsor account's own key (its call
-// authority is NOT overridden). The KOIN can always be moved out with that
-// key, like any wallet. Mana amounts use the chain's units: 100000000 = 1.
+// authority is NOT overridden), called straight from the transaction. The
+// KOIN can always be moved out with that key, like any wallet. Mana amounts use the chain's units: 100000000 = 1.
 // "Day" is the UTC day of the head block.
 // =====================================================================
 
@@ -82,7 +82,7 @@ message get_usage_arguments {
 // @result usage
 message get_total_usage_arguments {}
 
-// @description Change the settings. Needs the sponsor account's own key.
+// @description Change the settings. Needs the sponsor account's own key, called straight from the transaction.
 // @read-only false
 // @result empty_object
 message set_config_arguments {

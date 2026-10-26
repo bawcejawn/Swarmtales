@@ -257,6 +257,14 @@ describe("sponsor settings", () => {
     errorIs("SPONSOR: at most 32 sponsored calls");
   });
 
+  it("refuses settings from contract code inside a transaction the sponsor key signed (audit L-17)", () => {
+    MockVM.setCaller(new chain.caller_data(STRANGER_CONTRACT, chain.privilege.user_mode));
+    CFG = goodConfig();
+    expect(() => { setConfig(); }).toThrow();
+    errorIs("SPONSOR: call set_config directly from the transaction, not through another contract");
+    expect(new Sponsor().get_config(new sponsor.get_config_arguments()).enabled).toBe(false);
+  });
+
   it("can be switched off", () => {
     configure();
     CFG = goodConfig();
