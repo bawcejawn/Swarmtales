@@ -535,7 +535,7 @@ function tokensSection(d) {
       h("td", {}, [String(t.decimals)]),
       h("td", {}, [t.enabled ? (Number(t.usable_from) * 1000 > Date.now() ? "on from " + formatUtc(Number(t.usable_from)) : "on") : "off"]),
       h("td", {}, [t.enabled
-        ? actionButton("Turn off", () => planAsset({ token: t.address, enabled: false }), { danger: true })
+        ? actionButton("Turn off", () => planAsset({ token: t.address, enabled: false, decimals: t.decimals, symbol: t.symbol }), { danger: true })
         : actionButton("Turn on", async () => planAsset({ token: t.address, enabled: true, decimals: t.decimals, symbol: t.symbol,
           pin: pinnedToken(t.address), codeHash: await codeHashOf(t.address), others: otherTokens(t.address) }))]),
     ])),

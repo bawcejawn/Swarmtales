@@ -61,3 +61,11 @@ test("I-22: Kondor gets the sponsor's ABI for an operation that calls the sponso
   const op = { call_contract: { contract_id: contracts.sponsor, entry_point: abis.sponsor.methods.set_config.entry_point, args: "" } };
   assert.equal(abisFor([op])[contracts.sponsor], abis.sponsor);
 });
+
+test("M-D: the page's Turn off sends the token's recorded decimals and symbol, as the tool does", async () => {
+  const { planAsset } = await import("../src/lib/admin.js");
+  const off = planAsset({ token: TOKEN, enabled: false, decimals: 8, symbol: "tKOIN" });
+  assert.deepEqual(off.args, { token: TOKEN, enabled: false, decimals: 8, symbol: "tKOIN" });
+  const { appSource } = await import("./helpers/appSource.js");
+  assert.match(appSource(), /planAsset\(\{ token: t\.address, enabled: false, decimals: t\.decimals, symbol: t\.symbol \}\)/);
+});

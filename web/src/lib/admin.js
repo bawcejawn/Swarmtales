@@ -233,7 +233,11 @@ export function planFee(bps) {
  */
 export function planAsset({ token, enabled, decimals, symbol, pin, codeHash, others }) {
   const t = requireAddress(token, "Token");
-  if (!enabled) return call("shop", "set_asset", { token: t, enabled: false, decimals: 0, symbol: "" }, "Turn OFF payment token " + t);
+  // Off sends the recorded decimals and symbol, as the deploy tool does (the Shop keeps its own either way; audit M-D).
+  if (!enabled) {
+    return call("shop", "set_asset", { token: t, enabled: false, decimals: Number(decimals || 0), symbol: String(symbol || "") },
+      "Turn OFF payment token " + (symbol ? symbol + " (" + t + ")" : t));
+  }
   const d = whole(decimals, "Decimals", 0, 18);
   const s = String(symbol || "").trim();
   if (!/^[A-Za-z0-9]{1,16}$/.test(s)) fail("The symbol must be 1 to 16 letters or digits.");
