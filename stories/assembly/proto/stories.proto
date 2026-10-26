@@ -721,7 +721,7 @@ message set_segment_hidden_arguments {
   string note = 6;               // up to 200 characters, e.g. what it matched
 }
 
-// @description The part's writer, the opener or an editor sets or changes the part's source note (citation).
+// @description The part's writer, the opener or an editor sets or changes the part's citation (what it quotes; the copy checker's source note is separate). A blocked writer, or one taken off a private story's list, may only clear it.
 // @read-only false
 // @result empty_object
 message set_citation_arguments {
@@ -836,7 +836,7 @@ message replace_pdf_arguments {
 
 // ---------- Closing and the final edit ----------
 
-// @description Opener closes the story for free and starts the final edit
+// @description Opener closes the story for free and starts the final edit: at the kind's minimum length, or within 100 characters of its own size (10 for a Poem)
 // @read-only false
 // @result empty_object
 message close_story_arguments {
@@ -963,7 +963,7 @@ message set_moderation_arguments {
   uint32 strike_limit = 3;       // 1 to 20 takedowns before a wallet is blocked
 }
 
-// @description Admin blocks or unblocks a wallet from opening, writing and reporting
+// @description Admin blocks or unblocks a wallet. A blocked wallet can't open, write, edit, change or report text, join with an invite, revive, restore a part, set a citation (it may clear one), rename its story, change editors, the allow-list or invites, or change text in a final edit; it may still remove its own parts
 // @read-only false
 // @result empty_object
 message set_blocked_arguments {

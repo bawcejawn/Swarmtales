@@ -299,7 +299,7 @@
       "argument": "stories.set_citation_arguments",
       "return": "stories.empty_object",
       "read_only": false,
-      "description": "The part's writer, the opener or an editor sets or changes the part's source note (citation)."
+      "description": "The part's writer, the opener or an editor sets or changes the part's citation (what it quotes; the copy checker's source note is separate). A blocked writer, or one taken off a private story's list, may only clear it."
     },
     "set_reading_place": {
       "entry_point": 361506209,
@@ -362,7 +362,7 @@
       "argument": "stories.close_story_arguments",
       "return": "stories.empty_object",
       "read_only": false,
-      "description": "Opener closes the story for free and starts the final edit"
+      "description": "Opener closes the story for free and starts the final edit: at the kind's minimum length, or within 100 characters of its own size (10 for a Poem)"
     },
     "request_admin_finalize": {
       "entry_point": 2868368246,
@@ -463,7 +463,7 @@
       "argument": "stories.set_blocked_arguments",
       "return": "stories.empty_object",
       "read_only": false,
-      "description": "Admin blocks or unblocks a wallet from opening, writing and reporting"
+      "description": "Admin blocks or unblocks a wallet. A blocked wallet can't open, write, edit, change or report text, join with an invite, revive, restore a part, set a citation (it may clear one), rename its story, change editors, the allow-list or invites, or change text in a final edit; it may still remove its own parts"
     },
     "set_terms": {
       "entry_point": 3341297933,

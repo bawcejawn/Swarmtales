@@ -52,7 +52,7 @@ Stories holds the books and short stories, and it is where Ink gets **spent**.
 ## 3. Stored data
 
 ### 3.1 Story
-`kind` (Book 1, Short 2), `opener`, `title` (1–100), two categories, `visibility` (Public 1, Private 3; Unlisted 2 is retired), `status`, `max_chars`, `used_chars`, `total_burned` / `total_refunded` (refunds can never pass burns, per story), counters, `free_chapters` (a website soft gate), `contributor_edition_min`, `created_at`, `last_activity_at` and `opener_last_active` (on the activity clock, section 4), `locked_at`, `admin_finalize_requested`, `finalizer_is_admin`, `final_cursor`, `running_hash`, `revived`, `pdf_uri` / `pdf_hash` (the book page link and the text hash), `editor_count`, `next_invite_id`, `hidden_count` (blocks finalizing while above 0), `needs_new_pdf`, the private-story pool (`fund`, `fund_added`), and the summary ("the story so far", up to 1,500 characters).
+`kind` (Book 1, Short 2, Poem 3), `opener`, `title` (1–100), two categories, `visibility` (Public 1, Private 3; Unlisted 2 is retired), `status`, `max_chars`, `used_chars`, `total_burned` / `total_refunded` (refunds can never pass burns, per story), counters, `free_chapters` (a website soft gate), `contributor_edition_min`, `created_at`, `last_activity_at` and `opener_last_active` (on the activity clock, section 4), `locked_at`, `admin_finalize_requested`, `finalizer_is_admin`, `final_cursor`, `running_hash`, `revived`, `pdf_uri` / `pdf_hash` (the book page link and the text hash), `editor_count`, `next_invite_id`, `hidden_count` (blocks finalizing while above 0), `needs_new_pdf`, the private-story pool (`fund`, `fund_added`), and the summary ("the story so far", up to 1,500 characters).
 
 ### 3.2 Part (segment, key story id + sequence number)
 `author`, `text`, `text_hash`, `original_cost`, `charged` (what the writer or pool paid and hasn't had back), `current_cost`, status (Active, Removed), chapter and AI flags, timestamps, final-edit fields, moderation fields (`hidden`, `hidden_by` 1 reports / 2 checker / 3 admin, `taken_down`, reason, `report_count`, `restored`, `refund_forfeited`), the writer's rights confirmation and Terms version, `insert_after`, `fund_paid` and `own_paid`, `citation` and the checker's `source_note`, `version_count`, `edited_by_others`, `paid_changes`.
@@ -91,7 +91,7 @@ admin rule ───────────────────────
                                                    EDITING ──finalize──► FINALIZED
 ```
 
-- **Close minimum:** the kind's minimum length, or within 100 characters of the story's own `max_chars`. *Why:* a Book at 99,998 of 100,000 could otherwise never close.
+- **Close minimum:** the kind's minimum length, or within 100 characters of the story's own `max_chars` (10 for a Poem). *Why:* a Book at 99,998 of 100,000 could otherwise never close.
 - **A locked story reopens only after a takedown frees space.**
 - **The activity clock.** `last_activity_at` and `opener_last_active` are wall time minus every second Stories spent paused (`config.paused_seconds`, plus the current pause). It stands still while paused. *Why:* a long pause must never make stories archivable or open to an admin take-over (audit M-1).
 - **Archiving** needs both the text and the opener to have been quiet for the archive period. *Why:* a story its opener still manages stays open (audit S2-06). The pool goes back to the opener; writers' Ink stays spent.
@@ -120,7 +120,7 @@ Every action takes the acting wallet as an argument and requires its signature. 
 | `edit_segment` | the part's writer (not blocked, part not hidden, still on a private story's list) | rewording free; added letters cost Ink (the writer pays) | Rights confirmation and current Terms (F-04). The cap stops growth only (S2-05). Growth price at most `max_ink` (AB-049). A cut refunds `charged − new cost` (AB-035, AB-044). Kept as a version. |
 | `remove_segment` | the part's writer (even blocked or removed from the list); the opener or an editor only for a report-hidden part | free | Refunds `charged` unless the admin or the checker hid it (AB-012) or a restored checker hide gave up the refund (AB-062). The removed text stays as a version (F-06). |
 | `revise_part` | anyone who may write there, except the part's writer | `max(10, letters added + removed) × 2^(paid changes + 1)`, paid by the changer, never the pool | Up to 60 paid changes; empty text removes the part and refunds its writer. The part stays its writer's. A used-up promo trial can't make paid cuts. |
-| `set_citation` | writer, opener or editor | free | Up to 200 characters. Someone else's citation counts as a change for strikes. |
+| `set_citation` | writer, opener or editor | free | Up to 200 characters. Someone else's citation counts as a change for strikes. A blocked wallet, or a writer taken off a private story's list, may only clear one (audit L-1). Allowed on a hidden part: it is the writer's appeal against a checker hide. |
 | `set_story_summary` | opener, editor, or a writer with a live part (on the list in a private story) | free | Up to 1,500 characters. Admin and moderator may clear it. |
 | `set_reading_place` | any wallet | free | The reader's bookmark. The website keeps places in the browser and writes them on request. |
 
