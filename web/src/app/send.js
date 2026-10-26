@@ -5,6 +5,7 @@
 import { network } from "../config.js";
 import { waitForConfirmation } from "../chain.js";
 import { explainFailure } from "../lib/errors.js";
+import { SPONSOR_FALLBACK_NOTE } from "../lib/sponsor.js";
 import { TX_CONFIRMED, TX_REVERTED } from "../lib/confirm.js";
 import { formatUtc, VAULT_MANA_CEILING } from "../lib/money.js";
 import { kondorHint } from "../wallet.js";
@@ -32,6 +33,9 @@ export async function send(operations, status) {
           "Approve this in KOIN Vault with your passkey, fingerprint, or PIN." + when + " ",
           h("a", { href: "https://koinvault.app/", target: "_blank", rel: "noopener noreferrer" }, ["Open KOIN Vault"]),
         ])));
+      } else if (progress.phase === "sponsor-refused") {
+        // Why a second confirmation opens (audit L-20).
+        replace(status, notice("info", h("p", {}, [SPONSOR_FALLBACK_NOTE])));
       } else if (progress.phase === "submitting") {
         replace(status, notice("info", h("p", {}, ["Submitting and waiting for the next block. This can take about a minute. Please don't send it again."])));
       } else if (progress.phase === "verifying") {

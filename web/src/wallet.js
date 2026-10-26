@@ -10,7 +10,7 @@
 import { Transaction } from "koilib";
 import { getSigner, getAccounts } from "kondor-js";
 import { abisFor, freeMana, getProvider, lookupTransaction, read as chainRead, sponsorFunding, verifiedChain } from "./chain.js";
-import { isSponsorRefusal } from "./lib/sponsor.js";
+import { afterSponsorRefusal, isSponsorRefusal } from "./lib/sponsor.js";
 import { VAULT_MANA_CEILING } from "./lib/money.js";
 import {
   VAULT_MANA_EXPLANATION,
@@ -118,7 +118,7 @@ export function createKondorWallet() {
       if (saved && saved.kind === "kondor" && saved.address) address = saved.address;
     },
     read: (name, method, args) => chainRead(name, method, args),
-    signAndSend: async (operations) => {
+    signAndSend: async (operations, options = {}) => {
       if (!address) throw new Error("Connect Kondor first.");
       const chainId = verifiedChain();
       if (!chainId) throw new Error("The chain id has not been checked yet. Nothing was signed.");
@@ -132,11 +132,23 @@ export function createKondorWallet() {
           return await kondorSend(address, chainId, operations, funding);
         } catch (error) {
           if (!isSponsorRefusal(error)) throw error;
+          // It may have gone through after all (audit L-20): then wait for it.
+          if ((await afterSponsorRefusal(error.transactionId, lookupTransaction)) === "landed") {
+            return { transactionId: error.transactionId, receipt: null, sponsored: true };
+          }
+          if (options.onProgress) options.onProgress({ phase: "sponsor-refused" });
         }
       }
       return kondorSend(address, chainId, operations, null);
     },
   };
+}
+
+/** error, as an Error carrying the transaction id it is about. */
+export function withTransactionId(error, transactionId) {
+  const e = error instanceof Error ? error : new Error(String((error && error.message) || error));
+  e.transactionId = transactionId;
+  return e;
 }
 
 async function kondorSend(address, chainId, operations, funding) {
@@ -170,7 +182,14 @@ async function kondorSend(address, chainId, operations, funding) {
   });
   for (const op of operations) await tx.pushOperation(op);
   const prepared = await tx.prepare();
-  const sent = await signer.sendTransaction(prepared, { broadcast: true, sendAbis: true, abis });
+  let sent;
+  try {
+    sent = await signer.sendTransaction(prepared, { broadcast: true, sendAbis: true, abis });
+  } catch (error) {
+    // The id is the hash of the header, so it is known before signing: kept
+    // so a sponsor refusal can be checked against the node (audit L-20).
+    throw withTransactionId(error, prepared.id);
+  }
   const transaction = sent.transaction || prepared;
   return {
     transactionId: transaction.id,
