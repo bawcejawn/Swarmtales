@@ -1456,12 +1456,13 @@ const TERMINAL_RESET = "\u001b[0m\u001b[?25h";
 // pause 0.06), and the node holds the whole limit of a waiting transaction.
 const DEFAULT_PREPARED_RC = "100000000";
 
-/** A nonce as the chain encodes it (koinos.chain.value_type, uint64_value = field 7), base64url. */
-// A nonce is a koinos.chain.value_type holding one varint. koilib (and so
-// every wallet) writes it as field 5 (tag 0x28); field 7 (tag 0x38) is
-// accepted too. Found live on testnet, 25 Oct 2026: the earlier check took
-// only 0x38 and refused every real nonce.
-const NONCE_TAGS = [0x28, 0x38];
+/** A nonce as the chain encodes it (koinos.chain.value_type, uint64_value = field 5), base64url. */
+// A nonce is a koinos.chain.value_type holding one varint: uint64_value,
+// field 5 (tag 0x28), as koilib and so every wallet writes it (found live on
+// testnet, 25 Oct 2026). Only that tag is accepted: field 7 (tag 0x38) is
+// sint64_value, zigzag-encoded, so reading it as a plain varint showed twice
+// the real nonce, and the chain never includes such a transaction (audit L-7).
+const NONCE_TAGS = [0x28];
 
 function nonceNumber(nonceB64) {
   const b = Buffer.from(String(nonceB64 || ""), "base64url");

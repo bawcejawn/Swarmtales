@@ -304,7 +304,7 @@ test("M-12: on mainnet, cosign only signs calls to the pinned contracts", async 
   const net = lib.resolveNetwork({ network: "mainnet", "i-understand-this-is-mainnet": true });
   const c = deploy.contractOf("stories", STORIES, null);
   const op = await c.encodeOperation({ name: "set_paused", args: { paused: true } });
-  const tx = { header: { chain_id: net.chainId, rc_limit: "100000000", nonce: "OAE=", payer: MULTISIG }, operations: [op] };
+  const tx = { header: { chain_id: net.chainId, rc_limit: "100000000", nonce: "KAE=", payer: MULTISIG }, operations: [op] };
   await koilib.Transaction.prepareTransaction(tx);
   const file = lib.preparedFile(net, tx, [{ contract: "stories", contract_id: STORIES, method: "set_paused", args: { paused: true } }], "pause");
   const deps = (flags) => ({ koilib, abiFor: ABI, flags });

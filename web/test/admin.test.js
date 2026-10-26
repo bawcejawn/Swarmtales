@@ -146,7 +146,8 @@ test("admin: cosign reads the nonce koilib (every wallet, and this page) writes"
     assert.equal(deployLib.nonceNumber(await p.getNextNonce("1")), String(n), "nonce " + n);
   }
   assert.equal(deployLib.nonceNumber("KAI="), "2"); // as read live from testnet, 25 Oct 2026
-  assert.equal(deployLib.nonceNumber("OAU="), "5");
+  // Tag 0x38 is sint64 (zigzag), not koilib's encoding: refused (audit L-7).
+  assert.throws(() => deployLib.nonceNumber("OAU="), /nonce is not in the expected format/);
   assert.throws(() => deployLib.nonceNumber("CAI="), /nonce is not in the expected format/);
 });
 
