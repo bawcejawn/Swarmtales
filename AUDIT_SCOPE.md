@@ -149,6 +149,26 @@ The Stories suite takes about an hour on a two-core machine.
   The owner's rehearsal with it on 25 Oct 2026 (Stories admin handed to the multisig and back, each
   step signed by two of the three signers): accept `0x1220aeb7…9c23`, pause `0x122098dc…c890`,
   unpause `0x1220597c…ad5a`, propose back `0x12208653…90d8`, accept back `0x1220a60e…61e2`.
+- **Re-audit fixes on testnet, 26 Oct 2026** (the hashes in the table above, rebuilt and matched on the
+  owner's Windows machine): upgraded in place, data kept: Shop `0x122074472ee1e492e73a7c24986e130e3d8bd275b8884e18be0bfaf15c15728c04c0`,
+  Stories `0x12202e395f76451cc2256319a6f113e5b09f158515eec73b7bf4dec543c71181d7cb`, Sponsor
+  `0x1220a29f9d03ba06aa77ef00aed4426a7cf6133bd59c242b6a82c19723e79d43f727`. Sponsor config with the
+  10-call allow-list, caps 4/20/300 mana (the owner's choice of 4, see the status doc):
+  `0x122068a9deb0da4a85174a637eb70f8fbd67b964b998526ed24181921d88bf1676af`.
+  New rehearsal multisig with the fixed build: `19YXRkXUD3uAkWYnN3CTi6zCAregmRhXs5` (2 of 3 of the
+  owner's signers above), created `0x1220f1b7810f17f8991a575949f046ba0bf4af027055a9064ada8d2c91e47d951877`.
+  Rehearsal (each multisig step signed by two different signers, payer = the multisig):
+  propose (admin key) `0x12200380d3bc1f4e52461a8f9249e38468d65204a26a33e30f6bd7540adc86e0ef07`,
+  accept `0x1220301d8b7f59fc9db951a23ac52bcde8806bc19db929ba439b29b7f50019a945d0`,
+  pause `0x1220091bf774dda7ffc7d93afd33770e90590019020580d808e5483af32b79a28ea1`,
+  unpause `0x1220669d9893cd93715b2e2bac66dd10efea2516807f763161c98fad22ed0592c624`,
+  propose back `0x1220d295213d61ed45a4d49a6c7d3615cfbf0b0f9a315a3f9f697d4afeda5c2173d9`,
+  accept back (admin key) `0x122082816af03694c19c1817ba24660a605c4b39366ea90e6dae2209f8d2e880fb88`.
+  Stories ends with admin `18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6`, nothing pending, not paused. Also seen live:
+  a set_paused prepared before the multisig was admin was refused by Stories ("admin authority required");
+  a file signed by the multisig's own key plus one signer was refused by `submit` (1 of 2), and `cosign`
+  now refuses that key outright; `--payer` set to the sponsor contract for a multisig transaction was
+  refused before anything was written (the H-1 tool check).
 - **Mainnet:** not deployed. The mainnet multisig will be `1BtSGxigg2Nc5uNcei3XnrEg9WXDyGJ6if` (same signers),
   created with the Multisig build above (with the H-1 and L-16 fixes), not an earlier one.
 
