@@ -109,6 +109,20 @@ const MINT_MEMBERSHIP: u32 = 2;
 const MINT_STARTER: u32 = 3;
 const MINT_PROMO: u32 = 4;
 
+/**
+ * The founder's share of a price: floor(price * feeBps / FEE_DENOMINATOR),
+ * computed as (p/D)*f + (p%D)*f/D so that price * fee_bps can't overflow for
+ * a high-decimal token (audit L-4). Exact, and each product stays far below
+ * 2^64 for fee_bps <= MAX_FEE_BPS. Exported for the tests.
+ */
+export function founderShare(price: u64, feeBps: u32): u64 {
+  const fee = <u64>feeBps;
+  return SafeMath.add(
+    SafeMath.mul(price / FEE_DENOMINATOR, fee),
+    SafeMath.mul(price % FEE_DENOMINATOR, fee) / FEE_DENOMINATOR
+  );
+}
+
 export class Shop {
   contractId: Uint8Array;
   config: Storage.Obj<shop.config>;
@@ -834,10 +848,7 @@ export class Shop {
     const founder = this.requireAddress(cfg.founder, "SHOP: founder is not set");
     System.require(cfg.fee_bps <= MAX_FEE_BPS, "SHOP: fee is above the cap");
 
-    const founderAmount = SafeMath.div(
-      SafeMath.mul(price, <u64>cfg.fee_bps),
-      FEE_DENOMINATOR
-    );
+    const founderAmount = founderShare(price, cfg.fee_bps);
     const treasuryAmount = SafeMath.sub(price, founderAmount);
     System.require(treasuryAmount > 0, "SHOP: treasury amount is zero");
 
