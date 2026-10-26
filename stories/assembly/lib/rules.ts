@@ -2,7 +2,6 @@
 import { System, authority, SafeMath } from "@koinos/sdk-as";
 import { stories } from "../proto/stories";
 import { HIDDEN_BY_REPORTS, BOOK_MIN, BOOK_MAX, SHORT_MIN, SHORT_MAX, POEM_MIN, POEM_MAX, CLOSE_SLACK, POEM_CLOSE_SLACK, MAX_LIST, DEFAULT_MIN_CONTRIBUTION, DEFAULT_REPORT_THRESHOLD, DEFAULT_FULL_PRICE_PROJECTS, DEFAULT_MAX_PRICE_MULTIPLIER, MAX_PRICE_MULTIPLIER } from "./constants";
-import { str } from "./text";
 
 // Free growth for a light edit: 10% of the original, or up to 20 for
 // short text, but never more than doubling. Fixed per segment and added

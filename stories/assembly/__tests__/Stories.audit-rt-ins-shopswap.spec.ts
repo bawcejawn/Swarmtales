@@ -27,7 +27,7 @@ import { stories } from "../proto/stories";
 import { INK, SHOP, STORIES, authorize, configure, reset } from "./auditFixHelpers";
 
 // A contract the (thief holding the) Stories admin key uploaded.
-const EVIL_SHOP = Base58.decode("1Htyn9WgqXQcxjCWSBtGzX5bUkSWAbocvM") // audit: was "112Au...", which decodes to 24 bytes and was refused as an invalid address;
+const EVIL_SHOP = Base58.decode("1Htyn9WgqXQcxjCWSBtGzX5bUkSWAbocvM"); // audit: was "112Au...", which decodes to 24 bytes and was refused as an invalid address;
 
 function repointShop(): void {
   authorize(STORIES);
