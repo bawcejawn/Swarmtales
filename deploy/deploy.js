@@ -581,7 +581,7 @@ async function isContractWallet(provider, address) {
 
 async function prepareTx(signerAddr, provider, net, operations, onPrepared) {
   const described = operations.map((op, i) => opMeta.get(op) || lib.fail(
-    "This command can't be prepared for multisig signing: operation " + (i + 1) + " is not a call to Ink, Shop or Stories."));
+    "This command can't be prepared for multisig signing: operation " + (i + 1) + " is not a call to Ink, Shop, Stories, the sponsor or the multisig."));
   const f = session.args.flags;
   const payer = f.payer === undefined ? signerAddr : lib.requireAddress(f.payer, "payer");
   const payee = f.payee === undefined ? undefined : lib.requireAddress(f.payee, "payee");
@@ -621,7 +621,7 @@ async function prepareTx(signerAddr, provider, net, operations, onPrepared) {
   console.log("No dry run yet: it needs the signatures. submit runs one before anything is sent.");
   console.log("Next: each signer runs, on their own computer:  node deploy/deploy.js cosign <this file>" +
     (net.mainnet ? " --network mainnet " + lib.MAINNET_FLAG : ""));
-  if (payer !== signerAddr) console.log("The payer " + payer + " must cosign too, unless it is a contract wallet that pays for itself.");
+  if (payer !== signerAddr) console.log("The payer " + payer + " (a normal wallet) must cosign too.");
   console.log("Then anyone runs:  node deploy/deploy.js submit <the signed file>" + (net.mainnet ? " --network mainnet " + lib.MAINNET_FLAG : ""));
   console.log("It stays valid until " + (payee || payer) + " uses nonce " + lib.nonceNumber(tx.header.nonce) +
     ": to cancel it, send any other transaction from that account first.");

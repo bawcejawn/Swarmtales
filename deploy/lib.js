@@ -1451,8 +1451,8 @@ function terminalSafe(text) {
 
 /** Undo any colour, hidden-text or cursor state left in the terminal, before the operations are shown. */
 const TERMINAL_RESET = "\u001b[0m\u001b[?25h";
-// Mana limit for a prepared transaction unless --rc-limit is given (never above what the payer has).
-// Mana limit of a prepared transaction unless --rc-limit is given: 1 mana. Admin
+// Mana limit of a prepared transaction unless --rc-limit is given (never above
+// what the payer has): 1 mana per operation (preparedRcLimit below). Admin
 // calls use under 0.1 (measured on testnet, 25 Oct 2026: accept_admin 0.09, a
 // pause 0.06), and the node holds the whole limit of a waiting transaction.
 const DEFAULT_PREPARED_RC = "100000000";
@@ -1532,10 +1532,12 @@ function checkNeeds(needs) {
  * the signer's own ABIs and pinned addresses (never the file's word):
  * the network and chain id, that the id is the hash of the header and the
  * header commits to exactly these operations, that every operation is a
- * call to Ink, Shop or Stories (pinned on mainnet) whose entry point and
- * argument bytes are exactly the described method and arguments. Returns
- * { tx, ops: [{ contract, contractId, method, description, args }] } with
- * the arguments decoded from the bytes, for the summary.
+ * call to Ink, Shop, Stories, the sponsor or the multisig (pinned on mainnet)
+ * whose entry point and argument bytes are exactly the described method and
+ * arguments, and that the free-text fields are what this tool writes.
+ * Returns { tx, ops: [{ contract, contractId, method, description, args }],
+ * warnings, needs } with the arguments decoded from the bytes, for the
+ * summary.
  * `deps` is { koilib, abiFor(contract), flags }.
  */
 async function verifyPrepared(file, net, deps) {
@@ -1579,7 +1581,7 @@ async function verifyPrepared(file, net, deps) {
     const op = ops[i];
     const d = described[i] || {};
     const call = op && op.call_contract;
-    if (!call || Object.keys(op).length !== 1) fail("Operation " + (i + 1) + " is not a contract call. This tool only signs calls to Ink, Shop and Stories.");
+    if (!call || Object.keys(op).length !== 1) fail("Operation " + (i + 1) + " is not a contract call. This tool only signs calls to Ink, Shop, Stories, the sponsor and the multisig.");
     if (!CONTRACT_ROLES.includes(d.contract)) fail("Operation " + (i + 1) + " is not a call to Ink, Shop, Stories, the sponsor or the multisig.");
     if (call.contract_id !== d.contract_id) fail("Operation " + (i + 1) + " calls " + call.contract_id + " but says " + d.contract_id + ". Nothing was signed.");
     const warn = checkPinned(net, d.contract, call.contract_id, deps.flags || {}, false);
