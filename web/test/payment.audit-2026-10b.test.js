@@ -43,7 +43,7 @@ test("H-3: the code hash is read from get_contract_metadata the same way as the 
 });
 
 test("H-3 / L-18: other tokens come from the pins (symbol, decimals), only when the chain matches the pin", () => {
-  const src = readFileSync(new URL("../src/chain.js", import.meta.url), "utf8");
+  const src = readFileSync(new URL("../src/chain.js", import.meta.url), "utf8").replace(/\r\n/g, "\n"); // a Windows checkout has CRLF
   const fn = fnBody(src, "loadPaymentTokens");
   assert.match(fn, /pinnedToken\(t\)/, "a token the Shop lists but that is not pinned is never offered");
   assert.match(fn, /checkPaymentToken\(\{ expected: pin, tokenDecimals: [^,]+, asset, now: 0, codeHash \}\)/);
@@ -51,7 +51,7 @@ test("H-3 / L-18: other tokens come from the pins (symbol, decimals), only when 
   assert.doesNotMatch(fn, /String\(asset\.symbol\)/);
   const overview = fnBody(src, "loadOverview");
   assert.match(overview, /codeHashOf\(contracts\.paymentToken\)/);
-  assert.match(fnBody(appSource(), "checkPayment"), /codeHash: o\.tokenCodeHash/);
+  assert.match(fnBody(appSource().replace(/\r\n/g, "\n"), "checkPayment"), /codeHash: o\.tokenCodeHash/);
 });
 
 test("H-3: the admin page turns a token on only with its pin and its pinned code", () => {
