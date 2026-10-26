@@ -194,3 +194,27 @@ test("H-1: submit refuses a multisig transaction paid by another contract wallet
   assert.ifError(r.error);
   assert.deepStrictEqual(node.log.sent.map((s) => s.broadcast), [false, true]);
 });
+
+// ---------------------------------------------------------------- M-C
+
+test("M-C: amounts above 2^64-1 base units are refused, never wrapped", () => {
+  const TOO_BIG = "18446744073709551616";
+  assert.throws(() => lib.parseTokenAmount(TOO_BIG, 0, "--reader"), /amount like|too large/);
+  // An 18-decimal "20" is 2e19 base units: it used to be signed as about 1.55.
+  assert.throws(() => lib.parseTokenAmount("20", 18, "--reader"), /too large/);
+  assert.strictEqual(lib.parseTokenAmount("18.446744073709551615", 18, "--reader"), "18446744073709551615");
+  assert.throws(() => lib.planPrices({ reader: "20" }, 18, {}), /too large/);
+  assert.throws(() => lib.planPrices({ rate: "0.00000001" }, 18, { writer_ink: "100000000", pack_s_ink: "1", pack_m_ink: "1", pack_l_ink: "1" }), /too large/);
+  assert.throws(() => lib.planPromoCampaign({ budget: TOO_BIG, end: "2099-01-01" }, 1761450000), /too large/);
+});
+
+test("M-C: an operation whose number does not survive encoding is refused before anything is signed", async () => {
+  const shop = deploy.contractOf("shop", SHOP, null);
+  await assert.rejects(shop.encodeOperation({ name: "set_price", args: { item: 1, token: TOKEN, amount: "18446744073709551616" } }),
+    /amount = 18446744073709551616 does not fit[\s\S]*signed as 0/);
+  await assert.rejects(shop.encodeOperation({ name: "set_fee_bps", args: { fee_bps: 4294967296 } }), /fee_bps = 4294967296 does not fit/);
+  const ok = await shop.encodeOperation({ name: "set_price", args: { item: 1, token: TOKEN, amount: "18446744073709551615" } });
+  assert.ok(ok.call_contract);
+  assert.strictEqual(lib.numberMismatch({ a: "5", b: [1, { c: "7" }] }, { a: "5", b: [1, { c: 7 }] }), null);
+  assert.deepStrictEqual(lib.numberMismatch({ b: [{ c: "7" }] }, { b: [{ c: "8" }] }), { field: "b[0].c", sent: "7", got: "8" });
+});

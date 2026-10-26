@@ -41,6 +41,50 @@ function fail(message) {
   throw new AdminInputError(message);
 }
 
+/**
+ * The largest uint64, the widest number type the contracts take. A larger
+ * value would be encoded wrapped around, so the wallet would sign a different
+ * amount from the one shown (audit M-C).
+ */
+export const U64_MAX = 18446744073709551615n;
+
+function requireUint64(n, label) {
+  if (n > U64_MAX) fail(label + " is too large: the contracts take at most " + U64_MAX + " (in base units).");
+  return n;
+}
+
+/**
+ * The first number in `sent` (an operation's arguments) that the encoded
+ * operation, decoded back as `decoded`, does not carry exactly: a value that
+ * wrapped around or was cut to fit its field (audit M-C). null when all match.
+ */
+export function numberMismatch(sent, decoded, at) {
+  const here = at || "arguments";
+  if (Array.isArray(sent)) {
+    for (let i = 0; i < sent.length; i++) {
+      const m = numberMismatch(sent[i], Array.isArray(decoded) ? decoded[i] : undefined, here + "[" + i + "]");
+      if (m) return m;
+    }
+    return null;
+  }
+  if (sent && typeof sent === "object") {
+    for (const k of Object.keys(sent)) {
+      const m = numberMismatch(sent[k], decoded && typeof decoded === "object" ? decoded[k] : undefined, at ? here + "." + k : k);
+      if (m) return m;
+    }
+    return null;
+  }
+  const isNum = typeof sent === "bigint" || typeof sent === "number" || (typeof sent === "string" && /^-?[0-9]+$/.test(sent));
+  if (!isNum) return null;
+  let got;
+  try {
+    got = BigInt(decoded === undefined || decoded === null ? 0 : decoded);
+  } catch {
+    return { field: here, sent: String(sent), got: String(decoded) };
+  }
+  return BigInt(sent) === got ? null : { field: here, sent: String(sent), got: got.toString() };
+}
+
 export function requireAddress(value, label) {
   const v = String(value || "").trim();
   if (!ADDRESS_RE.test(v)) fail(label + " must be a Koinos address (starts with 1).");
@@ -56,7 +100,7 @@ function whole(value, label, min, max) {
   }
   if (min != null && n < BigInt(min)) fail(label + " must be at least " + min + ".");
   if (max != null && n > BigInt(max)) fail(label + " must be at most " + max + ".");
-  return n;
+  return requireUint64(n, label);
 }
 
 function note(text, label) {
@@ -72,7 +116,8 @@ export function toBaseUnits(text, decimals, label) {
   if (!m) fail((label || "The amount") + " must be a number like 2 or 0.5.");
   const frac = m[2] || "";
   if (frac.length > decimals) fail((label || "The amount") + " has more than " + decimals + " decimals.");
-  return (BigInt(m[1]) * 10n ** BigInt(decimals) + BigInt((frac + "0".repeat(decimals)).slice(0, decimals) || "0")).toString();
+  const n = BigInt(m[1]) * 10n ** BigInt(decimals) + BigInt((frac + "0".repeat(decimals)).slice(0, decimals) || "0");
+  return requireUint64(n, label || "The amount").toString();
 }
 
 export function fromBaseUnits(base, decimals) {
@@ -202,7 +247,7 @@ export function ratePrice(ink, rate, decimals) {
   if (r === 0n) fail("The rate must be more than 0.");
   const scale = 10n ** BigInt(decimals) * 10n ** BigInt(k);
   const n = BigInt(ink || 0);
-  return ((n * scale + r - 1n) / r).toString();
+  return requireUint64((n * scale + r - 1n) / r, "The price from this rate").toString();
 }
 
 /** The items priced from the Ink they bring, and where the Shop keeps that Ink. */
@@ -410,7 +455,26 @@ export function planAny(abis, contract, method, json) {
     fail("The arguments are not valid JSON.");
   }
   if (!args || typeof args !== "object" || Array.isArray(args)) fail("The arguments must be a JSON object.");
+  checkJsonNumbers(args, "arguments");
   return call(contract, method, args, contract + "." + method + " " + JSON.stringify(args));
+}
+
+/**
+ * Numbers typed as JSON (audit M-C): a JSON number beyond 2^53 has already
+ * lost digits when it is parsed, so big ones must be written as strings, and
+ * no number may be above a uint64.
+ */
+function checkJsonNumbers(value, at) {
+  if (Array.isArray(value)) {
+    value.forEach((v, i) => checkJsonNumbers(v, at + "[" + i + "]"));
+  } else if (value && typeof value === "object") {
+    for (const k of Object.keys(value)) checkJsonNumbers(value[k], at + "." + k);
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) fail(at + " is not a whole number JavaScript can hold exactly: write large numbers in quotes, like \"20000000000000000000\".");
+    if (value < 0) fail(at + " must be 0 or more.");
+  } else if (typeof value === "string" && /^[0-9]+$/.test(value)) {
+    requireUint64(BigInt(value), at);
+  }
 }
 
 // ---------------------------------------------------------------- multisig files

@@ -10,7 +10,7 @@ import { abis } from "../generated/abis.js";
 import { contracts, DEFAULT_PAYMENT, network, SITE } from "../config.js";
 import { encode, getProvider, read, verifyChain } from "../chain.js";
 import {
-  AdminInputError, DEFAULT_PREPARED_RC, INK_AMOUNT_FIELDS, REASONS, SHOP_ITEMS, fromBaseUnits, planAcceptAdmin, planAny, planAsset,
+  AdminInputError, DEFAULT_PREPARED_RC, INK_AMOUNT_FIELDS, REASONS, SHOP_ITEMS, fromBaseUnits, numberMismatch, planAcceptAdmin, planAny, planAsset,
   planBlock, planCampaignEnabled, planCampaignLimits, planCategory, planCategoryActive, planClearSummary, planFee, planHide,
   planInkAmounts, planLimits, planMinContribution, planModeration, planPause, planPrice, planPromo, planPromoSwitch, planSetAdmin,
   planSourceNote, planSponsor, planTakedown, planTakeOver, planTerms, preparedFile, promoLink, strikeChoices, toBaseUnits,
@@ -100,7 +100,15 @@ async function run(plans, status, before) {
     }
     if (before && (await before()) === false) return false;
     const ops = [];
-    for (const p of plans) ops.push(await encode(p.contract, p.method, p.args));
+    for (const p of plans) {
+      const op = await encode(p.contract, p.method, p.args);
+      // What is signed must be what was shown: decode the bytes back and
+      // refuse any number that wrapped around or was cut to fit (audit M-C).
+      const back = await new Contract({ id: p.contract_id, abi: abis[p.contract] }).decodeOperation(op);
+      const bad = numberMismatch(p.args, back.args || {});
+      if (bad) throw new AdminInputError(bad.field + " = " + bad.sent + " does not fit the contract's number type (it would be signed as " + bad.got + "). Nothing was signed.");
+      ops.push(op);
+    }
     if (admin.mode === "prepare") return prepare(plans, ops, status);
     if (!state.wallet) throw new AdminInputError("Connect the admin wallet first, or switch to “Prepare a file for the multisig”.");
     const ok = await send(ops, status);

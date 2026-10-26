@@ -255,6 +255,14 @@ function contractOf(target, id, provider) {
       if (!fields[name]) lib.fail("The built " + target + " ABI has no '" + name + "' for " + op.name + ". Rebuild it: " + CONTRACTS[target].buildHint);
     }
     const out = await encode(op);
+    // What is signed must be what was shown: decode the bytes back and refuse
+    // any number that wrapped around or was cut to fit (audit M-C).
+    const back = await c.decodeOperation(out);
+    const bad = lib.numberMismatch(op.args || {}, back.args || {});
+    if (bad) {
+      lib.fail(target + "." + op.name + ": " + bad.field + " = " + bad.sent + " does not fit the contract's number type (it would be signed as " +
+        bad.got + "). Nothing was sent.");
+    }
     opMeta.set(out, { contract: target, contract_id: id, method: op.name, args: op.args || {} });
     return out;
   };

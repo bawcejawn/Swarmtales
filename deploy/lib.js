@@ -132,20 +132,63 @@ function measurementText(units, emoji) {
   return out;
 }
 
-/** A non-negative whole number from a flag or a chain read. Never accepts blanks or decimals. */
+// The largest uint64, the widest number type the contracts take. A larger
+// value would be encoded wrapped around, so it would sign a different amount
+// from the one shown (audit M-C).
+const U64_MAX = 18446744073709551615n;
+
+/** `n` (a BigInt) if it fits a uint64, else a clear refusal. */
+function requireUint64(n, label) {
+  if (n > U64_MAX) fail(label + " is too large: the contracts take at most " + U64_MAX + " (in base units). Nothing was sent.");
+  return n;
+}
+
+/** A non-negative whole number from a flag or a chain read, at most a uint64. Never accepts blanks or decimals. */
 function asWhole(value, label) {
   if (typeof value === "bigint") {
     if (value < 0n) fail(label + " must be a whole number of 0 or more.");
-    return value;
+    return requireUint64(value, label);
   }
   if (typeof value === "number") {
     if (!Number.isInteger(value) || value < 0) fail(label + " must be a whole number of 0 or more.");
-    return BigInt(value);
+    return requireUint64(BigInt(value), label);
   }
   if (typeof value !== "string") fail(label + " must be a whole number of 0 or more.");
   const s = value.trim();
   if (!/^(0|[1-9][0-9]*)$/.test(s)) fail(label + " must be a whole number of 0 or more.");
-  return BigInt(s);
+  return requireUint64(BigInt(s), label);
+}
+
+/**
+ * The first number in `sent` (an operation's arguments) that the encoded
+ * operation, decoded back as `decoded`, does not carry exactly: a value that
+ * wrapped around or was cut to fit its field (audit M-C). null when all match.
+ */
+function numberMismatch(sent, decoded, at) {
+  const here = at || "arguments";
+  if (Array.isArray(sent)) {
+    for (let i = 0; i < sent.length; i++) {
+      const m = numberMismatch(sent[i], Array.isArray(decoded) ? decoded[i] : undefined, here + "[" + i + "]");
+      if (m) return m;
+    }
+    return null;
+  }
+  if (sent && typeof sent === "object") {
+    for (const k of Object.keys(sent)) {
+      const m = numberMismatch(sent[k], decoded && typeof decoded === "object" ? decoded[k] : undefined, at ? here + "." + k : k);
+      if (m) return m;
+    }
+    return null;
+  }
+  const isNum = typeof sent === "bigint" || typeof sent === "number" || (typeof sent === "string" && /^-?[0-9]+$/.test(sent));
+  if (!isNum) return null;
+  let got;
+  try {
+    got = BigInt(decoded === undefined || decoded === null ? 0 : decoded);
+  } catch (e) {
+    return { field: here, sent: String(sent), got: String(decoded) };
+  }
+  return BigInt(sent) === got ? null : { field: here, sent: String(sent), got: got.toString() };
 }
 
 /** A whole number from a flag, from `min` to `max`. */
@@ -1083,7 +1126,7 @@ function parseTokenAmount(value, decimals, label) {
   if (!m) fail(label + " must be an amount like 2 or 0.5.");
   const frac = m[2] || "";
   if (frac.length > decimals) fail(label + " has more than " + decimals + " decimals.");
-  return (BigInt(m[1]) * 10n ** BigInt(decimals) + BigInt((frac + "0".repeat(decimals)).slice(0, decimals) || "0")).toString();
+  return requireUint64(BigInt(m[1]) * 10n ** BigInt(decimals) + BigInt((frac + "0".repeat(decimals)).slice(0, decimals) || "0"), label).toString();
 }
 
 /**
@@ -1109,7 +1152,7 @@ function planPrices(flags, decimals, cfg) {
       if (prices[PRICE_FLAGS[flag]] !== undefined) continue;
       const ink = BigInt((cfg && cfg[field]) || "0");
       if (ink === 0n) fail("The Shop has no Ink amount for " + flag + " yet, so --rate can't price it. Set it with set-ink-amounts, or give --" + flag + ".");
-      prices[PRICE_FLAGS[flag]] = ((ink * scale + rateInt - 1n) / rateInt).toString();
+      prices[PRICE_FLAGS[flag]] = requireUint64((ink * scale + rateInt - 1n) / rateInt, "The --" + flag + " price from --rate").toString();
     }
   }
   const items = Object.keys(prices).map(Number).sort((a, b) => a - b);
@@ -1595,6 +1638,8 @@ module.exports = {
   newLinkKeyHex,
   toKoilibAbi,
   PREPARED_FORMAT,
+  U64_MAX,
+  numberMismatch,
   PREPARED_COMMANDS,
   TERMINAL_RESET,
   terminalSafe,
