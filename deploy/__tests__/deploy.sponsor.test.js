@@ -150,7 +150,7 @@ test("sponsor: a key for another wallet is refused before anything is signed", a
 });
 
 test("sponsor: upload turns on ONLY the transaction-application flag for the sponsor, none for the others", () => {
-  const src = fs.readFileSync(path.join(__dirname, "..", "deploy.js"), "utf8");
+  const src = fs.readFileSync(path.join(__dirname, "..", "deploy.js"), "utf8").replace(/\r\n/g, "\n"); // a Windows checkout has CRLF
   assert.match(src, /authorizesCallContract: false,\n\s+authorizesTransactionApplication: payFlag,\n\s+authorizesUploadContract: false,/);
   assert.match(src, /sponsor: \{[\s\S]*?authorizesTransactionApplication: true,/);
   for (const name of ["ink", "shop", "stories"]) {

@@ -464,7 +464,7 @@ function findWebBookText(dir) {
       const found = findWebBookText(full);
       if (found) return found;
     } else if (entry.name.endsWith(".js")) {
-      const src = fs.readFileSync(full, "utf8");
+      const src = fs.readFileSync(full, "utf8").replace(/\r\n/g, "\n"); // a Windows checkout has CRLF
       const start = src.indexOf("function bookText(story, segments) {");
       if (start >= 0) return src.slice(start, src.indexOf("\n}\n", start) + 2);
     }
