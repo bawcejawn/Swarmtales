@@ -28,7 +28,7 @@ const INK = Base58.decode("13Qrdvv3cXys9aryjZho6vHxDW3PRgX5pm");
 const STORIES = Base58.decode("16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt");
 const CARA = Base58.decode("1NRNShd6oHh1JCxfbnWj47PrgqvqeyK7w1");
 const MALLORY = Base58.decode("1PJLazQ9eg25WRsBbcgVfc9ng2cR1cRT52");
-const EVIL_INK = Base58.decode("1Htyn9WgqXQcxjCWSBtGzX5bUkSWAbocvM") // audit: was "112Au...", which decodes to 24 bytes and was refused as an invalid address;
+const EVIL_INK = Base58.decode("1Htyn9WgqXQcxjCWSBtGzX5bUkSWAbocvM"); // audit: was "112Au...", which decodes to 24 bytes and was refused as an invalid address;
 const START: u64 = 1700000000;
 
 function checkpoint(): void {
