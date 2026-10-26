@@ -10,6 +10,9 @@ import { renderChip, renderPage } from "./shell.js";
 
 /** After the buyer picks another payment token: prices, balance, page. */
 export async function switchPaymentToken() {
+  // Hide the old token's prices at once, while the new ones load (audit L-19).
+  checkPayment();
+  renderPage();
   await reloadOverview();
   if (currentAddress()) await refreshAccount();
   renderPage();

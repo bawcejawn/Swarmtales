@@ -246,6 +246,8 @@ async function mapPool(items, limit, fn) {
 }
 
 export async function loadOverview() {
+  // The token these prices are in, fixed before any await (audit L-19).
+  const token = contracts.paymentToken;
   const [storiesCfg, shopCfg, asset, writerPrice, shortPrice, bookPrice, packS, packM, packL, tokenDecimals, tokenCodeHash, now, poemPrice] = await Promise.all([
     read("stories", "get_config", {}),
     read("shop", "get_config", {}),
@@ -287,6 +289,7 @@ export async function loadOverview() {
     categories,
     tokenDecimals: tokenDecimals && tokenDecimals.value != null ? Number(tokenDecimals.value) : null,
     tokenCodeHash,
+    token,
     now: Number(now || 0),
   };
 }

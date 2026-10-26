@@ -55,9 +55,30 @@ export function tokenAmount(base) {
   }
 }
 
+/**
+ * True when the prices on screen are in the token the buyer picked (audit
+ * L-19): after a switch, the old token's prices stay in state.overview until
+ * the new ones load.
+ */
+export function overviewIsForPickedToken() {
+  return !!state.overview && state.overview.token === contracts.paymentToken;
+}
+
+/** Stop before encoding a purchase whose prices were read for another token (audit L-19). */
+export function requirePricesForPickedToken() {
+  if (!overviewIsForPickedToken()) {
+    throw new Error("The prices on this page are still being loaded for " + contracts.paymentSymbol + ". Wait a moment and try again. Nothing was signed.");
+  }
+}
+
 /** Recheck the payment token against config.js (its pin) whenever the overview loads (M-8, H-3). */
 export function checkPayment() {
   const o = state.overview;
+  if (o && !overviewIsForPickedToken()) {
+    // Prices for the old token: show none until the picked token's load (L-19).
+    state.payment = { ok: false, mismatch: true, waitUntil: 0, problems: ["Loading the prices in " + contracts.paymentSymbol + "…"] };
+    return;
+  }
   const pin = pinnedToken(contracts.paymentToken);
   state.payment = o
     ? checkPaymentToken({

@@ -8,7 +8,7 @@ import { checkStoryText, inkCost, normalizePasted } from "../lib/text.js";
 import { append, h, replace } from "../ui/dom.js";
 import { currentAddress, state } from "../app/state.js";
 import { num } from "../app/format.js";
-import { paymentBlock, tokenAmount, tokenPicker } from "../app/payment.js";
+import { paymentBlock, requirePricesForPickedToken, tokenAmount, tokenPicker } from "../app/payment.js";
 import { minContribution, termsVersion } from "../app/story.js";
 import { aiToggle, citationField, connectButton, failure, field, loadingLine, notice, problemsNotice, rightsBox, setMeta, statusBox, walletNote } from "../app/ui.js";
 import { loadLibrary, newestOpenedStory, refreshAccount, reloadOverview, switchPaymentToken } from "../app/data.js";
@@ -226,6 +226,7 @@ export function renderOpen(page) {
       // The starter Ink the page showed: if the Shop would now mint less, the
       // whole open fails and nothing is charged (M-2).
       const starterInk = String(state.overview.shopCfg[kindInfo.starterKey] || "0");
+      requirePricesForPickedToken();
       const approve = await encode("token", "approve", { owner: address, spender: contracts.shop, value: plan.price });
       const open = await encode("stories", "open_story", {
         opener: address,

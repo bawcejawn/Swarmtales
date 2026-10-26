@@ -10,7 +10,7 @@ import { assessWriterBuy, isActiveWriter, writerMinInk } from "../lib/rules.js";
 import { append, h, icons, replace } from "../ui/dom.js";
 import { currentAddress, state } from "../app/state.js";
 import { num, plural } from "../app/format.js";
-import { paymentBlock, tokenAmount, tokenPicker } from "../app/payment.js";
+import { paymentBlock, requirePricesForPickedToken, tokenAmount, tokenPicker } from "../app/payment.js";
 import { connectButton, failure, field, loadingLine, notice, problemsNotice, setMeta, statusBox, walletNote } from "../app/ui.js";
 import { refreshAccount, switchPaymentToken } from "../app/data.js";
 import { send } from "../app/send.js";
@@ -66,6 +66,7 @@ export function renderMembership(page) {
       buyStatus.replaceChildren();
       buyButton.disabled = true;
       try {
+        requirePricesForPickedToken();
         const plan = assessWriterBuy({ price: state.overview.writerPrice, balance: state.account.token, paused: !!cfg.paused });
         if (!plan.ok) {
           append(buyStatus, problemsNotice(plan.problems));
@@ -112,6 +113,7 @@ export function renderMembership(page) {
         replace(packStatus);
         button.disabled = true;
         try {
+          requirePricesForPickedToken();
           if (BigInt(state.account.token || "0") < BigInt(pack.price)) {
             throw new Error("Your " + contracts.paymentSymbol + " balance is below this pack's price.");
           }
@@ -228,6 +230,7 @@ export function giftSection(me) {
       status.textContent = active
         ? "They already have a Writer month until " + (formatUtc(theirs.paid_until) || "later") + ". This adds one more month."
         : "";
+      requirePricesForPickedToken();
       const approve = await encode("token", "approve", { owner: me, spender: contracts.shop, value: plan.price });
       const buy = await encode("shop", "buy_membership", {
         payer: me, tier: 2, months: 1, token: contracts.paymentToken, beneficiary: account, max_price: plan.price,
