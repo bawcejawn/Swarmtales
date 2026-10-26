@@ -354,3 +354,16 @@ test("I-10: with a signer list, cosign takes the payee's key and submit keeps th
   assert.ok(sent.includes(PAYEE.getAddress()), "the payee's signature is kept");
   assert.ok(sent.includes(PAYER.getAddress()));
 });
+
+// ---------------------------------------------------------------- I-21
+
+test("I-21: a prepared file's default mana limit is 1 mana per operation, at most 10", async () => {
+  assert.deepStrictEqual([1, 3, 10, 64].map(lib.preparedRcLimit), ["100000000", "300000000", "1000000000", "1000000000"]);
+  const web = await import(require("node:url").pathToFileURL(path.join(REPO, "web", "src", "lib", "admin.js")).href);
+  for (const n of [1, 2, 7, 10, 30]) assert.strictEqual(web.preparedRcLimit(n), lib.preparedRcLimit(n), "the page and the tool agree for " + n);
+  // A one-operation pause keeps 1 mana.
+  const file = tmpFile("rc.json");
+  const r = await preparePause(file);
+  assert.ok(r.prepared, r.error && r.error.message);
+  assert.strictEqual(JSON.parse(fs.readFileSync(file, "utf8")).transaction.header.rc_limit, "100000000");
+});

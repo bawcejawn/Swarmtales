@@ -588,7 +588,7 @@ async function prepareTx(signerAddr, provider, net, operations, onPrepared) {
   if (payer !== signerAddr && (await isContractWallet(provider, payer)) !== false) lib.fail(CONTRACT_PAYER + " Nothing was written.");
   const mana = await freeMana(provider, payer);
   if (mana.free === 0n) lib.fail(payer + " (the payer) has no free mana. Give it some KOIN first, or name another --payer. Nothing was written.");
-  let rcLimit = f["rc-limit"] === undefined ? lib.DEFAULT_PREPARED_RC : lib.parseMana(f["rc-limit"], "--rc-limit");
+  let rcLimit = f["rc-limit"] === undefined ? lib.preparedRcLimit(operations.length) : lib.parseMana(f["rc-limit"], "--rc-limit");
   if (BigInt(rcLimit) > mana.free) {
     if (f["rc-limit"] !== undefined) lib.fail("--rc-limit is more than the " + lib.formatMana(mana.free.toString()) + " mana " + payer + " has. Nothing was written.");
     rcLimit = mana.free.toString();

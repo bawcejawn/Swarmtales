@@ -12,6 +12,12 @@ export const PREPARED_FORMAT = "swarmtales-prepared-transaction/1";
 /** Mana limit of a prepared transaction (1 mana, as the deploy tool; admin calls use under 0.1). */
 export const DEFAULT_PREPARED_RC = "100000000";
 
+/** The mana limit of a prepared file with `count` operations: 1 mana each, at most 10 (audit I-21, as the deploy tool). */
+export function preparedRcLimit(count) {
+  const n = Math.max(1, Math.min(10, Number(count) || 1));
+  return (BigInt(DEFAULT_PREPARED_RC) * BigInt(n)).toString();
+}
+
 /** Shop items, by their shop.proto numbers (8 and 9 are retired). */
 export const SHOP_ITEMS = [
   { id: 1, name: "Reader month" },

@@ -1456,6 +1456,15 @@ const TERMINAL_RESET = "\u001b[0m\u001b[?25h";
 // calls use under 0.1 (measured on testnet, 25 Oct 2026: accept_admin 0.09, a
 // pause 0.06), and the node holds the whole limit of a waiting transaction.
 const DEFAULT_PREPARED_RC = "100000000";
+// A multi-operation file (wire, set-price, a final-edit batch) needs more:
+// 1 mana per operation, at most 10 (audit I-21). --rc-limit still overrides.
+const PREPARED_RC_CAP_OPS = 10;
+
+/** The default mana limit of a prepared transaction with `count` operations. */
+function preparedRcLimit(count) {
+  const n = Math.max(1, Math.min(PREPARED_RC_CAP_OPS, Number(count) || 1));
+  return (BigInt(DEFAULT_PREPARED_RC) * BigInt(n)).toString();
+}
 
 /** A nonce as the chain encodes it (koinos.chain.value_type, uint64_value = field 5), base64url. */
 // A nonce is a koinos.chain.value_type holding one varint: uint64_value,
@@ -1747,6 +1756,7 @@ module.exports = {
   terminalSafe,
   preparedTargets,
   DEFAULT_PREPARED_RC,
+  preparedRcLimit,
   nonceNumber,
   preparedFile,
   verifyPrepared,
