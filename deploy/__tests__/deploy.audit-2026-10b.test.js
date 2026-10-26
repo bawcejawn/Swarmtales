@@ -42,7 +42,7 @@ function fakeNode(opts = {}) {
       }
       throw new Error("unexpected node call " + method);
     }
-    async getNextNonce() { return "KAU="; }
+    async getNextNonce() { return opts.nonce || "KAU="; } // koilib's encoding of 5
     async readContract(call) {
       const target = byAddr[call.contract_id];
       const value = (opts.reads || {})[target + ".get_config"];
@@ -366,4 +366,24 @@ test("I-21: a prepared file's default mana limit is 1 mana per operation, at mos
   const r = await preparePause(file);
   assert.ok(r.prepared, r.error && r.error.message);
   assert.strictEqual(JSON.parse(fs.readFileSync(file, "utf8")).transaction.header.rc_limit, "100000000");
+});
+
+// ---------------------------------------------------------------- L-11
+
+test("L-11: submit re-reads the account's next nonce and refuses a file for a used or a later nonce", async () => {
+  const file = tmpFile("nonce.json");
+  let r = await preparePause(file, [], { ...MS_READS, contractAccounts: [MULTISIG] }); // nonce 5
+  assert.ok(r.prepared, r.error && r.error.message);
+  for (const k of [KEY1, KEY2]) assert.ifError((await run(["cosign", file], { answers: ["SIGN"], secret: k.getPrivateKey("wif") })).error);
+  let node = fakeNode({ ...MS_READS, contractAccounts: [MULTISIG], nonce: "KAY=" }); // the account is at 6 now
+  r = await run(["submit", file], { node, answers: ["SEND"] });
+  assert.match(r.error.message, /nonce 5 .* already used \(the next is 6\)/);
+  assert.deepStrictEqual(node.log.sent, []);
+  node = fakeNode({ ...MS_READS, contractAccounts: [MULTISIG], nonce: "KAQ=" }); // the account is at 4: the file is for a later nonce
+  r = await run(["submit", file], { node, answers: ["SEND"] });
+  assert.match(r.error.message, /nonce 5 .* but the next one is 4/);
+  assert.deepStrictEqual(node.log.sent, []);
+  node = fakeNode({ ...MS_READS, contractAccounts: [MULTISIG] });
+  r = await run(["submit", file], { node, answers: ["SEND"] });
+  assert.ifError(r.error);
 });

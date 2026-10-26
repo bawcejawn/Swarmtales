@@ -705,6 +705,24 @@ async function cmdSubmit(args) {
   for (const w of checked.warnings) console.log(lib.terminalSafe(w));
   for (const line of lib.preparedSummary(net, base, checked, unique)) console.log(line);
   const payer = tx.header.payer;
+  // The file must use the account's next nonce, read now (audit L-11): an
+  // older one was used already (the file can never be sent), and a later
+  // one means whoever prepared it, or their node, did not give the real
+  // next nonce, and the signed file would wait to be sent later.
+  const nonceAccount = tx.header.payee || payer;
+  let next;
+  try {
+    next = lib.nonceNumber(await provider.getNextNonce(nonceAccount));
+  } catch (e) {
+    lib.fail("Could not read the next nonce of " + nonceAccount + " (" + (e && e.message ? e.message : String(e)) + "). Nothing was sent.");
+  }
+  const fileNonce = lib.nonceNumber(tx.header.nonce);
+  if (BigInt(fileNonce) !== BigInt(next)) {
+    lib.fail(BigInt(fileNonce) < BigInt(next)
+      ? "This file uses nonce " + fileNonce + " of " + nonceAccount + ", which is already used (the next is " + next + "). It can never be sent: prepare it again. Nothing was sent."
+      : "This file uses nonce " + fileNonce + " of " + nonceAccount + ", but the next one is " + next + ". A file for a later nonce would stay valid until then: " +
+        "prepare it again through your own node. Nothing was sent.");
+  }
   const payerIsContract = await isContractWallet(provider, payer);
   // A multisig transaction is paid by the multisig itself or by a normal
   // wallet that also signs, never by another contract wallet (audit H-1).
