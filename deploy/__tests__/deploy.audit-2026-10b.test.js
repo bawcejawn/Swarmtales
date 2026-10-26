@@ -218,3 +218,69 @@ test("M-C: an operation whose number does not survive encoding is refused before
   assert.strictEqual(lib.numberMismatch({ a: "5", b: [1, { c: "7" }] }, { a: "5", b: [1, { c: 7 }] }), null);
   assert.deepStrictEqual(lib.numberMismatch({ b: [{ c: "7" }] }, { b: [{ c: "8" }] }), { field: "b[0].c", sent: "7", got: "8" });
 });
+
+// ---------------------------------------------------------------- H-3 (token pins)
+
+const TKOIN = "1FaSvLjQJsCJKq5ybmGsMMQs8RQYyVv8ju";
+const TKOIN_CODE = "4251a6e9d9c9a37f3bbf67e171f63a7dcad62309e4be7d9da85a74f68520edf7";
+const ADMIN = KEY1;
+
+/** A node for set-asset: the Shop's records, and each address's code hash ("" = no contract). */
+function assetNode({ records = {}, code = {} } = {}) {
+  const node = fakeNode();
+  const shopAbi = ABI("shop");
+  class AssetProvider extends node.FakeProvider {
+    async readContract(call) {
+      const c = new koilib.Contract({ id: call.contract_id, abi: shopAbi });
+      const { name, args } = await c.decodeOperation({ call_contract: call });
+      let value;
+      if (name === "get_asset") value = records[args.token] || {};
+      else if (name === "get_assets") value = { tokens: Object.keys(records) };
+      else if (name === "get_config") value = { sold: true };
+      else throw new Error("no fake read for shop." + name);
+      return { result: koilib.utils.encodeBase64url(await c.serializer.serialize(value, c.abi.methods[name].return)) };
+    }
+    async invokeGetContractMetadata(id) {
+      return { value: code[id] ? { hash: "0x1220" + code[id] } : {} };
+    }
+  }
+  return { FakeProvider: AssetProvider, log: node.log };
+}
+
+const setAsset = (extra) => ["set-asset", "--admin", ADMIN.getAddress(), "--shop", SHOP, "--token", TKOIN, "--symbol", "tKOIN", "--decimals", "8", ...extra];
+
+test("H-3: set-asset refuses an address with no contract, and code that is not the pinned code", async () => {
+  let node = assetNode({ code: {} });
+  let r = await run(setAsset([]), { node, answers: ["SEND"], secret: ADMIN.getPrivateKey("wif") });
+  assert.match(r.error.message, /There is no token contract at/);
+  assert.deepStrictEqual(node.log.sent, []);
+  node = assetNode({ code: { [TKOIN]: "cd".repeat(32) } });
+  r = await run(setAsset([]), { node, answers: ["SEND"], secret: ADMIN.getPrivateKey("wif") });
+  assert.match(r.error.message, /not the pinned code[\s\S]*Its issuer changed it/);
+  assert.deepStrictEqual(node.log.sent, []);
+  node = assetNode({ code: { [TKOIN]: TKOIN_CODE } });
+  r = await run(["set-asset", "--admin", ADMIN.getAddress(), "--shop", SHOP, "--token", TKOIN, "--symbol", "KOIN", "--decimals", "8"],
+    { node, answers: ["SEND"], secret: ADMIN.getPrivateKey("wif") });
+  assert.match(r.error.message, /pinned as tKOIN with 8 decimals/);
+  // The pinned code goes through to the dry run and the send.
+  node = assetNode({ code: { [TKOIN]: TKOIN_CODE } });
+  r = await run(setAsset([]), { node, answers: ["SEND"], secret: ADMIN.getPrivateKey("wif") });
+  assert.ifError(r.error);
+  assert.match(r.out, /Token code: the pinned code of tKOIN/);
+  assert.deepStrictEqual(node.log.sent.map((s) => s.broadcast), [false, true]);
+  // Turning a token off never needs its code: it must always work.
+  node = assetNode({ records: { [TKOIN]: { enabled: true, decimals: 8, symbol: "tKOIN" } }, code: {} });
+  r = await run(["set-asset", "--admin", ADMIN.getAddress(), "--shop", SHOP, "--token", TKOIN, "--disable"], { node, answers: ["SEND"], secret: ADMIN.getPrivateKey("wif") });
+  assert.ifError(r.error);
+});
+
+test("H-3: an unpinned token is refused on mainnet and only warned about on testnet", () => {
+  const mainnet = lib.NETWORKS.mainnet;
+  assert.throws(() => lib.checkTokenCode(mainnet, TOKEN, "ab".repeat(32), { symbol: "X", decimals: 6 }), /not pinned in deploy\/lib\.js TOKEN_PINS\.mainnet/);
+  assert.match(lib.checkTokenCode(TESTNET, TOKEN, "ab".repeat(32), { symbol: "X", decimals: 6 }), /^WARNING: token .* is not pinned/);
+  assert.strictEqual(lib.checkTokenCode(TESTNET, TKOIN, TKOIN_CODE, { symbol: "tKOIN", decimals: 8 }), null);
+  assert.deepStrictEqual(lib.TOKEN_PINS.mainnet, [], "mainnet pins are filled only after review");
+  // The deploy tool and the website pin the same tokens.
+  const web = fs.readFileSync(path.join(REPO, "web", "src", "config.js"), "utf8");
+  for (const t of lib.TOKEN_PINS.testnet) assert.ok(web.includes('codeHash: "' + t.codeHash + '"'), t.symbol + " is pinned on the website too");
+});

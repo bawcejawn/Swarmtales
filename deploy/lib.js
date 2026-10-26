@@ -23,6 +23,24 @@ const MAINNET_PINNED = {
 const PINNED_ROLES = ["ink", "shop", "stories", "token", "sponsor", "multisig"];
 const CONTRACT_ROLES = ["ink", "shop", "stories", "sponsor", "multisig"];
 const PIN_OVERRIDE_FLAG = "--i-understand-this-address-is-not-pinned";
+
+// ---- PAYMENT TOKENS (audit H-3) ----
+// Every token the Shop may accept, pinned with its code: address, symbol,
+// decimals and the sha256 of its code (hex, from get_contract_metadata, as
+// `status` prints it after 0x1220). The Shop's 7-day wait protects its record
+// of a token, not the token's code, and a token's code runs inside every
+// buyer's purchase, so set-asset refuses an address with no contract, a
+// token whose code is not the pinned code, and on mainnet any token that is
+// not pinned. Keep this list in step with web/src/config.js PAYMENT_TOKENS.
+// An issuer's upgrade changes the hash: review the new code, then update the
+// pin in a reviewed change. Launch with one token.
+const TOKEN_PINS = {
+  testnet: [
+    // The Foundation testnet's KOIN (tKOIN), read 25 Oct 2026.
+    { address: "1FaSvLjQJsCJKq5ybmGsMMQs8RQYyVv8ju", symbol: "tKOIN", decimals: 8, codeHash: "4251a6e9d9c9a37f3bbf67e171f63a7dcad62309e4be7d9da85a74f68520edf7" },
+  ],
+  mainnet: [],
+};
 const HASH_OVERRIDE_FLAG = "--i-understand-the-code-hash-is-not-verified";
 
 // ---- Signed invite/promo links (fixes H2 and H3) ----
@@ -59,6 +77,7 @@ const NETWORKS = {
     chainId: "EiAIKVvm6-V2qmsmUvPJy09vCCLbtn9lHFpwrJbcTIEWRQ==",
     koin: "1FaSvLjQJsCJKq5ybmGsMMQs8RQYyVv8ju",
     mainnet: false,
+    tokens: TOKEN_PINS.testnet,
   },
   mainnet: {
     name: "Koinos MAINNET (real KOIN)",
@@ -70,6 +89,7 @@ const NETWORKS = {
     koin: "15DJN4a8SgrbGhhGksSBASiSYjGnMU8dGL",
     mainnet: true,
     pinned: MAINNET_PINNED,
+    tokens: TOKEN_PINS.mainnet,
   },
 };
 
@@ -835,6 +855,53 @@ function checkPinnedTable(pinned) {
 }
 checkPinnedTable(MAINNET_PINNED);
 
+function checkTokenPins(pins) {
+  for (const list of Object.values(pins)) {
+    const seen = new Set();
+    for (const t of list) {
+      if (!t || !isAddress(t.address) || !/^[\x21-\x7e]{1,16}$/.test(String(t.symbol)) || !Number.isInteger(t.decimals) || t.decimals < 0 ||
+        t.decimals > 18 || !/^[0-9a-f]{64}$/.test(String(t.codeHash))) {
+        fail("deploy/lib.js TOKEN_PINS: each token needs an address, a symbol, decimals (0 to 18) and a 64-character lowercase hex code hash.");
+      }
+      const sym = t.symbol.toLowerCase();
+      if (seen.has(t.address) || seen.has(sym)) fail("deploy/lib.js TOKEN_PINS lists " + t.address + " or the symbol " + t.symbol + " twice.");
+      seen.add(t.address);
+      seen.add(sym);
+    }
+  }
+}
+checkTokenPins(TOKEN_PINS);
+
+/**
+ * Before a token is enabled (audit H-3): `hashHex` is its code hash from the
+ * chain (codeHashFromMeta), null when there is no contract (or the node did
+ * not say). Refuses no contract, code that is not the pinned code, a symbol
+ * or decimals that differ from the pin, and on mainnet a token that is not
+ * pinned. Returns a warning line for an unpinned testnet token, else null.
+ */
+function checkTokenCode(net, token, hashHex, wanted) {
+  if (!hashHex) {
+    fail("There is no token contract at " + token + " (or the node would not give its code hash). A payment token must be a deployed " +
+      "token contract whose code is pinned. Nothing was sent.");
+  }
+  const pin = (net.tokens || []).find((t) => t.address === token);
+  if (!pin) {
+    if (net.mainnet) {
+      fail("Token " + token + " is not pinned in deploy/lib.js TOKEN_PINS.mainnet. Review its code, add { address, symbol, decimals, " +
+        "codeHash: \"" + hashHex + "\" } there (and in web/src/config.js PAYMENT_TOKENS) and have that change reviewed. Nothing was sent.");
+    }
+    return "WARNING: token " + token + " is not pinned in deploy/lib.js TOKEN_PINS." + (net.mainnet ? "mainnet" : "testnet") + " (code hash " + hashHex + "). The website won't show it.";
+  }
+  if (pin.codeHash !== hashHex) {
+    fail("The code at token " + token + " (" + pin.symbol + ") is not the pinned code: the chain has " + hashHex + ", the pin says " +
+      pin.codeHash + ". Its issuer changed it. Review the new code and update TOKEN_PINS before enabling it. Nothing was sent.");
+  }
+  if (wanted && (String(wanted.symbol) !== pin.symbol || Number(wanted.decimals) !== pin.decimals)) {
+    fail("Token " + token + " is pinned as " + pin.symbol + " with " + pin.decimals + " decimals, not " + wanted.symbol + " with " +
+      wanted.decimals + ". Nothing was sent.");
+  }
+  return null;
+}
 /**
  * On mainnet, `address` must be the pinned address for `role`. `uploading`
  * lets `upload` name a contract address that is not pinned yet. Returns a
@@ -1607,6 +1674,8 @@ module.exports = {
   resolveNetwork,
   checkChainId,
   checkPinned,
+  TOKEN_PINS,
+  checkTokenCode,
   checkPinnedFlags,
   refuseCrossNetworkKey,
   parseReleaseHashes,

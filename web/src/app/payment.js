@@ -2,7 +2,7 @@
  * The payment token: amounts in its units, and whether prices may be shown
  * and things bought (checked against the chain at startup, audit M-8).
  */
-import { contracts, selectPaymentToken } from "../config.js";
+import { contracts, pinnedToken, selectPaymentToken } from "../config.js";
 import { formatUnits, formatUtc } from "../lib/money.js";
 import { h } from "../ui/dom.js";
 import { checkPaymentToken } from "../lib/payment.js";
@@ -55,15 +55,18 @@ export function tokenAmount(base) {
   }
 }
 
-/** Recheck the payment token against config.js whenever the overview loads (M-8). */
+/** Recheck the payment token against config.js (its pin) whenever the overview loads (M-8, H-3). */
 export function checkPayment() {
   const o = state.overview;
+  const pin = pinnedToken(contracts.paymentToken);
   state.payment = o
     ? checkPaymentToken({
-      expected: { decimals: contracts.paymentDecimals, symbol: contracts.paymentSymbol },
+      expected: { decimals: contracts.paymentDecimals, symbol: contracts.paymentSymbol, codeHash: pin && pin.decimals === contracts.paymentDecimals &&
+        pin.symbol === contracts.paymentSymbol ? pin.codeHash : "" },
       tokenDecimals: o.tokenDecimals,
       asset: o.asset,
       now: o.now,
+      codeHash: o.tokenCodeHash,
     })
     : null;
 }

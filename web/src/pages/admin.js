@@ -7,8 +7,8 @@
  */
 import { Contract, Signer, Transaction, utils } from "koilib";
 import { abis } from "../generated/abis.js";
-import { contracts, DEFAULT_PAYMENT, network, SITE } from "../config.js";
-import { encode, getProvider, read, verifyChain } from "../chain.js";
+import { contracts, DEFAULT_PAYMENT, network, pinnedToken, SITE } from "../config.js";
+import { codeHashOf, encode, getProvider, read, verifyChain } from "../chain.js";
 import {
   AdminInputError, DEFAULT_PREPARED_RC, INK_AMOUNT_FIELDS, REASONS, SHOP_ITEMS, fromBaseUnits, numberMismatch, planAcceptAdmin, planAny, planAsset,
   planBlock, planCampaignEnabled, planCampaignLimits, planCategory, planCategoryActive, planClearSummary, planFee, planHide,
@@ -531,7 +531,8 @@ function tokensSection(d) {
       h("td", {}, [t.enabled ? (Number(t.usable_from) * 1000 > Date.now() ? "on from " + formatUtc(Number(t.usable_from)) : "on") : "off"]),
       h("td", {}, [t.enabled
         ? actionButton("Turn off", () => planAsset({ token: t.address, enabled: false }), { danger: true })
-        : actionButton("Turn on", () => planAsset({ token: t.address, enabled: true, decimals: t.decimals, symbol: t.symbol }))]),
+        : actionButton("Turn on", async () => planAsset({ token: t.address, enabled: true, decimals: t.decimals, symbol: t.symbol,
+          pin: pinnedToken(t.address), codeHash: await codeHashOf(t.address) }))]),
     ])),
   ]);
 
@@ -577,10 +578,12 @@ function tokensSection(d) {
     }
   }
   rate.addEventListener("input", fillFromRate);
-  const add = actionButton("Add the token and its prices", () => {
+  const add = actionButton("Add the token and its prices", async () => {
     const p = {};
     for (const item of SHOP_ITEMS) p[item.id] = prices[item.id].value;
-    return planAddToken({ token: addr.value, symbol: symbol.value, decimals: decimals.value, prices: p });
+    const token = addr.value.trim();
+    return planAddToken({ token, symbol: symbol.value, decimals: decimals.value, prices: p,
+      pin: pinnedToken(token), codeHash: await codeHashOf(token) });
   });
   return section("Payment tokens", "Tokens buyers can pay with. Buyers pick one on the Membership and Open pages. After the Shop's first sale, a newly added token can be used only 7 days later (everyone can see it coming). Turning one off works at once.", [
     list,

@@ -989,6 +989,7 @@ async function cmdTestAsset(args) {
   } else {
     const sold = !!(await readOnly(provider, "shop", shop, "get_config", {})).sold;
     const plan = lib.planAsset(current, { token, enabled: true, decimals, symbol }, nowSec(), sold);
+    await checkTokenCode(provider, net, token, plan.args);
     ops.push(await shopC.encodeOperation({ name: "set_asset", args: plan.args }));
     what = plan.summary + ", and set small test prices";
   }
@@ -1001,6 +1002,19 @@ async function cmdTestAsset(args) {
 }
 
 /** set-asset: the admin turns a payment token on (at once before the Shop's first sale, after 7 days later) or off (at once). */
+/** The token's code must be its pinned code before it is enabled (audit H-3). */
+async function checkTokenCode(provider, net, token, wanted) {
+  let hash = null;
+  try {
+    hash = lib.codeHashFromMeta(await provider.invokeGetContractMetadata(token));
+  } catch (e) {
+    hash = null;
+  }
+  const warning = lib.checkTokenCode(net, token, hash, wanted);
+  if (warning) console.log(warning);
+  else console.log("Token code: the pinned code of " + wanted.symbol + " (" + hash + ").");
+}
+
 async function cmdSetAsset(args) {
   const f = args.flags;
   const admin = lib.requireAddress(f.admin, "admin");
@@ -1012,6 +1026,7 @@ async function cmdSetAsset(args) {
   const current = await readOnly(provider, "shop", shop, "get_asset", { token });
   const sold = !!(await readOnly(provider, "shop", shop, "get_config", {})).sold;
   const plan = lib.planAsset(current, { token, enabled, decimals: f.decimals, symbol: f.symbol }, nowSec(), sold);
+  if (enabled) await checkTokenCode(provider, net, token, plan.args);
   const signer = await getSigner(provider, admin, "the admin wallet");
   const op = await contractOf("shop", shop, provider).encodeOperation({ name: "set_asset", args: plan.args });
   const txId = await dryRunThenSend(signer, provider, net, [op], "shop.set_asset: " + plan.summary);

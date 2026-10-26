@@ -8,9 +8,19 @@
  *   - the token contract's own decimals()
  *   - the Shop's get_asset(token): decimals, symbol, enabled, usable_from
  * and refuses to show prices when any of them disagrees with config.js.
+ * It also reads the token's code hash and refuses a token whose code is not
+ * the code pinned in config.js PAYMENT_TOKENS (audit H-3): a token's code
+ * runs inside every purchase, and its issuer can replace it.
  * A token the Shop enabled recently (now < usable_from) is shown with its
  * prices but not offered for purchases until then.
  */
+
+/** The sha256 of a contract's code (hex) from koilib's invokeGetContractMetadata, or null. */
+export function codeHashFromMeta(meta) {
+  const raw = meta && meta.value && meta.value.hash;
+  const m = typeof raw === "string" && /^0x1220([0-9a-fA-F]{64})$/.exec(raw);
+  return m ? m[1].toLowerCase() : null;
+}
 
 function asNumber(value) {
   const n = Number(value);
@@ -18,20 +28,31 @@ function asNumber(value) {
 }
 
 /**
- * expected: { decimals, symbol } from config.js
+ * expected: { decimals, symbol, codeHash } from config.js (the token's pin)
  * tokenDecimals: what the token contract's decimals() returned (number or string)
  * asset: the Shop's get_asset result
  * now: chain head time in seconds
+ * codeHash: the token's code hash on the chain (codeHashFromMeta), or null
  * Returns { ok, problems, mismatch, waitUntil }:
  *   mismatch true  -> config and chain disagree: show no prices at all
  *   waitUntil > 0  -> prices are right, but nothing can be bought before then
  *   ok             -> prices can be shown and purchases offered
  */
-export function checkPaymentToken({ expected, tokenDecimals, asset, now }) {
+export function checkPaymentToken({ expected, tokenDecimals, asset, now, codeHash }) {
   const problems = [];
   const symbol = String((expected && expected.symbol) || "");
   const decimals = asNumber(expected && expected.decimals);
   const a = asset || {};
+
+  const pinned = String((expected && expected.codeHash) || "");
+  if (!pinned) {
+    problems.push("The " + symbol + " token is not pinned in this page's settings, so it shows no prices.");
+  } else if (!codeHash) {
+    problems.push("This page could not read the " + symbol + " token's code from the chain, so it shows no prices.");
+  } else if (codeHash !== pinned) {
+    problems.push("The " + symbol + " token's code on the chain is not the code this page was set up for (its issuer changed it). " +
+      "Prices are hidden and nothing can be bought with it until the new code is reviewed.");
+  }
 
   const onToken = asNumber(tokenDecimals);
   if (!Number.isInteger(onToken)) {

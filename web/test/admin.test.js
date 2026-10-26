@@ -61,7 +61,9 @@ test("admin: prices, the poem item, Ink amounts, fee and tokens", () => {
   throwsInput(() => planInkAmounts({ writer_month: "x" }), /whole number/);
   assert.deepEqual(planFee("100").args, { fee_bps: 100 });
   throwsInput(() => planFee("501"), /at most 500/);
-  assert.deepEqual(planAsset({ token: TOKEN, enabled: true, decimals: "8", symbol: "tKOIN" }).args, { token: TOKEN, enabled: true, decimals: 8, symbol: "tKOIN" });
+  const pin = { address: TOKEN, symbol: "tKOIN", decimals: 8, codeHash: "ab".repeat(32) };
+  assert.deepEqual(planAsset({ token: TOKEN, enabled: true, decimals: "8", symbol: "tKOIN", pin, codeHash: pin.codeHash }).args,
+    { token: TOKEN, enabled: true, decimals: 8, symbol: "tKOIN" });
   assert.equal(planAsset({ token: TOKEN, enabled: false }).args.enabled, false);
   throwsInput(() => planAsset({ token: TOKEN, enabled: true, decimals: "8", symbol: "t KOIN" }), /symbol/);
 });
@@ -157,11 +159,13 @@ test("admin: a new payment token priced from an Ink rate, in one transaction", a
   assert.equal(ratePrice("15000", "2.5", 0), "6000");
   throwsInput(() => ratePrice("5000", "0", 6), /more than 0/);
   throwsInput(() => ratePrice("5000", "x", 6), /Ink one token buys/);
-  const plans = planAddToken({ token: B, symbol: "vUSDC", decimals: "6", prices: { 2: "150", 3: "50", 10: "", 1: "" } });
+  // Only a pinned token whose code is the pinned code (audit H-3).
+  const pin = { address: B, symbol: "vUSDC", decimals: 6, codeHash: "ef".repeat(32) };
+  const plans = planAddToken({ token: B, symbol: "vUSDC", decimals: "6", prices: { 2: "150", 3: "50", 10: "", 1: "" }, pin, codeHash: pin.codeHash });
   assert.deepEqual(plans.map((p) => p.method), ["set_asset", "set_price", "set_price"]);
   assert.deepEqual(plans[0].args, { token: B, enabled: true, decimals: 6, symbol: "vUSDC" });
   assert.deepEqual(plans[1].args, { item: 2, token: B, amount: "150000000" });
-  throwsInput(() => planAddToken({ token: B, symbol: "vUSDC", decimals: "6", prices: {} }), /at least one price/);
+  throwsInput(() => planAddToken({ token: B, symbol: "vUSDC", decimals: "6", prices: {}, pin, codeHash: pin.codeHash }), /at least one price/);
 });
 
 test("admin: a page-made file can carry the multisig's signer list, which cosign reads", async () => {

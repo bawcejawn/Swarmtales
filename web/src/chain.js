@@ -4,11 +4,12 @@
  */
 import { Contract, Provider, utils } from "koilib";
 import { abis } from "./generated/abis.js";
-import { assertExpectedChain, contracts, DEFAULT_PAYMENT, isAddress, network } from "./config.js";
+import { assertExpectedChain, contracts, DEFAULT_PAYMENT, isAddress, network, pinnedToken } from "./config.js";
 import { headTimeSeconds } from "./lib/money.js";
 import { confirmTransaction } from "./lib/confirm.js";
 import { readAllSegments } from "./lib/segments.js";
 import { sponsorableOperations, sponsorRcEstimate, sponsorRcLimit } from "./lib/sponsor.js";
+import { checkPaymentToken, codeHashFromMeta } from "./lib/payment.js";
 
 let provider;
 let verifiedChainId = "";
@@ -147,17 +148,27 @@ export async function sponsorFunding(address, operations) {
   }
 }
 
+/** The sha256 of the code at `address` (hex), or null when there is none or the node won't say. */
+export async function codeHashOf(address) {
+  try {
+    return codeHashFromMeta(await getProvider().invokeGetContractMetadata(address));
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Every payment token the Shop has turned on: the page's own token first
- * (with the symbol and decimals config.js expects, for the M-8 check), then
- * the others from shop.get_assets, with the Shop's record. A token whose
- * record can't be read is left out.
+ * Every payment token the Shop has turned on that this page may use: the
+ * page's own token first (the overview checks it, M-8 and H-3), then the
+ * others from shop.get_assets that are pinned in config.js PAYMENT_TOKENS
+ * and whose decimals, Shop record and code hash match their pin (audit H-3,
+ * L-18). Symbol and decimals always come from the pin, never from the node.
  */
 export async function loadPaymentTokens() {
   const addresses = [DEFAULT_PAYMENT.address];
   try {
     const r = await read("shop", "get_assets", {});
-    for (const t of (r && r.tokens) || []) if (isAddress(t) && !addresses.includes(t)) addresses.push(t);
+    for (const t of (r && r.tokens) || []) if (isAddress(t) && !addresses.includes(t) && pinnedToken(t)) addresses.push(t);
   } catch {
     /* an older Shop without get_assets: only the page's own token */
   }
@@ -167,9 +178,13 @@ export async function loadPaymentTokens() {
     if (!asset || !asset.enabled) continue;
     if (address === DEFAULT_PAYMENT.address) {
       out.push({ ...DEFAULT_PAYMENT, usable_from: asset.usable_from || "0" });
-    } else if (asset.symbol && Number.isInteger(Number(asset.decimals))) {
-      out.push({ address, symbol: String(asset.symbol), decimals: Number(asset.decimals), usable_from: asset.usable_from || "0" });
+      continue;
     }
+    const pin = pinnedToken(address);
+    const token = new Contract({ id: address, abi: utils.tokenAbi, provider: getProvider() });
+    const [dec, codeHash] = await Promise.all([token.functions.decimals({}).then((r) => r.result).catch(() => null), codeHashOf(address)]);
+    const check = checkPaymentToken({ expected: pin, tokenDecimals: dec && dec.value, asset, now: 0, codeHash });
+    if (!check.mismatch) out.push({ address, symbol: pin.symbol, decimals: pin.decimals, codeHash: pin.codeHash, usable_from: asset.usable_from || "0" });
   }
   return out;
 }
@@ -229,7 +244,7 @@ async function mapPool(items, limit, fn) {
 }
 
 export async function loadOverview() {
-  const [storiesCfg, shopCfg, asset, writerPrice, shortPrice, bookPrice, packS, packM, packL, tokenDecimals, now, poemPrice] = await Promise.all([
+  const [storiesCfg, shopCfg, asset, writerPrice, shortPrice, bookPrice, packS, packM, packL, tokenDecimals, tokenCodeHash, now, poemPrice] = await Promise.all([
     read("stories", "get_config", {}),
     read("shop", "get_config", {}),
     read("shop", "get_asset", { token: contracts.paymentToken }),
@@ -241,6 +256,8 @@ export async function loadOverview() {
     read("shop", "get_price", { item: 5, token: contracts.paymentToken }),
     // The token's own decimals, checked against config.js before any price is shown (M-8).
     read("token", "decimals", {}).catch(() => null),
+    // ... and its code, checked against its pin (H-3).
+    codeHashOf(contracts.paymentToken),
     getHeadSeconds(),
     read("shop", "get_price", { item: 10, token: contracts.paymentToken }).catch(() => null),
   ]);
@@ -267,6 +284,7 @@ export async function loadOverview() {
     ],
     categories,
     tokenDecimals: tokenDecimals && tokenDecimals.value != null ? Number(tokenDecimals.value) : null,
+    tokenCodeHash,
     now: Number(now || 0),
   };
 }
