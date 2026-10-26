@@ -364,6 +364,9 @@ export class Stories extends StoriesAdmin {
     System.require(cost == args.expected_ink, "STORIES: Ink cost does not match expected_ink");
     System.require(cost <= <u64>cfg.contribution_cap, "STORIES: text is over the per-submission cap");
     System.require(cost >= minContribution(cfg), "STORIES: opening text is shorter than the minimum");
+    // A story is never born over its own size (audit L-2: a Poem's opening
+    // could be up to the per-submission cap, far above its max_chars).
+    System.require(cost <= args.max_chars, "STORIES: the opening text is longer than the story");
     this.requireRightsAndTerms(opener, args.rights_confirmed, args.terms_version, cfg);
 
     const open = this.openCount.get(opener)!;
