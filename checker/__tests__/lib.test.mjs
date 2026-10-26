@@ -353,3 +353,15 @@ test("recordSent: only a sent hide becomes the checker's own; a sent unhide is k
   recordSent(state, { kind: "note", story: 2, seq: 1, t: "t2" });
   assert.equal(state.hiddenByChecker["2:1"], undefined);
 });
+
+test("I-14: the mainnet community node koinos.armana.io maps to the mainnet chain id, as on the website and in the deploy tool", async () => {
+  const MAINNET = "EiBZK_GGVP0H_fXVAM3j6EAuz3-B-l3ejxRSewi7qIBfSA==";
+  assert.equal(expectedChainId("https://koinos.armana.io", ""), MAINNET);
+  assert.equal(expectedChainId("https://koinos.armana.io/", undefined), MAINNET);
+  assert.equal(expectedChainId("https://api.koinos.io", ""), MAINNET);
+  assert.equal(deployNetworks.mainnet.rpc, "https://koinos.armana.io");
+  assert.equal(deployNetworks.mainnet.chainId, MAINNET);
+  const { NETWORKS } = await import("../../web/src/config.js");
+  assert.equal(NETWORKS.mainnet.rpc, "https://koinos.armana.io");
+  assert.equal(NETWORKS.mainnet.chainId, MAINNET);
+});

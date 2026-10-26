@@ -25,3 +25,10 @@ test("mainnet refuses to keep a testnet address", () => {
     network.mainnet = was;
   }
 });
+
+test("I-14: the mainnet profile is the koinos.armana.io node with the mainnet chain id (as the checker and deploy tool expect)", async () => {
+  const { NETWORKS } = await import("../src/config.js");
+  assert.equal(NETWORKS.mainnet.rpc, "https://koinos.armana.io");
+  assert.equal(NETWORKS.mainnet.chainId, "EiBZK_GGVP0H_fXVAM3j6EAuz3-B-l3ejxRSewi7qIBfSA==");
+  assert.equal(NETWORKS.mainnet.mainnet, true);
+});
