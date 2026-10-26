@@ -116,3 +116,12 @@ test("copy-checker.yml: the time budget is well under each job's time limit", ()
     assert.ok(limit - budget >= 5, n + ": " + budget + " minutes of work in a " + limit + "-minute job");
   }
 });
+
+test("M-B: the apply job restores its own last sealed progress before it runs", () => {
+  const lines = fs.readFileSync(new URL("copy-checker.yml", dir), "utf8").split(/\r?\n/);
+  const apply = jobs(lines).apply.join("\n");
+  const restore = apply.indexOf("actions/cache/restore@");
+  assert.ok(restore > 0, "the apply job restores the sealed progress");
+  assert.ok(restore < apply.indexOf("node checker/apply.mjs"), "before apply.mjs runs");
+  assert.match(apply, /path: checker-state\.sealed\.json/);
+});

@@ -198,30 +198,31 @@ test("O1-09: the apply step signs a plan's actions only when fresh chain reads s
   };
   const t = (k) => textKey(segments[k].text);
   const hide = (k, extra) => ({ kind: "hide", story: Number(k.split(":")[0]), seq: 1, t: t(k), reason: 1, note: "copied", ...extra });
-  const book = { sourceKind: "book", published: "1960" };
+  const book = { books: ["nc"] }; // the apply step looks the book up itself (M-B)
   const plan = [
     hide("1:1", { reason: 2, copyOf: "2:1" }),                             // the original as a "copy" of its newer copy
     hide("1:1", { reason: 2, copyOf: "1:1" }),                             // of itself
     hide("2:1", { reason: 2, copyOf: "6:1" }),                             // the one real copy: of an older part by another writer
-    hide("3:1", { sourceKind: "web" }),                                    // a website match
-    hide("3:1", { sourceKind: "book", published: "2027" }),               // a newer book
+    hide("3:1", {}),                                                       // a website match (no book to look up)
+    hide("3:1", { books: ["unknown-volume"] }),                            // a book the apply step can't find
     hide("4:1", book),                                                     // the admin's hide
     hide("5:1", book),                                                     // restored by its opener
     hide("7:1", book),                                                     // hidden by reports for abuse
     hide("1:1", { ...book, t: "stale-text-key00" }),                       // text changed since
     { kind: "unhide", story: 4, seq: 1, t: t("4:1"), src: BOOK, note: "x" }, // the admin's hide
     { kind: "note", story: 6, seq: 1, t: t("6:1"), note: "over a note" },
-    { kind: "note", story: 1, seq: 1, t: t("1:1"), note: "a\n::error::‮b" },
+    { kind: "note", story: 1, seq: 1, t: t("1:1"), note: "a\n::error::‮b" }, // free text only: never reaches the chain
+    { kind: "note", story: 1, seq: 1, t: t("1:1"), note: "ignored", web: "WWW.Quick-Mirror.example" },
     { kind: "takedown", story: 1, seq: 1, t: t("1:1") },
     { kind: "hide", story: 9, seq: 9, t: "no-such-part0000", reason: 1, note: "copied", ...book },
   ];
-  const r = applyOnly(dir, { config: config(10), segments }, plan);
+  const r = applyOnly(dir, { config: config(10), segments, book: BOOK }, plan);
   const hidden = hidesOf(r.ops).map((o) => o.args.story_id);
   assert.deepEqual(hidden, ["2"], "only the copy of an older part by another writer: " + r.out);
   assert.equal(unhidesOf(r.ops).length, 0);
   const notes = notesOf(r.ops);
   assert.equal(notes.length, 1);
-  assert.equal(notes[0].args.note, "a ::error::b", "cleaned before signing");
+  assert.equal(notes[0].args.note, "Parts of this text also appear on quick-mirror.example.", "written by the apply step, from the host alone");
   assert.ok(r.state.hiddenByChecker["2:1"], "only what the chain accepted is recorded");
 });
 
@@ -230,9 +231,9 @@ test("O1-09: at most APPLY_MAX_HIDES hides are signed per run; the rest wait", (
   const plan = [];
   for (let i = 1; i <= 5; i++) {
     segments[i + ":1"] = seg(WRITER, BOOKPAGE + " " + i, 1000);
-    plan.push({ kind: "hide", story: i, seq: 1, t: textKey(BOOKPAGE + " " + i), reason: 1, note: "copied", sourceKind: "book", published: "1960" });
+    plan.push({ kind: "hide", story: i, seq: 1, t: textKey(BOOKPAGE + " " + i), reason: 1, note: "copied", books: ["nc"] });
   }
-  const r = applyOnly(workdir(), { config: config(6), segments }, plan, { APPLY_MAX_HIDES: "2" });
+  const r = applyOnly(workdir(), { config: config(6), segments, book: BOOK }, plan, { APPLY_MAX_HIDES: "2" });
   assert.equal(hidesOf(r.ops).length, 2);
   assert.match(r.out, /more than 2 hides this run/);
 });

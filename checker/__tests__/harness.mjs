@@ -127,6 +127,13 @@ globalThis.fetch = async (url, opts) => {
     const results = sc.web && norm(sc.web.text).includes(norm(phrase)) ? [{ url: sc.web.url, title: "A page", content: phrase }] : [];
     return { ok: true, status: 200, json: async () => ({ results }) };
   }
+  const volume = /^\/books\/v1\/volumes\/([^/]+)$/.exec(u.pathname);
+  if (u.host === "www.googleapis.com" && volume) {
+    // The apply step's own lookup of a book (audit M-B): not a search.
+    log({ book: volume[1] });
+    if (!sc.book || volume[1] !== "nc" || sc.failBookLookup) return { ok: false, status: 404, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => ({ id: "nc", volumeInfo: { title: sc.book.title, authors: [sc.book.author], publishedDate: sc.book.published } }) };
+  }
   log({ search: true });
   const phrase = (u.searchParams.get("q") || "").replace(/^"|"$/g, "");
   const items = sc.book && sc.copiedText && norm(sc.copiedText).includes(norm(phrase)) ? [{ id: "nc", volumeInfo: { title: sc.book.title, authors: [sc.book.author],
@@ -214,12 +221,12 @@ export const notesOf = (ops, sid, sq) => ops.filter((o) => o.op === "set_source_
  * Only the apply step, with a plan written by hand (as a misbehaving plan job
  * could): returns { ops, out, state }.
  */
-export function applyOnly(dir, scenario, plan, env = {}) {
+export function applyOnly(dir, scenario, plan, env = {}, planState = undefined) {
   const scen = path.join(dir, "scenario.json");
   const logFile = path.join(dir, "ops.log");
   fs.writeFileSync(scen, JSON.stringify({ chainId: TESTNET_CHAIN, rc: "100000000", ...scenario }));
   fs.writeFileSync(logFile, "");
-  fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify({ checked: {}, seen: {}, hiddenByChecker: {} }));
+  fs.writeFileSync(path.join(dir, "state.json"), JSON.stringify(planState || { checked: {}, seen: {}, hiddenByChecker: {} }));
   fs.writeFileSync(path.join(dir, "plan.json"), JSON.stringify({ v: 1, stories: STORIES, actions: plan }));
   const r = spawnSync(process.execPath, ["--import", pathToFileURL(path.join(dir, "preload.mjs")).href, APPLY], {
     env: { ...process.env, STORIES_ADDRESS: STORIES, RPC: "", EXPECTED_CHAIN_ID: "", DRY_RUN: "", GITHUB_STEP_SUMMARY: "", TIME_BUDGET_MINUTES: "",

@@ -160,6 +160,15 @@ jobs:
         continue-on-error: true   # no plan: nothing to apply or save
         with:
           name: checker-plan
+      - name: Restore this step's own last sealed progress
+        # The protections it carries (checker hides, restored parts) come from
+        # here and the chain, never from the plan job (audit M-B). apply.mjs
+        # checks the seal and reads it before writing the new one.
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: checker-state.sealed.json
+          key: copy-checker-state-v2-${{ github.run_id }}
+          restore-keys: copy-checker-state-v2-
       - name: Check the plan against the chain and sign it
         env:
           STORIES_ADDRESS: ${{ vars.STORIES_ADDRESS }}
