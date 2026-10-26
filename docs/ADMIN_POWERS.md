@@ -14,7 +14,7 @@ Last checked against the code: October 2026, after the 2026-10 mainnet audit fix
 | Admin (one per contract) | 2-of-3 multisig wallet on mainnet | Runs day-to-day settings |
 | Moderator | The automated copy checker | Hides parts, unhides parts the admin didn't hide, writes source notes, clears summaries (details below) |
 | Treasury, founder | Founder | Only receive payments. They have no powers in the contracts |
-| Mana sponsor | Founder, offline | The wallet that pays users' mana (details below). It has no powers in Ink, Shop or Stories |
+| Mana sponsor | Founder, offline | The wallet that pays users' mana (details below). It has no powers in Ink, Shop or Stories. Its settings change only with the deploy tool's `sponsor-config` on the computer that holds it; the website's admin page only shows that command and never asks a wallet for this key (audit L-17) |
 
 One key per contract **per network**: a contract key used on testnet is never used on mainnet. The deploy tool refuses to reuse one.
 
@@ -92,7 +92,13 @@ How the checker uses it: it hides a part only when a book that is provably older
 
 ## The mana sponsor
 
-The sponsor wallet holds KOIN, and its mana pays for users' SwarmTales transactions (`sponsor/`). Its contract decides only one thing: whether this wallet pays for a given transaction. It pays only when the user signed it, every call is to Ink, Shop or Stories (or approves the Shop to take the user's own payment tokens), and the daily caps aren't used up. It can't sign anything for a user, move anyone's tokens or Ink, or change anything in the three contracts. Its key can change its settings (on/off, caps, which contracts and tokens) and move its own KOIN, like any wallet. If it is switched off or empty, everyone simply pays their own mana again.
+The sponsor wallet holds KOIN, and its mana pays for users' SwarmTales transactions (`sponsor/`). Its contract decides only one thing: whether this wallet pays for a given transaction. It pays only when the user signed it, every call is one of the listed Ink, Shop or Stories actions new users need (buying a membership or pack, claiming Writer or promo Ink, opening a story, writing, editing or removing one's own part, joining with an invite, saving a bookmark; audit M-A), or approves the Shop to take the user's own payment tokens, the transaction's mana limit is within the per-transaction cap (about 1 mana by default), and the daily caps aren't used up. It can't sign anything for a user, move anyone's tokens or Ink, or change anything in the three contracts. Its key can change its settings (on/off, caps, which contracts, actions and tokens) and move its own KOIN, like any wallet; settings only straight from a transaction it signed, never from contract code running inside one (audit L-17). If it is switched off or empty, everyone simply pays their own mana again.
+
+What the sponsor's mana can still pay for, within the caps (audit L-13, L-14):
+
+- **Other code in a sponsored transaction.** A user whose wallet is a contract wallet runs its own authorize code, and a listed payment token runs its own code, inside a transaction the sponsor pays for. The per-transaction cap (about 1 mana) bounds what that costs.
+- **A burst of pending transactions.** The node doesn't count sponsored transactions still waiting for a block against the daily caps, so a burst can tie up the sponsor's free mana for about two minutes. Keep the sponsor's KOIN well above five times the daily cap; the website retries with the user's own mana when a sponsored transaction is refused, and the hourly sponsor alert (`.github/workflows/sponsor-alert.yml`) warns when the day's use passes 80% of the cap or the sponsor's mana falls below five times it.
+- **Filling the day's cap.** Anyone can make new wallets, so a determined spammer can still use up the day's budget with listed actions; the alert above says so, and everyone then pays their own mana until 00:00 UTC.
 
 ## What works at each stage
 
