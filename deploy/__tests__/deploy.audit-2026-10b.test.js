@@ -335,3 +335,22 @@ test("I-11: --network takes only a network name, never an inherited property", (
   }
   assert.strictEqual(lib.resolveNetwork({}).key, "testnet");
 });
+
+// ---------------------------------------------------------------- I-10
+
+test("I-10: with a signer list, cosign takes the payee's key and submit keeps the payee's signature", async () => {
+  const PAYEE = koilib.Signer.fromSeed("swarmtales test payee");
+  const file = tmpFile("payee.json");
+  let r = await preparePause(file, ["--payer", PAYER.getAddress(), "--payee", PAYEE.getAddress()], { ...MS_READS, contractAccounts: [MULTISIG] });
+  assert.ok(r.prepared, r.error && r.error.message);
+  for (const k of [KEY1, KEY2, PAYER, PAYEE]) {
+    r = await run(["cosign", file], { answers: ["SIGN"], secret: k.getPrivateKey("wif") });
+    assert.ifError(r.error);
+  }
+  const node = fakeNode({ ...MS_READS, contractAccounts: [MULTISIG] });
+  r = await run(["submit", file], { node, answers: ["SEND"] });
+  assert.ifError(r.error);
+  const sent = await koilib.Signer.recoverAddresses(node.log.sent[1].tx);
+  assert.ok(sent.includes(PAYEE.getAddress()), "the payee's signature is kept");
+  assert.ok(sent.includes(PAYER.getAddress()));
+});

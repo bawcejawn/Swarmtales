@@ -650,7 +650,8 @@ async function cmdCosign(args) {
   lib.refuseCrossNetworkKey(net, me);
   if (signedBy.includes(me)) lib.fail(me + " has already signed this transaction. Nothing was changed.");
   const needs = checked.needs;
-  if (needs && !needs.signers.includes(me) && !needs.newSigners.includes(me) && me !== checked.tx.header.payer) {
+  const h = checked.tx.header;
+  if (needs && !needs.signers.includes(me) && !needs.newSigners.includes(me) && me !== h.payer && me !== h.payee) {
     lib.fail("That key is for " + me + ", which is not one of the signers this transaction needs:\n  " + needs.signers.concat(needs.newSigners).join("\n  ") +
       "\nPaste one of their keys instead (a contract wallet's or the admin's key doesn't count). Nothing was signed.");
   }
@@ -681,9 +682,10 @@ async function cmdSubmit(args) {
   const signedBy = await signersOf(tx);
   const needs = checked.needs;
   // Each signer once; with a known signer list, only its signers, the new
-  // signers a set_signers adds, and the payer.
+  // signers a set_signers adds, the payer and the payee (audit I-10: the
+  // payee's signature was dropped).
   const keep = (who, i) => signedBy.indexOf(who) === i &&
-    (!needs || needs.signers.includes(who) || needs.newSigners.includes(who) || who === tx.header.payer);
+    (!needs || needs.signers.includes(who) || needs.newSigners.includes(who) || who === tx.header.payer || who === tx.header.payee);
   tx.signatures = signatures.filter((s, i) => keep(signedBy[i], i));
   const unique = [...new Set(signedBy.filter((who, i) => keep(who, i)))];
   if (needs) {
