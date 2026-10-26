@@ -126,6 +126,9 @@ The Stories suite takes about an hour on a two-core machine.
   `multisig-create` on 25 Oct 2026: 2 of 3 of the owner's signers `1LrT3gTG9Rpf5zHf9DENaEgXEuhTdKxFtP`,
   `1C8hrrjXYykrDmPBioex7YRv7cEt1mBcEi`, `1Nw9fsuYPjQXX8pnz9sqg1cSyYyJPWoYat`. A transaction signed only by
   its own key is refused by the chain ("has not authorized transaction").
+  The owner's rehearsal with it on 25 Oct 2026 (Stories admin handed to the multisig and back, each
+  step signed by two of the three signers): accept `0x1220aeb7…9c23`, pause `0x122098dc…c890`,
+  unpause `0x1220597c…ad5a`, propose back `0x12208653…90d8`, accept back `0x1220a60e…61e2`.
 - **Mainnet:** not deployed. The mainnet multisig will be `1BtSGxigg2Nc5uNcei3XnrEg9WXDyGJ6if` (same signers).
 
 ## Keys and roles
