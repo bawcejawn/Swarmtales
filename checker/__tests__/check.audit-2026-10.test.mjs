@@ -211,7 +211,7 @@ test("O1-09: the apply step signs a plan's actions only when fresh chain reads s
     hide("1:1", { ...book, t: "stale-text-key00" }),                       // text changed since
     { kind: "unhide", story: 4, seq: 1, t: t("4:1"), src: BOOK, note: "x" }, // the admin's hide
     { kind: "note", story: 6, seq: 1, t: t("6:1"), note: "over a note" },
-    { kind: "note", story: 1, seq: 1, t: t("1:1"), note: "a\n::error::‮b" }, // free text only: never reaches the chain
+    { kind: "note", story: 1, seq: 1, t: t("1:1"), note: "a\n::error::\u202eb" }, // free text only: never reaches the chain
     { kind: "note", story: 1, seq: 1, t: t("1:1"), note: "ignored", web: "WWW.Quick-Mirror.example" },
     { kind: "takedown", story: 1, seq: 1, t: t("1:1") },
     { kind: "hide", story: 9, seq: 9, t: "no-such-part0000", reason: 1, note: "copied", ...book },
