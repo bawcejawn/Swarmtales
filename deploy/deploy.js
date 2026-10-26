@@ -653,6 +653,10 @@ async function cmdCosign(args) {
   if (signedBy.includes(me)) lib.fail(me + " has already signed this transaction. Nothing was changed.");
   const needs = checked.needs;
   const h = checked.tx.header;
+  if (needs && me === needs.account) {
+    lib.fail("That key is the multisig wallet's own key (" + me + "). It stopped counting when the multisig was set up. " +
+      "Paste the key of one of its signers instead:\n  " + needs.signers.join("\n  ") + "\nNothing was signed.");
+  }
   if (needs && !needs.signers.includes(me) && !needs.newSigners.includes(me) && me !== h.payer && me !== h.payee) {
     lib.fail("That key is for " + me + ", which is not one of the signers this transaction needs:\n  " + needs.signers.concat(needs.newSigners).join("\n  ") +
       "\nPaste one of their keys instead (a contract wallet's or the admin's key doesn't count). Nothing was signed.");

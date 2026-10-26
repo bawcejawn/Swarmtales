@@ -164,3 +164,14 @@ test("audit L-16: a prepared set_signers needs the quorum AND every new signer; 
   assert.ifError(r.error);
   assert.deepStrictEqual(await koilib.Signer.recoverAddresses(node.log.sent[1].tx), [k1, k2, k4], "the new signer's signature is kept");
 });
+
+test("cosign refuses the multisig wallet's own key, which no longer counts (found in the testnet rehearsal)", async () => {
+  const K = [1, 2, 3].map((i) => koilib.Signer.fromSeed("swarmtales test own-key signer " + i));
+  const config = { signers: K.map((k) => k.getAddress()), threshold: 2 };
+  const file = path.join(fs.mkdtempSync(path.join(require("node:os").tmpdir(), "swarmtales-ms-")), "own.json");
+  let r = await run(["multisig-signers", "--multisig", MS, "--signers", config.signers.join(","), "--threshold", "2", "--prepare", file], { node: fakeNode({ config }) });
+  assert.ok(r.error instanceof deploy.Prepared, r.error && r.error.message);
+  r = await run(["cosign", file], { answers: ["SIGN"], secret: MS_KEY.getPrivateKey("wif") });
+  assert.match(r.error.message, /multisig wallet's own key/);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, "utf8")).transaction.signatures, []);
+});
