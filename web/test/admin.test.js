@@ -176,5 +176,6 @@ test("admin: a page-made file can carry the multisig's signer list, which cosign
   const checked = await deployLib.verifyPrepared(JSON.parse(JSON.stringify(file)), deployLib.resolveNetwork({}), {
     koilib: { Transaction, Contract }, abiFor: (name) => abis[name], flags: {},
   });
-  assert.deepEqual(checked.needs, needs);
+  // A pause adds no signer, so no new signer has to sign (audit L-16).
+  assert.deepEqual(checked.needs, { ...needs, newSigners: [] });
 });
