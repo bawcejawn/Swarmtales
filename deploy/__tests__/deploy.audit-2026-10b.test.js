@@ -24,6 +24,7 @@ const KEY3 = koilib.Signer.fromSeed("swarmtales test signer 3");
 const MULTISIG = koilib.Signer.fromSeed("swarmtales test multisig").getAddress();
 const PAYER = koilib.Signer.fromSeed("swarmtales test mana payer");
 const BOB_ADDR = "1NJrBLUNiGRU66FNu1VmaTNsm8qs7ADXyf";
+const OTHER_TOKEN = "1PJLazQ9eg25WRsBbcgVfc9ng2cR1cRT52";
 const CONTROL = /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
 
 const ABI = (target) => lib.toKoilibAbi(JSON.parse(fs.readFileSync(path.join(REPO, target === "ink" ? "abi" : target, "abi", target + ".abi"), "utf8")));
@@ -443,4 +444,39 @@ test("L-9: set-asset reads the token's own decimals and symbol and refuses typed
   assert.match(r.error.message, /calls itself "KOIN", not "tKOIN"/);
   assert.throws(() => lib.checkTokenInfo(TKOIN, { decimals: 8, symbol: "tKOIN" }, { decimals: NaN, symbol: "tKOIN" }), /decimals/);
   assert.doesNotThrow(() => lib.checkTokenInfo(TKOIN, { decimals: "8", symbol: "tKOIN" }, { decimals: 8, symbol: "tKOIN" }));
+});
+
+// ---------------------------------------------------------------- L-8
+
+test("L-8: the pin override names the role it lets through, and tokens are a list", () => {
+  const net = lib.resolveNetwork({ network: "mainnet", "i-understand-this-is-mainnet": true });
+  const saved = Object.assign({}, lib.MAINNET_PINNED);
+  const savedTokens = lib.TOKEN_PINS.mainnet.slice();
+  try {
+    Object.assign(lib.MAINNET_PINNED, { shop: SHOP, stories: STORIES, multisig: MULTISIG });
+    // One override no longer unpins every role.
+    assert.throws(() => lib.checkPinned(net, "shop", INK, { "i-understand-this-address-is-not-pinned": "stories" }, false), /must be the pinned address/);
+    assert.match(lib.checkPinned(net, "shop", INK, { "i-understand-this-address-is-not-pinned": "shop" }, false), /^WARNING.*=shop/);
+    assert.match(lib.checkPinned(net, "shop", INK, { "i-understand-this-address-is-not-pinned": "stories,shop" }, false), /^WARNING/);
+    assert.throws(() => lib.checkPinned(net, "shop", INK, { "i-understand-this-address-is-not-pinned": true }, false), /must name the role/);
+    assert.throws(() => lib.checkPinned(net, "shop", INK, { "i-understand-this-address-is-not-pinned": "everything" }, false), /must name the role/);
+    assert.throws(() => lib.parseArgs(["pause", "--i-understand-this-address-is-not-pinned"]), /needs a value/);
+    // Tokens: any pinned one passes, any other is refused (sponsor-config --tokens too).
+    lib.TOKEN_PINS.mainnet.push({ address: TOKEN, symbol: "vUSDT", decimals: 6, codeHash: "ab".repeat(32) },
+      { address: OTHER_TOKEN, symbol: "vUSDC", decimals: 6, codeHash: "cd".repeat(32) });
+    assert.strictEqual(lib.checkPinned(net, "token", OTHER_TOKEN, {}, false), null);
+    assert.throws(() => lib.checkPinnedFlags(net, { tokens: TOKEN + "," + INK }, undefined), /token must be the pinned address[\s\S]*TOKEN_PINS\.mainnet/);
+    assert.deepStrictEqual(lib.checkPinnedFlags(net, { tokens: TOKEN + "," + OTHER_TOKEN }, undefined), []);
+    // --admin: the pinned multisig, or a pinned contract wallet before the handover.
+    assert.deepStrictEqual(lib.checkPinnedFlags(net, { admin: MULTISIG }, undefined), []);
+    assert.deepStrictEqual(lib.checkPinnedFlags(net, { admin: SHOP }, undefined), []);
+    assert.throws(() => lib.checkPinnedFlags(net, { admin: BOB_ADDR }, undefined), /--admin must be the pinned multisig/);
+    assert.match(lib.checkPinnedFlags(net, { admin: BOB_ADDR, "i-understand-this-address-is-not-pinned": "admin" }, undefined)[0], /^WARNING/);
+    // Testnet checks nothing.
+    assert.deepStrictEqual(lib.checkPinnedFlags(TESTNET, { admin: BOB_ADDR, tokens: INK }, undefined), []);
+  } finally {
+    Object.assign(lib.MAINNET_PINNED, saved);
+    lib.TOKEN_PINS.mainnet.length = 0;
+    lib.TOKEN_PINS.mainnet.push(...savedTokens);
+  }
 });

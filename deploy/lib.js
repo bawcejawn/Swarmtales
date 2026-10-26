@@ -8,19 +8,23 @@ const crypto = require("crypto");
 
 // ---- MAINNET ADDRESSES (audit M-6) ----
 // Fill in each address once that contract is uploaded to mainnet (one line
-// each), and the payment stablecoin's address before set-asset. Until then
-// "" means "not pinned yet". On mainnet every command refuses any other
-// address unless PIN_OVERRIDE_FLAG is given; only `upload` may name an
-// address that is not pinned yet (that is how it gets one).
+// each). Until then "" means "not pinned yet". Payment tokens are a list,
+// pinned with their code in TOKEN_PINS.mainnet below (audit L-8, H-3). On
+// mainnet every command refuses any other address unless PIN_OVERRIDE_FLAG
+// names that role (for example --i-understand-this-address-is-not-pinned=shop);
+// only `upload` may name an address that is not pinned yet (that is how it
+// gets one). --admin must be the pinned multisig, or before the handover the
+// pinned contract wallet itself.
 const MAINNET_PINNED = {
   ink: "",
   shop: "",
   stories: "",
-  token: "",
   sponsor: "",
   multisig: "",
 };
 const PINNED_ROLES = ["ink", "shop", "stories", "token", "sponsor", "multisig"];
+// Roles the override flag may name: the pinned roles, and --admin.
+const OVERRIDE_ROLES = PINNED_ROLES.concat(["admin"]);
 const CONTRACT_ROLES = ["ink", "shop", "stories", "sponsor", "multisig"];
 const PIN_OVERRIDE_FLAG = "--i-understand-this-address-is-not-pinned";
 
@@ -744,7 +748,7 @@ function versionHistory(versions, seg) {
 // Switches: present or absent, never followed by a value (O1-10).
 const BOOLEAN_FLAGS = [
   "i-understand-this-is-mainnet", "i-understand-this-replaces-mainnet-code",
-  PIN_OVERRIDE_FLAG.slice(2), HASH_OVERRIDE_FLAG.slice(2),
+  HASH_OVERRIDE_FLAG.slice(2),
   "upgrade", "disable", "private", "emoji", "not-opener", "unhide", "no-strike", "unblock",
 ];
 const SECRET_FLAGS = ["key", "wif", "private-key", "privatekey", "secret", "seed", "mnemonic", "password", "link-key"];
@@ -848,7 +852,7 @@ function checkChainId(net, actual) {
 // ---------- pinned mainnet addresses and release hashes (M-6, O1-13) ----------
 
 function checkPinnedTable(pinned) {
-  for (const role of PINNED_ROLES) {
+  for (const role of PINNED_ROLES.filter((r) => r !== "token")) {
     if (typeof pinned[role] !== "string" || (pinned[role] !== "" && !isAddress(pinned[role]))) {
       fail("deploy/lib.js MAINNET_PINNED." + role + " must be \"\" or a Koinos address.");
     }
@@ -915,33 +919,79 @@ function checkTokenCode(net, token, hashHex, wanted) {
   }
   return null;
 }
+/** The addresses pinned for `role` on this network: the token list, or one address. */
+function pinnedAddresses(net, role) {
+  if (role === "token") return (net.tokens || []).map((t) => t.address);
+  return net.pinned && net.pinned[role] ? [net.pinned[role]] : [];
+}
+
 /**
- * On mainnet, `address` must be the pinned address for `role`. `uploading`
+ * The roles PIN_OVERRIDE_FLAG names (audit L-8: one switch used to unpin
+ * every role at once). The flag takes a value: one role, or several
+ * separated by commas.
+ */
+function overrideRoles(flags) {
+  const v = flags[PIN_OVERRIDE_FLAG.slice(2)];
+  if (v === undefined) return [];
+  const roles = String(v).split(",").map((r) => r.trim()).filter(Boolean);
+  if (v === true || !roles.length || roles.some((r) => !OVERRIDE_ROLES.includes(r))) {
+    fail(PIN_OVERRIDE_FLAG + " must name the role it lets through, one of " + OVERRIDE_ROLES.join(", ") +
+      " (for example " + PIN_OVERRIDE_FLAG + "=shop). Nothing was done.");
+  }
+  return roles;
+}
+
+/**
+ * On mainnet, `address` must be a pinned address for `role`. `uploading`
  * lets `upload` name a contract address that is not pinned yet. Returns a
- * warning line when the override flag let an unpinned address through.
+ * warning line when the override flag, naming this role, let an unpinned
+ * address through.
  */
 function checkPinned(net, role, address, flags, uploading) {
   if (!net.mainnet || address === undefined) return null;
-  const pinned = net.pinned[role];
-  if (pinned === address || (!pinned && uploading)) return null;
-  const what = pinned ? "the pinned mainnet " + role + " address is " + pinned : "no mainnet " + role + " address is pinned in deploy/lib.js yet";
-  if (flags[PIN_OVERRIDE_FLAG.slice(2)] === true) {
-    return "WARNING: " + address + " is used as " + role + " although " + what + " (" + PIN_OVERRIDE_FLAG + ").";
+  const pinned = pinnedAddresses(net, role);
+  if (pinned.includes(address) || (!pinned.length && uploading)) return null;
+  const where = role === "token" ? "TOKEN_PINS.mainnet" : "MAINNET_PINNED";
+  const what = pinned.length ? "the pinned mainnet " + role + " address" + (pinned.length > 1 ? "es are " : " is ") + pinned.join(", ")
+    : "no mainnet " + role + " address is pinned in deploy/lib.js yet";
+  if (overrideRoles(flags).includes(role)) {
+    return "WARNING: " + address + " is used as " + role + " although " + what + " (" + PIN_OVERRIDE_FLAG + "=" + role + ").";
   }
   fail("On mainnet, " + role + " must be the pinned address, but " + what + " and you gave " + address + ".\n" +
-    "Nothing was done. If the address in deploy/lib.js (MAINNET_PINNED) is wrong or missing, fix it there (one line) and have it reviewed. " +
-    "Only if you checked the address yourself, add " + PIN_OVERRIDE_FLAG + ".");
+    "Nothing was done. If the address in deploy/lib.js (" + where + ") is wrong or missing, fix it there (one line) and have it reviewed. " +
+    "Only if you checked the address yourself, add " + PIN_OVERRIDE_FLAG + "=" + role + ".");
+}
+
+/**
+ * On mainnet, --admin must be the pinned multisig, or before the handover a
+ * pinned contract wallet itself (its own admin until set-admin): audit L-8.
+ */
+function checkPinnedAdmin(net, admin, flags) {
+  if (!net.mainnet || admin === undefined) return null;
+  const ok = ["multisig", "ink", "shop", "stories"].map((r) => net.pinned[r]).filter(Boolean);
+  if (ok.includes(admin)) return null;
+  if (overrideRoles(flags).includes("admin")) {
+    return "WARNING: " + admin + " is used as admin although it is not the pinned multisig or a pinned contract (" + PIN_OVERRIDE_FLAG + "=admin).";
+  }
+  fail("On mainnet, --admin must be the pinned multisig (" + (net.pinned.multisig || "not pinned yet") + ") or, before the handover, " +
+    "a pinned contract wallet itself, but you gave " + admin + ".\nNothing was done. Pin it in deploy/lib.js (MAINNET_PINNED) in a reviewed " +
+    "change, or, only if you checked it yourself, add " + PIN_OVERRIDE_FLAG + "=admin.");
 }
 
 /** Every contract address the flags name, checked against the pinned table. `target` names the role of --contract/--expect. */
 function checkPinnedFlags(net, flags, target) {
   const warnings = [];
   for (const role of PINNED_ROLES) warnings.push(checkPinned(net, role, flags[role], flags, false));
+  // sponsor-config --tokens: each must be a pinned token (audit L-8).
+  if (typeof flags.tokens === "string") {
+    for (const t of flags.tokens.split(",").map((x) => x.trim()).filter(Boolean)) warnings.push(checkPinned(net, "token", t, flags, false));
+  }
   for (const name of ["contract", "expect"]) {
     if (flags[name] === undefined || !net.mainnet) continue;
     if (!CONTRACT_ROLES.includes(target)) fail("Say which contract --" + name + " is: ink, shop, stories, sponsor or multisig.");
     warnings.push(checkPinned(net, target, flags[name], flags, name === "expect"));
   }
+  warnings.push(checkPinnedAdmin(net, flags.admin, flags));
   return warnings.filter(Boolean);
 }
 
@@ -949,7 +999,7 @@ function checkPinnedFlags(net, flags, target) {
 function refuseCrossNetworkKey(net, address) {
   if (net.mainnet) return;
   for (const role of PINNED_ROLES) {
-    if (NETWORKS.mainnet.pinned[role] && NETWORKS.mainnet.pinned[role] === address) {
+    if (pinnedAddresses(NETWORKS.mainnet, role).includes(address)) {
       fail(address + " is the pinned MAINNET " + role + " address. Never use a mainnet contract key on testnet " +
         "(or a testnet key on mainnet): make a new wallet for each contract on each network. Nothing was signed.");
     }
@@ -1783,6 +1833,8 @@ module.exports = {
   checkTokenCode,
   checkTokenInfo,
   checkPinnedFlags,
+  checkPinnedAdmin,
+  pinnedAddresses,
   refuseCrossNetworkKey,
   parseReleaseHashes,
   sha256Hex,

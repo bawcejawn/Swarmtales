@@ -11,8 +11,9 @@
  *    cosign): operations and signatures, never a key.
  *  - Testnet is the default. Mainnet is refused unless you pass BOTH
  *    --network mainnet and --i-understand-this-is-mainnet.
- *  - On mainnet, Ink, Shop, Stories and the payment token must be the
- *    addresses pinned in deploy/lib.js (MAINNET_PINNED), and wire and
+ *  - On mainnet, Ink, Shop, Stories, the sponsor, the multisig (and --admin)
+ *    must be the addresses pinned in deploy/lib.js (MAINNET_PINNED), payment
+ *    tokens one of TOKEN_PINS.mainnet (with their code hash), and wire and
  *    wire-stories check each contract's code hash against
  *    deploy/release-hashes.json. Uploads check the wasm against that file too.
  *  - The node's chain id must match the network before anything is signed.
@@ -145,7 +146,8 @@
  *       (joins the signatures from the copies, shows everything again, dry runs it, then sends it after SEND)
  *
  * Common flags: --network testnet|mainnet  --rpc <https url>
- * Mainnet only, after checking the address yourself: --i-understand-this-address-is-not-pinned
+ * Mainnet only, after checking the address yourself: --i-understand-this-address-is-not-pinned=<role>
+ *   (the role it lets through: ink, shop, stories, token, sponsor, multisig or admin; several with commas)
  */
 "use strict";
 

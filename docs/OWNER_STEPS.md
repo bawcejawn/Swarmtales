@@ -197,7 +197,9 @@ Mainnet goes ahead only when **every** box is ticked:
 - [ ] **Mainnet payment token** confirmed (vUSDT address, C2).
 - [ ] Live checks C1, C3 and C5 done.
 - [ ] On upload day (I'll walk you through each command): upload the three contracts, fill
-      `MAINNET_PINNED` in `deploy/lib.js`, hand admin to the multisig, wire, enable vUSDT and set
+      `MAINNET_PINNED` in `deploy/lib.js` (and the one payment token, with its reviewed code hash, in
+      `TOKEN_PINS.mainnet` there and `PAYMENT_TOKENS.mainnet` in `web/src/config.js`), hand admin
+      to the multisig, wire, enable vUSDT and set
       prices **before** the first sale (so it's usable at once), set Terms and the moderator, then
       compare each contract's code hash with the release hashes and read back every setting.
 

@@ -22,7 +22,7 @@ These keys can replace a contract's code, so they are the most valuable keys.
 - [ ] A contract key cannot be made multisig without adding a reviewed `authorize` function to the contract, so it stays a single hardware-held key. Do not turn the overrides on to get multisig.
 - [ ] The release sha256 of each contract is reproduced by two people from the same commit and written into `deploy/release-hashes.json` (reviewed like code). Never copy a hash the tool or a build printed.
 - [ ] Every upload uses that release build: `node deploy/deploy.js upload <name> --expect <addr>`. On mainnet the tool refuses a build that doesn't match `release-hashes.json`.
-- [ ] After each mainnet upload, its address is written into `MAINNET_PINNED` in `deploy/lib.js` (one line, reviewed). On mainnet the tool then refuses any other Ink, Shop, Stories or token address, and `wire` / `wire-stories` check each contract's code hash on chain.
+- [ ] After each mainnet upload, its address is written into `MAINNET_PINNED` in `deploy/lib.js` (one line, reviewed); the payment token goes in `TOKEN_PINS.mainnet` with its code hash. On mainnet the tool then refuses any other Ink, Shop, Stories, sponsor, multisig, admin or token address, and `wire` / `wire-stories` check each contract's code hash on chain. The override, `--i-understand-this-address-is-not-pinned=<role>`, lets through only the role it names (audit L-8).
 
 ## 3. Admin
 
