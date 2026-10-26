@@ -205,9 +205,9 @@ function signatureAddresses(): Uint8Array[] {
   for (let i = 0; i < list.values.length; i++) {
     const raw = list.values[i].bytes_value;
     if (!raw || raw.length != SIGNATURE_LENGTH) continue;
-    const publicKey = System.recoverPublicKey(raw, txId);
-    if (!publicKey) continue;
-    out.push(Crypto.addressFromPublicKey(publicKey));
+    // The chain throws on a signature it can't recover a key from, which
+    // fails the whole transaction, so there is no "skip it" case here.
+    out.push(Crypto.addressFromPublicKey(System.recoverPublicKey(raw, txId)!));
   }
   return out;
 }
