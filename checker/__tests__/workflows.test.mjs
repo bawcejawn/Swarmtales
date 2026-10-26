@@ -76,8 +76,16 @@ for (const file of files) {
   });
 }
 
-test("both workflows are checked", () => {
-  assert.deepEqual(files.sort(), ["copy-checker.yml", "pages.yml"]);
+test("every workflow is checked", () => {
+  assert.deepEqual(files.sort(), ["copy-checker.yml", "pages.yml", "sponsor-alert.yml"]);
+});
+
+test("sponsor-alert.yml holds no secret, installs nothing and only reads", () => {
+  const text = fs.readFileSync(new URL("sponsor-alert.yml", dir), "utf8");
+  assert.doesNotMatch(text, /secrets\./);
+  assert.doesNotMatch(text.split(/\r?\n/).map(code).join("\n"), /\bnpm\b|yarn/);
+  assert.match(text, /^permissions:\s*\n\s+contents: read\s*$/m);
+  assert.match(text, /run: node scripts\/sponsor-alert\.mjs/);
 });
 
 // ---------- audit 2026-10: O1-09 (plan without the key), M-10 (state key), M-13 (time budget) ----------

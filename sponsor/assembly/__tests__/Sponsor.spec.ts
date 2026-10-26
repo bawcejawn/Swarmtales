@@ -24,7 +24,8 @@ const STRANGER_CONTRACT = Base58.decode("1PJLazQ9eg25WRsBbcgVfc9ng2cR1cRT52");
 const MANA: u64 = 100000000;
 const DAY_MS: u64 = 86400000;
 const T0: u64 = 1700000000000; // a head block time in ms
-const BUY_PACK: u32 = 0x12345678; // any Shop entry point is allowed
+const BUY_PACK: u32 = 0x12345678; // a Shop entry point on the allow-list
+const UNLISTED: u32 = 0x0badf00d; // an entry point that is not on it
 const TRANSFER_ENTRY: u32 = 0x27f576ca;
 
 // Closures aren't supported in AssemblyScript; tests build these, then call.
@@ -107,8 +108,18 @@ function asOwner(): void {
   MockVM.setAuthorities([new MockVM.MockAuthority(authority.authorization_type.contract_call, SELF, true)]);
 }
 
+function listed(contract: Uint8Array, entry: u32): sponsor.sponsored_call {
+  return new sponsor.sponsored_call(contract, entry);
+}
+
 function goodConfig(): sponsor.config {
-  return new sponsor.config(true, INK, SHOP, STORIES, [USDT, KOIN], 10 * MANA, 30 * MANA, 100 * MANA);
+  return new sponsor.config(true, INK, SHOP, STORIES, [USDT, KOIN], 10 * MANA, 30 * MANA, 100 * MANA,
+    [listed(SHOP, BUY_PACK), listed(STORIES, 1), listed(INK, 2)]);
+}
+
+/** Called straight from the transaction: no calling contract. */
+function direct(): void {
+  MockVM.setCaller(new chain.caller_data(new Uint8Array(0), chain.privilege.user_mode));
 }
 
 let CFG: sponsor.config = new sponsor.config();
@@ -128,6 +139,7 @@ describe("sponsor settings", () => {
   beforeEach(() => {
     MockVM.reset();
     MockVM.setContractId(SELF);
+    direct();
     setDay(T0);
     MockVM.commitTransaction();
   });
@@ -219,6 +231,32 @@ describe("sponsor settings", () => {
     errorIs("SPONSOR: the sponsor can't be a SwarmTales contract");
   });
 
+  it("refuses switching on with no sponsored calls (audit M-A)", () => {
+    CFG = goodConfig();
+    CFG.calls = [];
+    expect(() => { setConfig(); }).toThrow();
+    errorIs("SPONSOR: switched on with no sponsored calls");
+    // Switched off, an empty list is fine.
+    CFG.enabled = false;
+    setConfig();
+    expect(new Sponsor().get_config(new sponsor.get_config_arguments()).calls.length).toBe(0);
+  });
+
+  it("refuses a sponsored call to anything but Ink, Shop or Stories, a duplicate, and more than 32 (audit M-A)", () => {
+    CFG = goodConfig();
+    CFG.calls = [listed(USDT, BUY_PACK)];
+    expect(() => { setConfig(); }).toThrow();
+    errorIs("SPONSOR: a sponsored call must be to Ink, Shop or Stories");
+    CFG.calls = [listed(SHOP, BUY_PACK), listed(SHOP, BUY_PACK)];
+    expect(() => { setConfig(); }).toThrow();
+    errorIs("SPONSOR: duplicate sponsored call");
+    const many: sponsor.sponsored_call[] = [];
+    for (let i: u32 = 0; i < 33; i++) many.push(listed(SHOP, i + 1));
+    CFG.calls = many;
+    expect(() => { setConfig(); }).toThrow();
+    errorIs("SPONSOR: at most 32 sponsored calls");
+  });
+
   it("can be switched off", () => {
     configure();
     CFG = goodConfig();
@@ -235,9 +273,34 @@ describe("sponsor pays", () => {
   beforeEach(() => {
     MockVM.reset();
     MockVM.setContractId(SELF);
+    direct();
     setDay(T0);
     MockVM.commitTransaction();
     configure();
+  });
+
+  // ---- audit M-A: only the listed entry points are sponsored ----
+
+  it("refuses a call to an entry point that is not on the allow-list", () => {
+    TX = 1; RC = MANA; PAYEE = USER; SIGNERS = ["USER"];
+    OPS = [call(SHOP, UNLISTED, new Uint8Array(0))];
+    expect(() => { pays(); }).toThrow();
+    errorIs("SPONSOR: this call is not sponsored");
+    expect(new Sponsor().get_total_usage(new sponsor.get_total_usage_arguments()).used).toBe(0);
+  });
+
+  it("refuses a listed entry point on another SwarmTales contract", () => {
+    TX = 1; RC = MANA; PAYEE = USER; SIGNERS = ["USER"];
+    OPS = [call(STORIES, BUY_PACK, new Uint8Array(0))];
+    expect(() => { pays(); }).toThrow();
+    errorIs("SPONSOR: this call is not sponsored");
+  });
+
+  it("refuses the whole transaction when one of its calls is not listed", () => {
+    TX = 1; RC = MANA; PAYEE = USER; SIGNERS = ["USER"];
+    OPS = [call(SHOP, BUY_PACK, new Uint8Array(0)), call(INK, UNLISTED, new Uint8Array(0))];
+    expect(() => { pays(); }).toThrow();
+    errorIs("SPONSOR: this call is not sponsored");
   });
 
   it("pays a user's buy and counts it", () => {

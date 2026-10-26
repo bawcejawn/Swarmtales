@@ -1276,6 +1276,23 @@ function planMultisigSigners(signersFlag, thresholdFlag, multisigAddress) {
 // ---- Mana sponsor (sponsor/) ----
 const SPONSOR_MAX_TOKENS = 4;
 const SPONSOR_CAP_LIMIT = 100000000000n; // 1,000 mana, the contract's own limit
+// Default caps, in mana (audit M-A): about 1 mana a transaction, close to real
+// use (a bookmark or purchase uses under 0.2; a long part up to about 1.8,
+// which is then paid with the user's own mana).
+const SPONSOR_DEFAULT_CAPS = { "per-tx": "1", "per-account": "20", "per-day": "300" };
+// The only Ink, Shop and Stories methods the sponsor pays for (audit M-A):
+// what a new user without KOIN needs. Anything else (admin calls, story
+// management, reports, archive and cursor calls anyone may make) is paid with
+// the user's own mana. Changing this list is a reviewed change.
+const SPONSORED_CALLS = {
+  shop: ["buy_membership", "buy_pack", "claim_writer_ink", "claim_promo"],
+  stories: ["open_story", "contribute", "edit_segment", "remove_segment", "join_with_invite", "set_reading_place"],
+};
+
+/** A contract method's entry point: the first 4 bytes of sha256(name), as the contract build and web/scripts/build-abi.mjs make it. */
+function entryPoint(name) {
+  return crypto.createHash("sha256").update(name).digest().readUInt32BE(0);
+}
 
 /**
  * The set_config arguments for the sponsor, checked the same way the
@@ -1294,20 +1311,28 @@ function planSponsorConfig(f, sponsorAddress) {
     if ([ink, shop, stories, sponsorAddress].includes(t)) fail("--tokens can't include a SwarmTales contract or the sponsor.");
   }
   const enabled = f.disable !== true;
-  const perTx = parseMana(f["per-tx"], "--per-tx");
-  const perAccount = parseMana(f["per-account"], "--per-account");
-  const perDay = parseMana(f["per-day"], "--per-day");
+  const cap = (name) => parseMana(f[name] === undefined ? SPONSOR_DEFAULT_CAPS[name] : f[name], "--" + name);
+  const perTx = cap("per-tx");
+  const perAccount = cap("per-account");
+  const perDay = cap("per-day");
   if (BigInt(perTx) > BigInt(perAccount) || BigInt(perAccount) > BigInt(perDay)) {
     fail("Caps must be --per-tx <= --per-account <= --per-day.");
   }
   if (BigInt(perDay) > SPONSOR_CAP_LIMIT) fail("--per-day can't be above 1000 mana (the contract's limit).");
+  const byRole = { shop, stories };
+  const calls = [];
+  for (const [role, names] of Object.entries(SPONSORED_CALLS)) {
+    for (const name of names) calls.push({ contract: byRole[role], entry_point: entryPoint(name) });
+  }
   const config = {
     enabled, ink, shop, stories, tokens,
     max_mana_per_tx: perTx,
     max_mana_per_account_day: perAccount,
     max_mana_per_day: perDay,
+    calls,
   };
-  const summary = "sponsor " + (enabled ? "ON" : "OFF") + ": pays for Ink " + ink + ", Shop " + shop + ", Stories " + stories +
+  const listed = Object.entries(SPONSORED_CALLS).map(([role, names]) => names.map((n) => role + "." + n).join(", ")).join(", ");
+  const summary = "sponsor " + (enabled ? "ON" : "OFF") + ": pays only for " + listed + " (Ink " + ink + ", Shop " + shop + ", Stories " + stories + ")" +
     (tokens.length ? " and approve(spender = Shop) on " + tokens.join(", ") : "") +
     "; caps " + formatMana(perTx) + " mana per transaction, " + formatMana(perAccount) + " per account per day, " +
     formatMana(perDay) + " for everyone per day";
@@ -1685,6 +1710,9 @@ module.exports = {
   sha256Hex,
   checkWasmHash,
   planSponsorConfig,
+  SPONSORED_CALLS,
+  SPONSOR_DEFAULT_CAPS,
+  entryPoint,
   planPrices,
   planInkAmounts,
   parseTokenAmount,

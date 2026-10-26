@@ -292,3 +292,37 @@ test("I-2: set-asset refuses a symbol another of the Shop's tokens already uses"
   assert.deepStrictEqual(node.log.sent, []);
   assert.throws(() => lib.planAsset({}, { token: TKOIN, enabled: true, decimals: "8", symbol: "tKOIN" }, 0, true, [{ token: TOKEN, symbol: "tkoin" }]), /already has a token/);
 });
+
+// ---------------------------------------------------------------- M-A (sponsor)
+
+test("M-A: sponsor-config sponsors only the listed entry points, with caps of 1 / 20 / 300 mana by default", async () => {
+  const SPONSOR = koilib.Signer.fromSeed("swarmtales test sponsor").getAddress();
+  const plan = lib.planSponsorConfig({ ink: INK, shop: SHOP, stories: STORIES }, SPONSOR);
+  const c = plan.args.config;
+  assert.deepStrictEqual([c.max_mana_per_tx, c.max_mana_per_account_day, c.max_mana_per_day], ["100000000", "2000000000", "30000000000"]);
+  // Each listed method's entry point is the one in the contract's own ABI.
+  const abis = { shop: ABI("shop"), stories: ABI("stories") };
+  const ids = { shop: SHOP, stories: STORIES };
+  const want = [];
+  for (const [role, names] of Object.entries(lib.SPONSORED_CALLS)) {
+    for (const name of names) {
+      const m = abis[role].methods[name];
+      assert.ok(m && !m.read_only, role + "." + name + " is a write method");
+      want.push({ contract: ids[role], entry_point: m.entry_point });
+    }
+  }
+  assert.deepStrictEqual(c.calls, want);
+  assert.ok(!c.calls.some((x) => x.contract === INK), "no Ink method is sponsored");
+  for (const admin of ["set_asset", "set_price", "set_paused", "set_admin", "report_segment", "archive_if_stale", "advance_final_cursor"]) {
+    for (const role of ["shop", "stories"]) {
+      const m = abis[role].methods[admin];
+      if (m) assert.ok(!c.calls.some((x) => x.contract === ids[role] && x.entry_point === m.entry_point), role + "." + admin + " must not be sponsored");
+    }
+  }
+  assert.match(plan.summary, /pays only for shop\.buy_membership/);
+  // The operation encodes and decodes exactly, allow-list included.
+  const sponsorC = deploy.contractOf("sponsor", SPONSOR, null);
+  const op = await sponsorC.encodeOperation({ name: "set_config", args: plan.args });
+  const back = await sponsorC.decodeOperation(op);
+  assert.strictEqual(back.args.config.calls.length, c.calls.length);
+});

@@ -16,6 +16,7 @@ const TOTAL_USAGE_SPACE = 2;
 const ADDRESS_LENGTH = 25;
 const SIGNATURE_LENGTH = 65;
 const MAX_TOKENS = 4;
+const MAX_CALLS = 32;
 const MAX_OPERATIONS = 10;
 const MS_PER_DAY: u64 = 86400000;
 /** KCS-4 approve entry point. */
@@ -147,6 +148,21 @@ export class Sponsor {
     );
     System.require(cfg.max_mana_per_day <= CAP_LIMIT, "SPONSOR: daily cap above 1,000 mana");
     System.require(!cfg.enabled || cfg.max_mana_per_tx > 0, "SPONSOR: switched on with a zero cap");
+    System.require(cfg.calls.length <= MAX_CALLS, "SPONSOR: at most 32 sponsored calls");
+    System.require(!cfg.enabled || cfg.calls.length > 0, "SPONSOR: switched on with no sponsored calls");
+    for (let i = 0; i < cfg.calls.length; i++) {
+      const c = cfg.calls[i];
+      System.require(
+        c.contract != null && (Arrays.equal(c.contract!, cfg.ink!) || Arrays.equal(c.contract!, cfg.shop!) || Arrays.equal(c.contract!, cfg.stories!)),
+        "SPONSOR: a sponsored call must be to Ink, Shop or Stories"
+      );
+      for (let j = 0; j < i; j++) {
+        System.require(
+          !(Arrays.equal(c.contract!, cfg.calls[j].contract!) && c.entry_point == cfg.calls[j].entry_point),
+          "SPONSOR: duplicate sponsored call"
+        );
+      }
+    }
     this.config.put(cfg);
     const ev = new sponsor.config_event(cfg);
     System.event("sponsor.config_event", Protobuf.encode(ev, sponsor.config_event.encode), [this.contractId]);
@@ -154,7 +170,11 @@ export class Sponsor {
   }
 }
 
-/** One operation is sponsored only if it calls SwarmTales, or approves the Shop. */
+/**
+ * One operation is sponsored only if it is a listed SwarmTales entry point
+ * (audit M-A: throwaway wallets could otherwise fill the daily cap with any
+ * call, even a reverting one), or approves the Shop.
+ */
 function checkOperation(op: protocol.operation, cfg: sponsor.config, payee: Uint8Array): void {
   System.require(
     op.upload_contract == null && op.set_system_call == null && op.set_system_contract == null && op.call_contract != null,
@@ -163,7 +183,10 @@ function checkOperation(op: protocol.operation, cfg: sponsor.config, payee: Uint
   const call = op.call_contract!;
   System.require(call.contract_id != null, "SPONSOR: call without a contract");
   const target = call.contract_id!;
-  if (Arrays.equal(target, cfg.ink!) || Arrays.equal(target, cfg.shop!) || Arrays.equal(target, cfg.stories!)) return;
+  if (Arrays.equal(target, cfg.ink!) || Arrays.equal(target, cfg.shop!) || Arrays.equal(target, cfg.stories!)) {
+    System.require(listedCall(cfg.calls, target, call.entry_point), "SPONSOR: this call is not sponsored");
+    return;
+  }
   System.require(contains(cfg.tokens, target), "SPONSOR: only SwarmTales calls are sponsored");
   System.require(call.entry_point == APPROVE_ENTRY, "SPONSOR: only approve is sponsored on a payment token");
   const a = Protobuf.decode<sponsor.approve_args>(call.args ? call.args! : new Uint8Array(0), sponsor.approve_args.decode);
@@ -184,6 +207,13 @@ function isAddress(a: Uint8Array | null): bool {
     if (twice[2 + i] != b[21 + i]) return false;
   }
   return true;
+}
+
+function listedCall(calls: sponsor.sponsored_call[], contract: Uint8Array, entryPoint: u32): bool {
+  for (let i = 0; i < calls.length; i++) {
+    if (calls[i].entry_point == entryPoint && Arrays.equal(calls[i].contract!, contract)) return true;
+  }
+  return false;
 }
 
 function contains(list: Uint8Array[], item: Uint8Array): bool {

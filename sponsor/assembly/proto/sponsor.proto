@@ -12,8 +12,9 @@ syntax = "proto3";
 // this contract whether to pay. It says yes only when ALL of these hold:
 //   - the sponsor is switched on;
 //   - the transaction is signed by the payee (the user);
-//   - every operation calls Ink, Shop or Stories, or is a payment-token
-//     `approve` with spender = Shop and owner = the payee;
+//   - every operation is a call to Ink, Shop or Stories whose entry point
+//     is on the `calls` allow-list, or a payment-token `approve` with
+//     spender = Shop and owner = the payee;
 //   - the transaction's mana limit is within the per-transaction cap, and
 //     today's total for this user and for everyone stays within the caps.
 // A transaction signed by the sponsor account's own key is always paid
@@ -42,6 +43,17 @@ message config {
   uint64 max_mana_per_account_day = 7 [jstype = JS_STRING];
   // Most mana everyone together may reserve per day.
   uint64 max_mana_per_day = 8 [jstype = JS_STRING];
+  // The Ink, Shop and Stories entry points that are sponsored (audit M-A):
+  // only what new users need. Any other call to them is refused. At most 32;
+  // switched on needs at least one.
+  repeated sponsored_call calls = 9;
+}
+
+// One sponsored entry point: a call to `contract` (Ink, Shop or Stories) at
+// `entry_point` (the first 4 bytes of sha256 of the method name).
+message sponsored_call {
+  bytes contract = 1 [(koinos.btype) = ADDRESS];
+  uint32 entry_point = 2;
 }
 
 message usage {

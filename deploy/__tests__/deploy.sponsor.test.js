@@ -82,7 +82,9 @@ test("sponsor: planSponsorConfig builds the contract's settings in mana base uni
   assert.deepStrictEqual(plan.args.config, {
     enabled: true, ink: INK, shop: SHOP, stories: STORIES, tokens: [TOKEN, KOIN],
     max_mana_per_tx: "1000000000", max_mana_per_account_day: "3000000000", max_mana_per_day: "30000000000",
+    calls: plan.args.config.calls,
   });
+  assert.strictEqual(plan.args.config.calls.length, 10, "the sponsored-call allow-list (audit M-A)");
   assert.match(plan.summary, /sponsor ON/);
   assert.match(plan.summary, /approve\(spender = Shop\)/);
   const off = lib.planSponsorConfig(Object.assign({}, GOOD, { disable: true, tokens: undefined }), SPONSOR);
