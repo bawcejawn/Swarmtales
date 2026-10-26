@@ -256,7 +256,7 @@ node deploy/deploy.js upload sponsor --expect $SPONSOR
 ```
 Paste the **sponsor wallet** key, `SEND`. Then (sponsor key again):
 ```powershell
-node deploy/deploy.js sponsor-config --sponsor $SPONSOR --ink $INK --shop $SHOP --stories $STORIES --tokens $TKOIN --per-tx 4 --per-account 20 --per-day 300
+node deploy/deploy.js sponsor-config --sponsor $SPONSOR --ink $INK --shop $SHOP --stories $STORIES --tokens $TKOIN --per-tx 1 --per-account 20 --per-day 300
 node deploy/deploy.js status --sponsor $SPONSOR
 ```
 **Expect** `call false, pay true, upload false` and `"enabled":true`. The site already points at
