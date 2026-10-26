@@ -20,6 +20,7 @@
 import { Base58, MockVM, System, authority, chain, Protobuf, system_calls } from "@koinos/sdk-as";
 import { Stories } from "../Stories";
 import { stories } from "../proto/stories";
+import { reviewedTakedown } from "./reviewed";
 
 const STORIES = Base58.decode("16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt");
 const INK = Base58.decode("13Qrdvv3cXys9aryjZho6vHxDW3PRgX5pm");
@@ -117,7 +118,7 @@ function change(as: Uint8Array, id: u64, seq: u64, text: string): void {
 }
 function takedownStriking(id: u64, seq: u64, who: Uint8Array): void {
   authorize(STORIES);
-  new Stories().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-002", who));
+  new Stories().takedown_segment(reviewedTakedown(id, seq, COPYRIGHT, "notice 2026-002", who));
   checkpoint();
 }
 function fails(fn: () => void, message: string): void {
@@ -133,11 +134,11 @@ let SEQ: u64 = 0;
 let WHO: Uint8Array = new Uint8Array(0);
 function strikeAs(): void {
   authorize(STORIES);
-  new Stories().takedown_segment(new stories.takedown_segment_arguments(ID, SEQ, COPYRIGHT, "notice 2026-003", WHO));
+  new Stories().takedown_segment(reviewedTakedown(ID, SEQ, COPYRIGHT, "notice 2026-003", WHO));
 }
 function takedownByDefault(): void {
   authorize(STORIES);
-  new Stories().takedown_segment(new stories.takedown_segment_arguments(ID, SEQ, COPYRIGHT, "notice 2026-001"));
+  new Stories().takedown_segment(reviewedTakedown(ID, SEQ, COPYRIGHT, "notice 2026-001"));
 }
 // A default takedown of a part someone else changed is refused and strikes nobody.
 function defaultIsRefused(id: u64, seq: u64): void {
@@ -349,7 +350,7 @@ describe("AUDIT strike rule: the strike argument", () => {
     ID = id; SEQ = seq; WHO = BOB;
     expect(() => {
       authorize(CARA);
-      new Stories().takedown_segment(new stories.takedown_segment_arguments(ID, SEQ, COPYRIGHT, "", WHO));
+      new Stories().takedown_segment(reviewedTakedown(ID, SEQ, COPYRIGHT, "", WHO));
     }).toThrow();
     MockVM.rollbackTransaction();
     MockVM.commitTransaction();

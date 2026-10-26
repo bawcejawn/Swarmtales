@@ -7,6 +7,8 @@
  * part also appears in another part, without storing whole texts.
  */
 
+import { createHash } from "crypto";
+
 export const SHINGLE_WORDS = 8;
 export const MIN_SHINGLES = 6;           // parts with fewer kept hashes are too short to judge
 export const DUPLICATE_RATIO = 0.8;      // hide: at least 80% of a part matches one other part
@@ -17,8 +19,8 @@ export const PHRASES = 5;                // phrases searched per part
 export const HIDE_FOUND = 4;             // hide: at least 4 of the 5 phrases found...
 export const HIDE_SAME_SOURCE = 3;       // ...and at least 3 of them in the same book or site
 export const NOTE_FOUND = 2;             // note only: 2 or more found
-export const WEB_MATCHES_TO_HIDE = HIDE_FOUND; // kept for older callers
 export const REASON = { COPYRIGHT: 1, DUPLICATE: 2 };
+export const NOTE_MAX = 200;             // the contract's limit for notes, in UTF-16 units
 
 const STOPWORDS = new Set((
   "a an and are as at be but by for from had has have he her his i if in into is it its me my no not of on or our " +
@@ -55,6 +57,21 @@ export function fingerprint(text) {
     if ((h & 1) === 0) out.add(h);
   }
   return Array.from(out).sort((a, b) => a - b);
+}
+
+/** A short key for a text, to notice when a part's text or citation changes (AB-067). */
+export function textKey(text) {
+  return createHash("sha256").update(String(text || "")).digest("base64").slice(0, 16);
+}
+
+/**
+ * When a part's text last changed: its last edit, or when it was added
+ * (segment times are wall-clock seconds).
+ */
+export function textAt(seg) {
+  const created = Number(seg.created_at || 0);
+  const edited = Number(seg.last_edited_at || 0);
+  return edited > created ? edited : created;
 }
 
 /**
@@ -136,15 +153,15 @@ export class Index {
    * shared hash is dated on both sides (AB-076), so an edit elsewhere in a
    * part never makes its older words look new. `at` is a time, or a function
    * giving the time of each of `hashes`. Words with the same time do not
-   * count either (AB-024): see tieMatch. Words saved before `at` was kept
-   * count as earlier.
+   * count either (AB-024): see tieMatch. A word with no known time on
+   * either side never counts: an unknown date can't prove who was first.
    */
   bestMatch(hashes, author, exceptKey, at) {
     const mine = datesOf(at);
     return this.match(hashes, author, exceptKey, (entry, h) => {
       const m = mine(h);
       const theirs = dateOf(entry, h);
-      return !m || !theirs || theirs < m;
+      return !!m && !!theirs && theirs < m;
     });
   }
 
@@ -299,11 +316,8 @@ export function resultMatches(phrase, result, ignoreHosts) {
   return want.length > 0 && found / want.length >= 0.7;
 }
 
-/**
- * Monthly search budget per search service, kept in the checker's state.
- * name "search" is the original (Brave) budget, kept for older state files.
- */
-export function budget(state, now, monthlyLimit, name = "search") {
+/** Monthly search budget per search service, kept in the checker's state. */
+export function budget(state, now, monthlyLimit, name) {
   const month = now.toISOString().slice(0, 7);
   if (!state[name] || state[name].month !== month) state[name] = { month, used: 0 };
   return {
@@ -322,28 +336,209 @@ export function budget(state, now, monthlyLimit, name = "search") {
 export function normalizeResults(service, body) {
   const b = body || {};
   if (service === "books") {
-    return (b.items || []).map((item) => {
-      const info = item.volumeInfo || {};
-      const by = (info.authors || []).join(", ");
+    return (Array.isArray(b.items) ? b.items : []).map((item) => {
+      const info = (item && item.volumeInfo) || {};
+      const title = String(info.title || "");
+      const by = (Array.isArray(info.authors) ? info.authors : []).map(String).join(", ");
+      // Shown on-chain in a note: cleaned to the contract's text rules and kept short (O1-08).
+      const shortTitle = cleanNote(title, "untitled", 90);
+      const shortBy = cleanNote(by, "", 60);
       return {
-        url: info.infoLink || info.canonicalVolumeLink || ("https://books.google.com/books?id=" + encodeURIComponent(item.id || "")),
-        title: info.title || "",
+        kind: "book",
+        url: String(info.infoLink || info.canonicalVolumeLink || ("https://books.google.com/books?id=" + encodeURIComponent(String(item.id || "")))),
+        title,
         description: String((item.searchInfo && item.searchInfo.textSnippet) || ""),
-        label: "\u201c" + (info.title || "untitled") + "\u201d" + (by ? " by " + by : ""),
-        source: { title: info.title || "", author: by },
+        label: "\u201c" + shortTitle + "\u201d" + (shortBy ? " by " + shortBy : ""),
+        source: { title, author: by },
+        published: String(info.publishedDate || ""),
       };
     });
   }
-  if (service === "tavily") {
-    return (b.results || []).map((r) => ({ url: r.url || "", title: r.title || "", description: r.content || "" }));
+  const list = service === "tavily" ? b.results : b.web && b.web.results;
+  return (Array.isArray(list) ? list : []).map((r) => ({ kind: "web", url: String(r.url || ""), title: String(r.title || ""),
+    description: String((service === "tavily" ? r.content : r.description) || "") }));
+}
+
+// ---------------------------------------------------------------- dates (M-11)
+
+/**
+ * The first second after the period a Google Books publishedDate names
+ * ("2011", "2011-09" or "2011-09-13", read as UTC; negative before 1970),
+ * or null when it can't be read.
+ */
+export function publishedEnd(date) {
+  const m = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/.exec(String(date || "").trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = m[2] ? Number(m[2]) : 12;
+  const d = m[3] ? Number(m[3]) : 1;
+  if (y < 1000 || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const end = m[3] ? Date.UTC(y, mo - 1, d + 1) : Date.UTC(y, mo, 1);
+  return Math.floor(end / 1000);
+}
+
+/**
+ * Was a book provably published before a part was written? Its whole
+ * publication period, plus a day for time zones, must end before the part's
+ * created_at. An unknown date on either side proves nothing.
+ */
+export function provablyOlder(published, partSeconds) {
+  const end = publishedEnd(published);
+  const part = Number(partSeconds) || 0;
+  return end !== null && part > 0 && end + 86400 <= part;
+}
+
+// ---------------------------------------------------------------- on-chain notes (O1-08)
+
+// What Stories' requireText refuses in a note, besides control characters:
+// invisible and direction-control characters, lone surrogates and U+FFFD.
+const FORBIDDEN = /[\u200B\uFEFF\u2028\u2029\u2060-\u2064\u202A-\u202E\u2066-\u2069\uFFFD]/g;
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+// Characters requireText doesn't count as visible.
+const NOT_VISIBLE = /^[\u0020\u00A0\u3000\u2000-\u200A\u200C\u200D\uFE0E\uFE0F]*$/;
+
+/**
+ * Text made safe for a Stories note (set_segment_hidden, set_source_note):
+ * one line, no control, invisible or direction-control characters, no
+ * broken characters, at most `max` UTF-16 units (cut at a whole character,
+ * with "…"), and at least one visible character. Text left with nothing
+ * visible becomes `fallback` (cleaned the same way; "" if there is none),
+ * so a note can never make the chain refuse a hide every hour.
+ */
+export function cleanNote(text, fallback = "", max = NOTE_MAX) {
+  let s = String(text ?? "")
+    .replace(/[\u0000-\u001F\u007F-\u009F]+/g, " ")
+    .replace(FORBIDDEN, "")
+    .replace(LONE_SURROGATE, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (s.length > max) {
+    s = s.slice(0, max - 1);
+    if (/[\uD800-\uDBFF]$/.test(s)) s = s.slice(0, -1);
+    s = s.trimEnd() + "\u2026";
   }
-  return ((b.web && b.web.results) || []).map((r) => ({ url: r.url || "", title: r.title || "", description: r.description || "" }));
+  if (!s || NOT_VISIBLE.test(s)) return fallback ? cleanNote(fallback, "", max) : "";
+  return s;
+}
+
+/** The contract's note rule (Stories.ts requireNote/requireText), for tests and a last check before signing. */
+export function noteAllowed(s) {
+  s = String(s);
+  if (s.length > NOTE_MAX) return false;
+  if (!s.length) return true;
+  let visible = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x20 || (c >= 0x7f && c <= 0x9f)) return false;
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const d = s.charCodeAt(i + 1);
+      if (!(d >= 0xdc00 && d <= 0xdfff)) return false;
+      i++;
+      visible = true;
+      continue;
+    }
+    if ((c >= 0xdc00 && c <= 0xdfff) || c === 0xfffd) return false;
+    if (c === 0x200b || c === 0xfeff || c === 0x2028 || c === 0x2029 || (c >= 0x2060 && c <= 0x2064) ||
+        (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069)) return false;
+    if (!(c === 0x20 || c === 0xa0 || c === 0x3000 || (c >= 0x2000 && c <= 0x200a) || c === 0x200c || c === 0x200d ||
+          c === 0xfe0e || c === 0xfe0f)) visible = true;
+  }
+  return visible;
+}
+
+// ---------------------------------------------------------------- run summary (Info)
+
+/**
+ * Text for one cell of the GitHub run summary table: one line, and every
+ * character Markdown or HTML could act on escaped, so a citation or book
+ * title can't add links, images, HTML or break the table.
+ */
+export function mdCell(text) {
+  return cleanNote(text, "", 300).replace(/[\\`*_{}[\]()<>#+\-.!|~&"']/g, (c) => "\\" + c);
+}
+
+/** A fenced code block that no line of `text` can close (CommonMark: a longer fence). */
+export function mdFence(text) {
+  const runs = String(text).match(/`+/g) || [];
+  const fence = "`".repeat(Math.max(3, ...runs.map((r) => r.length + 1)));
+  return fence + "\n" + text + "\n" + fence + "\n";
+}
+
+/**
+ * A log line made safe for the Actions log and summary: user text (titles,
+ * citations) can't start a new line, so it can never form a "::command::".
+ */
+export function logLine(text) {
+  return String(text).replace(/[\u0000-\u0008\u000A-\u001F\u007F-\u009F\u2028\u2029]+/g, " ");
+}
+
+// ---------------------------------------------------------------- reading parts (M-5)
+
+/**
+ * Parts from..to of a story, in order, as [{ seq, seg }]. Reads `perRead`
+ * parts per get_segments call and goes on from the result's `next`; a page
+ * stops early when its text is long (the contract's byte budget). If a
+ * page read fails (a node's read limit, say), those parts are read one at
+ * a time with get_segment. A part that can't be read even alone throws, so
+ * the story is retried next run and never marked done past it.
+ */
+export async function readParts(read, storyId, from, to, perRead = 3) {
+  const out = [];
+  const id = String(storyId);
+  let start = from;
+  while (start <= to) {
+    let page = null;
+    try {
+      page = await read("get_segments", { story_id: id, start: String(start), limit: perRead });
+    } catch {
+      page = null;
+    }
+    const values = page && Array.isArray(page.values) ? page.values : [];
+    if (!values.length) {
+      out.push({ seq: start, seg: (await read("get_segment", { story_id: id, seq: String(start) })) || {} });
+      start += 1;
+      continue;
+    }
+    values.forEach((seg, i) => { if (start + i <= to) out.push({ seq: start + i, seg: seg || {} }); });
+    const after = start + values.length;
+    const next = Number(page.next || 0);
+    // Parts come back in order from `start`, so `next` is the part after the
+    // last one returned (0: the story ends there). Anything else would skip
+    // or repeat parts: stop and retry the story next run.
+    if (next !== 0 && next !== after) throw new Error("get_segments returned next " + next + " after parts " + start + " to " + (after - 1));
+    start = after;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- what a sent action changes
+
+/**
+ * Records in the state what a planned action did once the chain accepted
+ * it (only then: AB-061). A hide becomes the checker's own, so a citation
+ * naming its source can lift it; an unhide on a citation is kept as "cited",
+ * so clearing the citation hides it again (AB-067).
+ */
+export function recordSent(state, action) {
+  const key = action.story + ":" + action.seq;
+  state.hiddenByChecker = state.hiddenByChecker || {};
+  state.seen = state.seen || {};
+  if (action.kind === "hide") {
+    state.hiddenByChecker[key] = { source: action.src || null, label: action.label || "", t: action.t };
+  } else if (action.kind === "unhide") {
+    delete state.hiddenByChecker[key];
+    const seen = state.seen[key];
+    state.seen[key] = { reason: REASON.COPYRIGHT, why: "copied text from " + (action.label || "a source"),
+      note: action.label ? "Parts of this text also appear in " + action.label + "." : "",
+      ...(seen || {}), v: "cited", c: undefined, src: action.src || null, label: action.label || "" };
+  }
 }
 
 // Chain ids of the nodes the checker knows (the same as deploy/lib.js).
 const KNOWN_CHAINS = {
   "https://testnet.koinosfoundation.org": "EiAIKVvm6-V2qmsmUvPJy09vCCLbtn9lHFpwrJbcTIEWRQ==",
   "https://api.koinos.io": "EiBZK_GGVP0H_fXVAM3j6EAuz3-B-l3ejxRSewi7qIBfSA==",
+  "https://koinos.armana.io": "EiBZK_GGVP0H_fXVAM3j6EAuz3-B-l3ejxRSewi7qIBfSA==",
 };
 
 /**

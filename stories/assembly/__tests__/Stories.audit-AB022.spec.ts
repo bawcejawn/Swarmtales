@@ -10,6 +10,7 @@ import { Base58, MockVM, System, authority, chain, Protobuf, system_calls } from
 import { Stories } from "../Stories";
 import { stories } from "../proto/stories";
 import { LINK_ADDRESSES, inviteSig } from "./linkFixtures";
+import { reviewedTakedown, ownEditArgs } from "./reviewed";
 
 const STORIES = Base58.decode("16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt");
 const INK = Base58.decode("13Qrdvv3cXys9aryjZho6vHxDW3PRgX5pm");
@@ -137,7 +138,7 @@ function edit(as: Uint8Array, id: u64, seq: u64, text: string): void {
   // shrinking it mints a refund.
   if (<u64>text.length > segment(id, seq).current_cost) results([writer(), okCall()]);
   else allowCalls(1);
-  new Stories().edit_segment(new stories.edit_segment_arguments(as, id, seq, text, <u64>text.length));
+  new Stories().edit_segment(ownEditArgs(as, id, seq, text, <u64>text.length));
   checkpoint();
 }
 function setAllowed(actor: Uint8Array, id: u64, who: Uint8Array, allowed: bool): void {
@@ -147,7 +148,7 @@ function setAllowed(actor: Uint8Array, id: u64, who: Uint8Array, allowed: bool):
 }
 function takedown(id: u64, seq: u64): void {
   authorize(STORIES);
-  new Stories().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-001"));
+  new Stories().takedown_segment(reviewedTakedown(id, seq, COPYRIGHT, "notice 2026-001"));
   checkpoint();
 }
 function fails(fn: () => void, message: string): void {
@@ -158,14 +159,13 @@ function fails(fn: () => void, message: string): void {
   MockVM.commitTransaction();
 }
 
-const UNLISTED = stories.visibility.VISIBILITY_UNLISTED;
 function update(id: u64, vis: stories.visibility, title: string): void {
   authorize(ALICE);
   new Stories().update_story(new stories.update_story_arguments(ALICE, id, title, 1, 0, vis, 0));
   checkpoint();
 }
 let ID: u64 = 0;   // closures cannot capture locals in AssemblyScript
-const POOL_MSG = "STORIES: an unlisted or private Short Story needs a writers' pool of at least 10,000 Ink";
+const POOL_MSG = "STORIES: a private Short Story needs a writers' pool of at least 10,000 Ink";
 
 describe("AUDIT AB-022 fix: the pool check runs only on a switch from public", () => {
   beforeEach(() => { reset(); configure(); });
@@ -176,14 +176,6 @@ describe("AUDIT AB-022 fix: the pool check runs only on a switch from public", (
     writeAsWriter(BOB, id, chars(100));
     update(id, PRIVATE, "Renamed");
     expect(story(id).title!).toBe("Renamed");
-  });
-
-  it("legitimate use: private to unlisted after the pool was used (both invite-only)", () => {
-    const id = openFunded(PRIVATE, 20000, "Private start.", 10000);
-    setAllowed(ALICE, id, BOB, true);
-    writeAsWriter(BOB, id, chars(100));
-    update(id, UNLISTED, "Now unlisted");
-    expect(story(id).visibility).toBe(UNLISTED);
   });
 
   it("inverse (AB-011 must still hold): a public story with no pool cannot become private", () => {

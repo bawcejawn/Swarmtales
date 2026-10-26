@@ -31,16 +31,6 @@ function join(a: Uint8Array, b: Uint8Array): Uint8Array {
 }
 
 // What a part and its writer look like when written before parts were counted (AB-066).
-function makePreUpgrade(id: u64, seq: u64, who: Uint8Array): void {
-  const segs = new Storage.Map<Uint8Array, stories.segment>(STORIES, SEGMENTS_SPACE_ID, stories.segment.decode, stories.segment.encode, null);
-  const key = join(u64Key(id), u64Key(seq));
-  const seg = segs.get(key)!;
-  seg.live_counted = false;
-  segs.put(key, seg);
-  const live = new Storage.Map<Uint8Array, stories.uint32>(STORIES, LIVE_PARTS_SPACE_ID, stories.uint32.decode, stories.uint32.encode, null);
-  live.remove(join(u64Key(id), who));
-  checkpoint();
-}
 function setTotal(id: u64, who: Uint8Array, value: u64): void {
   const totals = new Storage.Map<Uint8Array, stories.uint64>(STORIES, CONTRIBUTOR_TOTALS_SPACE_ID, stories.uint64.decode, stories.uint64.encode, null);
   totals.put(join(u64Key(id), who), new stories.uint64(value));
@@ -71,10 +61,10 @@ let gId: u64 = 0;
 let gSeq: u64 = 0;
 
 describe("get_versions stops at a size budget and says where to go on (AB-070)", () => {
-  it("returns two 30,000-byte versions per page, then the rest", () => {
+  it("returns three 18,000-byte versions per page, then the rest", () => {
     reset(); configure();
     authorize(STORIES);
-    new Stories().set_limits(new stories.set_limits_arguments(10000, 1000, 3, 60, 30));
+    new Stories().set_limits(new stories.set_limits_arguments(6000, 1000, 3, 60, 30));
     checkpoint();
     authorize(ALICE);
     allowCalls(3);
@@ -83,8 +73,8 @@ describe("get_versions stops at a size budget and says where to go on (AB-070)",
       ALICE, SHORT, "A Long Tale", 50000, 1, 0, PUBLIC, 0, 0, opening, false, <u64>opening.length, USDT, true, 0, 0
     )).value;
     checkpoint();
-    // 10,000 three-byte characters: the most bytes a part can hold.
-    const base = "中".repeat(9999);
+    // 6,000 three-byte characters: the most bytes a part can hold.
+    const base = "中".repeat(5999);
     gSeq = write(BOB, gId, base + "a");
     ownerEdit(BOB, gId, gSeq, base + "b");
     ownerEdit(BOB, gId, gSeq, base + "c");
@@ -92,12 +82,12 @@ describe("get_versions stops at a size budget and says where to go on (AB-070)",
     expect(segment(gId, gSeq).version_count).toBe(4);
     const c = new Stories();
     const first = c.get_versions(new stories.get_versions_arguments(gId, gSeq, 1, 5));
-    expect(first.values.length).toBe(2, "60,000 bytes fit, a third version would not");
+    expect(first.values.length).toBe(3, "54,000 bytes fit, a fourth version would not");
     expect(first.values[0].version).toBe(1);
-    expect(first.next).toBe(3);
+    expect(first.next).toBe(4);
     const rest = c.get_versions(new stories.get_versions_arguments(gId, gSeq, first.next, 5));
-    expect(rest.values.length).toBe(2);
-    expect(rest.values[1].version).toBe(4);
+    expect(rest.values.length).toBe(1);
+    expect(rest.values[0].version).toBe(4);
     expect(rest.next).toBe(0, "nothing left");
   });
 
@@ -135,7 +125,6 @@ describe("the copy checker takes over a writer-reports hide (AB-071)", () => {
     const seg = segment(gId, gSeq);
     expect(seg.hidden).toBe(true);
     expect(seg.hidden_by).toBe(2);
-    expect(seg.hidden_by_reports).toBe(false, "removing it refunds nothing now");
     authorize(ALICE);
     new Stories().restore_segment(new stories.restore_segment_arguments(ALICE, gId, gSeq, "I think it is fine"));
     checkpoint();
@@ -164,7 +153,7 @@ describe("rules the mutation run found untested (AB-075)", () => {
     checkpoint();
     const s = segment(gId, gSeq);
     expect(s.paid_changes).toBe(0, "precondition: no paid change");
-    expect(s.other_version).toBe(false, "precondition: no other version");
+    expect(s.edited_by_others).toBe(true, "a citation by someone else counts as a change");
     expect(() => { takedown(gId, gSeq, new Uint8Array(0)); }).toThrow("the citation by someone else must stop the automatic strike");
   });
 
@@ -173,22 +162,5 @@ describe("rules the mutation run found untested (AB-075)", () => {
     gSeq = write(BOB, gId, "Bob's second part.");
     ownerRemove(BOB, gId, gSeq);
     expect(() => { summarize(BOB, gId); }).not.toThrow("Bob still has a live part");
-  });
-
-  it("a pre-upgrade writer with a new part keeps the right after removing an old one (M0065)", () => {
-    const old = write(BOB, gId, "Bob's part from before the upgrade.");
-    makePreUpgrade(gId, old, BOB);
-    write(BOB, gId, "Bob's part after the upgrade.");
-    ownerRemove(BOB, gId, old);
-    expect(() => { summarize(BOB, gId); }).not.toThrow("Bob's new part is still live");
-  });
-
-  it("a pre-upgrade writer goes by an Ink total of at least 1 (M0333, M0589)", () => {
-    const old = write(BOB, gId, "Bob's part from before the upgrade.");
-    makePreUpgrade(gId, old, BOB);
-    setTotal(gId, BOB, 1);
-    expect(() => { summarize(BOB, gId); }).not.toThrow("a total of 1 counts");
-    setTotal(gId, BOB, 0);
-    expect(() => { summarize(BOB, gId); }).toThrow("a total of 0 does not count");
   });
 });

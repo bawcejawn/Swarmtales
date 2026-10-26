@@ -2,7 +2,11 @@ import { h } from "./dom.js";
 
 /**
  * "Listen": reads a story aloud with the browser's own speech voices
- * (the Web Speech API). Free, no server, nothing leaves the device.
+ * (the Web Speech API). Free, and no SwarmTales server is involved. Some
+ * browser voices run on the device; others are online voices (Google's in
+ * Chrome, Microsoft's "Online (Natural)" ones in Edge) for which the browser
+ * sends the text to that company to be spoken. The voice list marks those,
+ * and the bar says so (audit W1-09).
  * Text is spoken in short sentence-sized pieces, because some browsers stop
  * a long utterance after about 15 seconds. The part being read is
  * highlighted and kept in view.
@@ -74,6 +78,16 @@ export function createReader(article, items) {
   speed.value = pref("st-read-speed", "1");
   const voice = h("select", { "aria-label": "Voice", hidden: true });
   const status = h("span", { class: "meta small", "aria-live": "polite" });
+  // Shown while an online voice is chosen.
+  const privacy = h("p", { class: "meta small listen-privacy", hidden: true }, [
+    "This voice is an online voice: your browser sends the text being read to its maker (such as Google or Microsoft) to speak it. " +
+      "Pick a voice without “online” to keep it on this device.",
+  ]);
+  const isOnline = (v) => !!v && v.localService === false;
+  const syncPrivacy = () => {
+    const chosen = synth.getVoices().find((v) => v.name === voice.value);
+    privacy.hidden = !isOnline(chosen);
+  };
   // Shown only when this browser has no natural-sounding voice.
   const tip = h("p", { class: "meta small listen-tip", hidden: true }, [
     "Voices sound robotic in this browser. For free natural voices, open SwarmTales in Microsoft Edge, or in Chrome while online. " +
@@ -90,12 +104,13 @@ export function createReader(article, items) {
     const use = (list.length ? list : voices).slice().sort((a, b) => voiceScore(b) - voiceScore(a));
     voice.replaceChildren(...use.map((v) => h("option", { value: v.name }, [
       v.name.replace(/^Microsoft\s+|\s+Online\s*\(Natural\)|\s*-\s*English.*$/gi, "").trim() +
-        (voiceScore(v) >= 60 ? " \u2605" : "") + (v.lang ? " (" + v.lang + ")" : ""),
+        (voiceScore(v) >= 60 ? " \u2605" : "") + (v.lang ? " (" + v.lang + ")" : "") + (isOnline(v) ? " \u00b7 online" : ""),
     ])));
     const saved = pref("st-read-voice", "");
     if (saved && use.some((v) => v.name === saved)) voice.value = saved;
     else if (use.length) voice.value = use[0].name;
     tip.hidden = use.some((v) => voiceScore(v) >= 60);
+    syncPrivacy();
   };
   fillVoices();
   if (typeof synth.addEventListener === "function") synth.addEventListener("voiceschanged", fillVoices);
@@ -190,6 +205,7 @@ export function createReader(article, items) {
   });
   voice.addEventListener("change", () => {
     savePref("st-read-voice", voice.value);
+    syncPrivacy();
     if (playing && !paused) start(currentSeq);
   });
   // Stop when the reader leaves the page.
@@ -201,6 +217,7 @@ export function createReader(article, items) {
     h("label", { class: "listen-opt" }, [h("span", { class: "visually-hidden" }, ["Speed"]), speed]),
     h("label", { class: "listen-opt" }, [h("span", { class: "visually-hidden" }, ["Voice"]), voice]),
     status,
+    privacy,
     tip,
   ]);
   bar.startFrom = start;

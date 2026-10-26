@@ -4,10 +4,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { changePrice, cutRefund, editPrice, removalRefunds } from "../src/lib/change.js";
+import { appSource, fnBody } from "./helpers/appSource.js";
 
 test("removing a part refunds it as remove_segment does", () => {
   assert.equal(removalRefunds({ hidden: false }), true);
-  assert.equal(removalRefunds({ hidden: true, hidden_by: 1, hidden_by_reports: true }), true, "hidden by writer reports alone");
+  assert.equal(removalRefunds({ hidden: true, hidden_by: 1 }), true, "hidden by writer reports alone");
   assert.equal(removalRefunds({ hidden: true, hidden_by: 2 }), false, "hidden by the copy checker");
   assert.equal(removalRefunds({ hidden: true, hidden_by: 3 }), false, "hidden by the admin");
   assert.equal(removalRefunds({ hidden: false, refund_forfeited: true }), false, "restored after a checker hide");
@@ -22,9 +23,7 @@ test("a part restored after a checker hide gives no Ink back on a cut (AB-062)",
 });
 
 test("the history panel reads get_versions a few versions at a time (AB-060)", () => {
-  const src = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
-  const a = src.indexOf("function versionsView(");
-  const body = src.slice(a, src.indexOf("\nconst NUMBER_WORDS", a));
+  const body = fnBody(appSource(), "versionsView");
   // The paging moved to lib/versions.js (AB-070); versions.audit-fc4.test.js runs it.
   assert.match(body, /readAllVersions\(\s*\(from, count\) => read\("stories", "get_versions", \{[^}]*from, count \}\)/);
   const lib = readFileSync(new URL("../src/lib/versions.js", import.meta.url), "utf8");

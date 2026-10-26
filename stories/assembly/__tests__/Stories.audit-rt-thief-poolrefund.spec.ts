@@ -14,6 +14,7 @@
 import { Base58, MockVM, System, authority, chain, Protobuf, system_calls } from "@koinos/sdk-as";
 import { Stories } from "../Stories";
 import { stories } from "../proto/stories";
+import { ownEditArgs } from "./reviewed";
 
 const STORIES = Base58.decode("16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt");
 const INK = Base58.decode("13Qrdvv3cXys9aryjZho6vHxDW3PRgX5pm");
@@ -210,7 +211,7 @@ describe("RT-THIEF-1: pool-paid change refunds the writer for text that stays", 
     // 5) Rewording it at the same length with edit_segment is free and refunds nothing.
     authorize(BOB);
     allowCalls(1);
-    new Stories().edit_segment(new stories.edit_segment_arguments(BOB, id, pSeq, "y".repeat(100), 100));
+    new Stories().edit_segment(ownEditArgs(BOB, id, pSeq, "y".repeat(100), 100));
     checkpoint();
     expect(segment(id, pSeq).current_cost).toBe(100);
     expect(story(id).fund).toBe(2010, "RT-THIEF-1: the pool paid for a change");

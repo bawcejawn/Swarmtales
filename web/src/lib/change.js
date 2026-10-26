@@ -66,6 +66,17 @@ export function cutRefund(newText, paidChanges, charged, forfeited) {
   return Math.max(0, paid - String(newText).length);
 }
 
+/** Who hid a part (segment.hidden_by). */
+export const HIDDEN_BY_REPORTS = 1;
+export const HIDDEN_BY_CHECKER = 2;
+export const HIDDEN_BY_ADMIN = 3;
+
+/** Hidden by writer reports alone (not the admin or the copy checker). */
+export function hiddenByReports(segment) {
+  const seg = segment || {};
+  return !!seg.hidden && Number(seg.hidden_by || 0) === HIDDEN_BY_REPORTS;
+}
+
 /**
  * Whether removing the part gives its Ink back, as the contract's refundable():
  * not if the admin or the checker hid it (writer reports alone don't cost the
@@ -73,7 +84,7 @@ export function cutRefund(newText, paidChanges, charged, forfeited) {
  */
 export function removalRefunds(segment) {
   const seg = segment || {};
-  return (!seg.hidden || !!seg.hidden_by_reports) && !seg.refund_forfeited;
+  return (!seg.hidden || hiddenByReports(seg)) && !seg.refund_forfeited;
 }
 
 /** How a refund splits between the writer and a story's pool (pool-paid parts: own_paid first). */
@@ -106,8 +117,8 @@ export function changePrice(oldText, newText, paidChanges, charged, forfeited) {
  * writer pays for letters beyond the current length. In a part the story's pool
  * paid for, a refund first returns what the writer paid themselves (own_paid),
  * then the rest goes back to the pool. Like the contract, the refund is
- * measured from what was paid (charged), not the current length: a part from
- * before the upgrade can have both a cost and a refund in one edit (AB-065).
+ * measured from what was paid (charged), not the current length, so one edit
+ * could in principle both cost and refund (AB-065).
  */
 export function editPrice(segment, newText) {
   const seg = segment || {};

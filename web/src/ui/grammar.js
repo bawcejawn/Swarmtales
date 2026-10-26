@@ -4,7 +4,11 @@ import { h } from "./dom.js";
  * "Check spelling & grammar": asks LanguageTool's free public service
  * (no key; about 20 checks a minute per person). The text is sent only when
  * the writer presses the button. Each suggestion can be applied with a tap.
+ * The text leaves SwarmTales for LanguageTool's servers, also drafts of
+ * parts for private stories, so the button says so (audit W1-09).
  */
+export const GRAMMAR_PRIVACY =
+  "Checking sends this text to LanguageTool (languagetool.org), an outside service, even in a private story. Nothing is sent until you press the button.";
 const ENDPOINT = "https://api.languagetool.org/v2/check";
 
 export async function checkText(text, language = "auto") {
@@ -62,5 +66,5 @@ export function grammarTool(area, onChange) {
     }
   };
   button.addEventListener("click", run);
-  return h("div", { class: "grammar-tool" }, [button, note, list]);
+  return h("div", { class: "grammar-tool" }, [button, h("p", { class: "meta small grammar-privacy" }, [GRAMMAR_PRIVACY]), note, list]);
 }

@@ -11,6 +11,7 @@ import {
   ALICE, BOB, CARA, MALLORY, STORIES, INK, SHOP, COPYRIGHT, authorize, checkpoint, configure, directly,
   openPublic, reset, revise, segment, strikes, write, writerMonth, okCall, results, allowCalls,
 } from "./auditFixHelpers";
+import { reviewedTakedown, ownEditArgs } from "./reviewed";
 
 const EVIL_APP = Base58.decode("1HJgvngE2GMMy5Lw4YtzomfMCgrkuJsq91");
 const OTHER_INK = Base58.decode("148HWBbRXQ82y4s7qjvEe5cCuPL47CW7r6");
@@ -26,7 +27,7 @@ function editAs(): void {        // edit_segment naming gWho, signed by gSigner
   authorize(gSigner);
   allowCalls(2);
   const t = "Bob's own careful words about the lighthouse.";
-  new Stories().edit_segment(new stories.edit_segment_arguments(gWho, gId, gSeq, t, <u64>t.length));
+  new Stories().edit_segment(ownEditArgs(gWho, gId, gSeq, t, <u64>t.length));
 }
 function editViaApp(): void {    // Bob's own signature, but through another contract
   MockVM.setCaller(new chain.caller_data(EVIL_APP, chain.privilege.user_mode));
@@ -55,7 +56,7 @@ function placeAs(): void {
 }
 function strikeNamed(): void {
   authorize(STORIES);
-  new Stories().takedown_segment(new stories.takedown_segment_arguments(gId, gSeq, COPYRIGHT, "notice", gWho, false));
+  new Stories().takedown_segment(reviewedTakedown(gId, gSeq, COPYRIGHT, "notice", gWho, false));
 }
 function setAddr(): void {
   authorize(gSigner);

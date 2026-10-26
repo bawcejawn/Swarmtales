@@ -7,6 +7,7 @@ import { stories } from "../proto/stories";
 import {
   BOB, COPYRIGHT, STORIES, allowCalls, authorize, checkpoint, configure, openPublic, reset, write,
 } from "./auditFixHelpers";
+import { ownEditArgs } from "./reviewed";
 
 let ID: u64 = 0;
 let SEQ: u64 = 0;
@@ -14,7 +15,7 @@ function editAsBob(): void {
   const text = "Bob swaps the words for something else.";
   authorize(BOB);
   allowCalls(1);
-  new Stories().edit_segment(new stories.edit_segment_arguments(BOB, ID, SEQ, text, <u64>text.length));
+  new Stories().edit_segment(ownEditArgs(BOB, ID, SEQ, text, <u64>text.length));
 }
 
 describe("AUDIT AB-036: blocked wallets and hidden parts can still be edited", () => {

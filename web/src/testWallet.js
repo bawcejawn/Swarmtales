@@ -12,7 +12,15 @@
  *   - It is play money: only send it test KOIN.
  */
 import { Signer, Transaction, utils } from "koilib";
-import { freeMana, getProvider, manaLimit, verifiedChain } from "./chain.js";
+import { freeMana, getProvider, sponsorFunding, verifiedChain } from "./chain.js";
+import { isSponsorRefusal } from "./lib/sponsor.js";
+
+/**
+ * The most mana one test-wallet transaction may use: 30 mana, as for Kondor.
+ * Measured SwarmTales writes use well under 5. A lower cap keeps the rest
+ * free while the node holds this transaction's limit for a few minutes.
+ */
+export const TEST_WALLET_MANA_CAP = 3000000000n;
 
 const KEY_STORE = "swarmtales.testwallet.v1";
 
@@ -83,33 +91,51 @@ export function createTestWallet(network) {
       if (!hex || !address) throw new Error("Create the test wallet first.");
       const chainId = verifiedChain();
       if (!chainId) throw new Error("The chain id has not been checked yet. Nothing was signed.");
-      const provider = getProvider();
       const signer = signerFor(hex);
+      // The mana sponsor pays when it will (lib/sponsor.js). If it says no on
+      // the trial run, the action runs again with the test wallet's own mana.
+      // Both transactions use the wallet's next nonce, so at most one of them
+      // can ever be included.
+      const funding = await sponsorFunding(address, operations);
+      if (funding) {
+        try {
+          return await testWalletSend(signer, chainId, operations, funding);
+        } catch (error) {
+          if (!isSponsorRefusal(error)) throw error;
+        }
+      }
       const mana = await freeMana(address);
       if (mana.free === 0n) {
         throw new Error(mana.reserved > 0n
           ? "The test wallet's mana is held for its last transaction for a few minutes. Try again shortly, or send it more tKOIN."
           : "The test wallet has no mana. Send it some tKOIN first.");
       }
-      const build = async (rcLimit) => {
-        const tx = new Transaction({ signer, provider, options: { chainId, payer: address, rcLimit: rcLimit.toString() } });
-        for (const op of operations) await tx.pushOperation(op);
-        await tx.prepare();
-        await tx.sign();
-        return tx;
-      };
-      // 1) Dry run: the node runs it without adding it to a block, and says
-      //    how much mana it used. A refusal here shows the contract's reason.
-      const dry = await build(mana.free);
-      const { receipt: trial } = await provider.sendTransaction(dry.transaction, false);
-      if (trial && trial.reverted) return { transactionId: "", receipt: trial };
-      // 2) The real one asks for only that much (plus a margin), so the next
-      //    action isn't blocked while this one waits for a block.
-      const tx = await build(manaLimit(trial.rc_used || "0", mana.free));
-      const receipt = await tx.send();
-      return { transactionId: tx.transaction.id, receipt: receipt || null };
+      const rcLimit = mana.free < TEST_WALLET_MANA_CAP ? mana.free : TEST_WALLET_MANA_CAP;
+      return testWalletSend(signer, chainId, operations, { payer: address, rcLimit });
     },
   };
+}
+
+/**
+ * ONE signed transaction (audit W1-08). The node first runs it without
+ * adding it to a block (broadcast false), so a refusal shows the contract's
+ * reason and costs nothing. Then the very same signed transaction is sent.
+ * The node never holds a second, different signed transaction it could send
+ * instead (a sponsor refusal and the user-paid retry share one nonce).
+ */
+async function testWalletSend(signer, chainId, operations, funding) {
+  const provider = getProvider();
+  const options = { chainId, payer: funding.payer, rcLimit: funding.rcLimit.toString() };
+  if (funding.payee) options.payee = funding.payee;
+  const tx = new Transaction({ signer, provider, options });
+  for (const op of operations) await tx.pushOperation(op);
+  await tx.prepare();
+  await tx.sign();
+  const signed = JSON.parse(JSON.stringify(tx.transaction));
+  const { receipt: trial } = await provider.sendTransaction(signed, false);
+  if (trial && trial.reverted) return { transactionId: "", receipt: trial };
+  const receipt = await tx.send();
+  return { transactionId: tx.transaction.id, receipt: receipt || null, sponsored: !!funding.payee };
 }
 
 /**

@@ -62,7 +62,7 @@ export const HOW_SECTIONS = [
     title: "7. Edits and credit",
     body: [
       "Each writer can edit their own part; anyone else who changes it pays Ink for it, the opener and editors too. An edited part shows a small “edited” note, and every change is kept as a version: open “earlier versions” to see who changed what, and when. Credit stays with the person who wrote it.",
-      "If a part is removed, it is listed as removed at the bottom of the story, so the record stays complete.",
+      "If a part is removed, it is listed as removed at the bottom of the story, and what it said stays readable in its history, so the record stays complete.",
     ],
   },
   {
@@ -70,7 +70,7 @@ export const HOW_SECTIONS = [
     title: "8. Finishing a story",
     body: [
       "When a story is long enough, the opener uses \u201cFinish the book\u201d on the story page. It's free and has three steps: close (writing stops), a final edit (keep, lightly fix, or remove each part), and publish. The published book gets a fingerprint on the blockchain, and anyone can read it, print it, save it as a PDF, or download it from its book page. Leftover writers' pool Ink goes back to the opener.",
-      "A story nobody touches for a long time can be archived. Archived stories can still be read.",
+      "A story where neither the writers nor the opener have done anything for a long time can be archived (time while SwarmTales is paused doesn't count). Archived stories can still be read, and the opener can bring one back once, for free, while their next story would still open at the normal price.",
     ],
   },
   {

@@ -26,7 +26,11 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Install the website
         working-directory: web
-        run: npm ci
+        # No dependency install scripts (audit M-10): this job shares the npm
+        # cache with the copy checker. The ABI step is a package.json
+        # pre-script (pretest/prebuild), which `npm test` and `npm run build`
+        # below still run; --ignore-scripts only applies to this install.
+        run: npm ci --ignore-scripts
       - name: Test the website
         working-directory: web
         run: npm test

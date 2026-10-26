@@ -7,7 +7,12 @@
 //     for the reasons each one is allowed (e.g. the Stories contract may
 //     only mint REFUNDs).
 //   - Lets ONLY approved SwarmTales contracts use up Ink (burn), and only
-//     when the owner signed the transaction.
+//     when the owner signed the transaction. Precisely (audit C1-08): an
+//     approved burner can burn any amount of a wallet's Ink in any
+//     transaction that wallet signed and that reaches the burner. Ink trusts
+//     each approved burner (today only Stories) to burn only what its own
+//     rules charge; Stories is called only directly (fix H1), so another
+//     app's transaction can't reach it.
 //   - Has NO transfer, approve or allowance functions. Ink can never be
 //     sent, sold or traded. It is a writing allowance with no cash value.
 //   - Has NO maximum supply. That is a decided rule, not a placeholder.

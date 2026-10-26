@@ -1,21 +1,34 @@
 name: Copy checker
 
 # Checks new story parts for copied text every hour and hides
-# high-confidence matches with the moderator key (which can only hide and
-# unhide). Free for public repositories.
+# high-confidence matches with the moderator key (which can only hide,
+# unhide and add notes). Free for public repositories.
 #
-# Settings (repository Settings > Secrets and variables > Actions):
-#   Variables:  STORIES_ADDRESS (required), RPC (optional), EXPECTED_CHAIN_ID
-#               (needed only for a node other than the Foundation testnet or api.koinos.io)
+# Three jobs, so the moderator key never sits next to code that reads the
+# web (audit O1-09):
+#   load   checks the seal on the saved progress (CHECKER_STATE_KEY); runs
+#          no installed packages.
+#   plan   reads the chain and searches the web, WITHOUT the moderator key,
+#          and writes a plan.
+#   apply  re-checks every planned action against the chain, signs the ones
+#          that still hold with the moderator key, and seals the progress.
+#
+# Settings:
+#   Variables (Settings > Secrets and variables > Actions > Variables):
+#     STORIES_ADDRESS (required), RPC (optional), EXPECTED_CHAIN_ID (needed
+#     only for a node other than the Foundation testnet or api.koinos.io)
 #   Environment "copy-checker" (Settings > Environments), with "Deployment
-#   branches" set to the main branch only:
-#     Secret:   MODERATOR_WIF (the moderator's private key; without it the
-#               checker only reports). Keep it ONLY here, not as a repository
-#               secret, so no other branch can read it.
-#   Secrets (repository or the environment), optional free phrase search (any or all):
-#                 GOOGLE_BOOKS_KEY  searches inside books (Google Books API, free)
-#                 TAVILY_API_KEY    web search (Tavily free plan, 1,000 a month)
-#                 BRAVE_API_KEY     web search (Brave; now needs a card on file)
+#   branches" set to the main branch only. Keep these ONLY here, not as
+#   repository secrets, so no other branch can read them:
+#     MODERATOR_WIF      the moderator's private key (without it the checker only reports)
+#     CHECKER_STATE_KEY  a long random text (at least 32 characters) that seals the
+#                        checker's saved progress; without it the checker only reports
+#   Repository secrets (Settings > Secrets and variables > Actions > Secrets),
+#   optional free phrase search (any or all; the plan job has no environment,
+#   so these must be repository secrets):
+#     GOOGLE_BOOKS_KEY  searches inside books (Google Books API, free)
+#     TAVILY_API_KEY    web search (Tavily free plan, 1,000 a month)
+#     BRAVE_API_KEY     web search (Brave; now needs a card on file)
 #
 # To check the search keys: Actions > Copy checker > Run workflow, and type a
 # sentence from a published book in "test_phrase". Nothing is hidden in a test.
@@ -39,12 +52,43 @@ concurrency:
   group: copy-checker
   cancel-in-progress: false
 
+env:
+  # Each step stops starting new work after this many minutes, well under the
+  # jobs' 30-minute limit; progress is saved and the next run goes on (M-13).
+  TIME_BUDGET_MINUTES: "20"
+
 jobs:
-  check:
+  load:
     if: vars.STORIES_ADDRESS != ''
-    # MODERATOR_WIF lives in this environment, limited to the main branch, so a
-    # run dispatched on any other branch never gets the key (AB-041).
+    # CHECKER_STATE_KEY lives in this environment, limited to the main branch.
     environment: copy-checker
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Restore progress from the last run
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: checker-state.sealed.json
+          key: copy-checker-state-v2-${{ github.run_id }}
+          restore-keys: copy-checker-state-v2-
+      - name: Check the seal on the saved progress
+        # Only Node's own crypto: no installed packages run with this key.
+        env:
+          CHECKER_STATE_KEY: ${{ secrets.CHECKER_STATE_KEY }}
+          STORIES_ADDRESS: ${{ vars.STORIES_ADDRESS }}
+        run: node checker/state.mjs open checker-state.sealed.json checker-state.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: checker-state-in
+          path: checker-state.json
+          retention-days: 1
+
+  plan:
+    needs: load
+    # No environment and no moderator key: this job reads the web.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -58,34 +102,79 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Install
         working-directory: web
-        # No install scripts: this job holds the moderator key and search keys.
         run: npm ci --ignore-scripts && npm run abi
       - name: Test the checker
         run: node --test checker/__tests__/lib.test.mjs checker/__tests__/workflows.test.mjs
-      - name: Restore progress from the last run
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          path: checker-state.json
-          key: copy-checker-${{ github.run_id }}
-          restore-keys: copy-checker-
-      - name: Check new story parts
+          name: checker-state-in
+      - name: Check new story parts and plan
         env:
           STORIES_ADDRESS: ${{ vars.STORIES_ADDRESS }}
           RPC: ${{ vars.RPC }}
           EXPECTED_CHAIN_ID: ${{ vars.EXPECTED_CHAIN_ID }}
-          MODERATOR_WIF: ${{ secrets.MODERATOR_WIF }}
           BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
           GOOGLE_BOOKS_KEY: ${{ secrets.GOOGLE_BOOKS_KEY }}
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
           TEST_PHRASE: ${{ inputs.test_phrase }}
           STATE_FILE: checker-state.json
+          PLAN_FILE: checker-plan.json
         run: node checker/check.mjs
-      - name: Save progress
+      - name: Hand the plan to the apply job
         if: always() && hashFiles('checker-state.json') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: checker-plan
+          path: |
+            checker-state.json
+            checker-plan.json
+          if-no-files-found: ignore
+          retention-days: 1
+
+  apply:
+    needs: plan
+    # Also after a plan step that failed part-way: its progress and plan so
+    # far are still applied and saved (M-13). Each action is re-checked.
+    if: always() && (needs.plan.result == 'success' || needs.plan.result == 'failure')
+    # MODERATOR_WIF and CHECKER_STATE_KEY live in this environment, limited to
+    # the main branch, so a run dispatched on any other branch never gets them (AB-041).
+    environment: copy-checker
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install
+        working-directory: web
+        # No install scripts: this job holds the moderator key.
+        run: npm ci --ignore-scripts && npm run abi
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        continue-on-error: true   # no plan: nothing to apply or save
+        with:
+          name: checker-plan
+      - name: Check the plan against the chain and sign it
+        env:
+          STORIES_ADDRESS: ${{ vars.STORIES_ADDRESS }}
+          RPC: ${{ vars.RPC }}
+          EXPECTED_CHAIN_ID: ${{ vars.EXPECTED_CHAIN_ID }}
+          MODERATOR_WIF: ${{ secrets.MODERATOR_WIF }}
+          CHECKER_STATE_KEY: ${{ secrets.CHECKER_STATE_KEY }}
+          STATE_FILE: checker-state.json
+          PLAN_FILE: checker-plan.json
+          SEALED_FILE: checker-state.sealed.json
+        run: node checker/apply.mjs
+      - name: Save progress
+        if: always() && hashFiles('checker-state.sealed.json') != ''
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: checker-state.json
-          key: copy-checker-${{ github.run_id }}
+          path: checker-state.sealed.json
+          key: copy-checker-state-v2-${{ github.run_id }}-${{ github.run_attempt }}
 
   keep-schedule:
     # GitHub pauses scheduled workflows in repositories with no activity

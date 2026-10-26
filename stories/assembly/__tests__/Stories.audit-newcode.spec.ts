@@ -12,6 +12,7 @@ import { Base58, MockVM, System, authority, chain, Protobuf, system_calls } from
 import { Stories } from "../Stories";
 import { stories } from "../proto/stories";
 import { LINK_ADDRESSES, inviteSig } from "./linkFixtures";
+import { reviewedTakedown } from "./reviewed";
 
 const STORIES = Base58.decode("16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt");
 const INK = Base58.decode("13Qrdvv3cXys9aryjZho6vHxDW3PRgX5pm");
@@ -163,19 +164,19 @@ function setAllowed(actor: Uint8Array, id: u64, who: Uint8Array, allowed: bool):
 }
 function takedown(id: u64, seq: u64): void {
   authorize(STORIES);
-  new Stories().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-001"));
+  new Stories().takedown_segment(reviewedTakedown(id, seq, COPYRIGHT, "notice 2026-001"));
   checkpoint();
 }
 function takedownStriking(id: u64, seq: u64, who: Uint8Array): void {
   authorize(STORIES);
-  new Stories().takedown_segment(new stories.takedown_segment_arguments(id, seq, COPYRIGHT, "notice 2026-001", who));
+  new Stories().takedown_segment(reviewedTakedown(id, seq, COPYRIGHT, "notice 2026-001", who));
   checkpoint();
 }
 let TD_ID: u64 = 0;   // closures cannot capture locals in AssemblyScript
 let TD_SEQ: u64 = 0;
 function takedownNoChoice(): void {
   authorize(STORIES);
-  new Stories().takedown_segment(new stories.takedown_segment_arguments(TD_ID, TD_SEQ, COPYRIGHT, "notice 2026-001"));
+  new Stories().takedown_segment(reviewedTakedown(TD_ID, TD_SEQ, COPYRIGHT, "notice 2026-001"));
 }
 const NEEDS_CHOICE = "STORIES: someone other than the writer changed this part; name who gets the strike, or choose no strike";
 function fails(fn: () => void, message: string): void {
@@ -358,22 +359,23 @@ describe("AUDIT AB-012: the new refund path", () => {
 
     // Bob's friends hide part b by reports first, so it would be refunded.
     reportHide(id, b);
-    expect(segment(id, b).hidden_by_reports).toBe(true);
+    expect(segment(id, b).hidden_by).toBe(1);
     // The admin can still make it an admin hide: unhide, then hide.
     authorize(STORIES);
     new Stories().set_segment_hidden(new stories.set_segment_hidden_arguments(STORIES, id, b, false, NO_REASON, "re-check"));
     new Stories().set_segment_hidden(new stories.set_segment_hidden_arguments(STORIES, id, b, true, COPYRIGHT, "matched a known book"));
     checkpoint();
-    expect(segment(id, b).hidden_by_reports).toBe(false);
+    expect(segment(id, b).hidden_by).toBe(3);
 
+    // Only the writer may withdraw a part the admin hid (audit F-05).
     const before = callsTo(MINT_ENTRY).length;
-    authorize(ALICE);
+    authorize(BOB);
     allowCalls(1);
-    new Stories().remove_segment(new stories.remove_segment_arguments(ALICE, id, a));
+    new Stories().remove_segment(new stories.remove_segment_arguments(BOB, id, a));
     checkpoint();
-    authorize(ALICE);
+    authorize(BOB);
     allowCalls(1);
-    new Stories().remove_segment(new stories.remove_segment_arguments(ALICE, id, b));
+    new Stories().remove_segment(new stories.remove_segment_arguments(BOB, id, b));
     checkpoint();
     expect(callsTo(MINT_ENTRY).length).toBe(before, "AB-012: a part hidden by the admin was refunded");
   });

@@ -201,12 +201,42 @@ export async function createVaultSession(name, fetchImpl) {
   return { sessionId: json.sessionId, secret: json.secret, expiresAt: json.expiresAt, uri };
 }
 
+/**
+ * Status calls carry the session secret. They are sent in a POST body (or,
+ * failing that, a GET query string) so the secret stays out of URLs, where
+ * servers, proxies and logs keep it (audit W1-05).
+ *
+ * KOIN Vault's published integration (checked 19 October 2026) uses GET with
+ * ?sessionId=&secret= for status and request-status. Whether it also accepts
+ * the same fields as a JSON POST is not documented, so the first status call
+ * of a session tries POST, and only if Vault answers in a way that means
+ * "not this way" (405/404/400/415/501, a non-JSON answer, or a refused
+ * cross-origin request) does it use GET for the rest of that session.
+ * credentials.transport remembers the choice ("post" or "get").
+ */
+const UNSUPPORTED_POST = new Set([400, 404, 405, 415, 501]);
+
+async function authedCall(path, fields, credentials, fetchImpl) {
+  const body = { sessionId: credentials.sessionId, secret: credentials.secret, ...fields };
+  if (credentials.transport !== "get") {
+    try {
+      const json = await call(path, { method: "POST", body, credentials }, { fetchImpl });
+      credentials.transport = "post";
+      return json;
+    } catch (error) {
+      const probing = credentials.transport !== "post";
+      const unsupported = error instanceof VaultError &&
+        (error.status == null || UNSUPPORTED_POST.has(error.status) || /not JSON/.test(error.message));
+      if (!probing || !unsupported) throw error;
+    }
+  }
+  const json = await call(path, { method: "GET", query: body, credentials }, { fetchImpl });
+  credentials.transport = "get";
+  return json;
+}
+
 export async function vaultStatus(credentials, fetchImpl) {
-  const json = await call("status", {
-    method: "GET",
-    query: { sessionId: credentials.sessionId, secret: credentials.secret },
-    credentials,
-  }, { fetchImpl });
+  const json = await authedCall("status", {}, credentials, fetchImpl);
   if (typeof json.connected !== "boolean" || typeof json.expiresAt !== "number") {
     throw new VaultError("KOIN Vault returned an unexpected status.");
   }
@@ -249,11 +279,7 @@ export async function vaultRequest(credentials, operations, fetchImpl) {
 const REQUEST_STATUSES = ["pending", "submitting", "approved", "rejected", "failed", "signed"];
 
 export async function vaultRequestStatus(credentials, requestId, fetchImpl) {
-  const json = await call("request-status", {
-    method: "GET",
-    query: { sessionId: credentials.sessionId, secret: credentials.secret, requestId },
-    credentials,
-  }, { fetchImpl });
+  const json = await authedCall("request-status", { requestId }, credentials, fetchImpl);
   if (typeof json.status !== "string" || !REQUEST_STATUSES.includes(json.status)) {
     throw new VaultError("KOIN Vault returned an unexpected request status.");
   }
@@ -275,4 +301,36 @@ export async function vaultDisconnect(credentials, fetchImpl) {
     if (error instanceof VaultError && (error.status === 404 || error.status === 410)) return;
     throw error;
   }
+}
+
+function b64url(value) {
+  return String(value ?? "").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/**
+ * Is `transaction` (read back from a Koinos node by its id) exactly what this
+ * page asked KOIN Vault to sign (audit W1-04)? A buggy or hostile Vault
+ * endpoint could answer "approved" with the id of some other transaction;
+ * the page must not then say "Done". Checks: the id, the chain, and the
+ * contract calls themselves (same count, order, contract, entry point and
+ * argument bytes). Returns "" when it matches, else the reason.
+ */
+export function vaultTransactionMismatch(transaction, requested, { txid, chainId }) {
+  if (!transaction || typeof transaction !== "object") return "the network has no such transaction";
+  const idOf = (v) => String(v || "").toLowerCase().replace(/^0x/, "");
+  if (!idOf(txid) || idOf(transaction.id) !== idOf(txid)) return "its id is different";
+  const header = transaction.header || {};
+  if (chainId && header.chain_id !== chainId) return "it is for a different chain";
+  const ops = Array.isArray(transaction.operations) ? transaction.operations : [];
+  const want = toRelayOperations(requested);
+  if (ops.length !== want.length) return "it has " + ops.length + " contract calls, not " + want.length;
+  for (let i = 0; i < want.length; i++) {
+    const got = ops[i] && ops[i].call_contract;
+    const exp = want[i].call_contract;
+    if (!got) return "call " + (i + 1) + " is not a contract call";
+    if (String(got.contract_id) !== String(exp.contract_id)) return "call " + (i + 1) + " goes to a different contract";
+    if (Number(got.entry_point) !== Number(exp.entry_point)) return "call " + (i + 1) + " calls a different function";
+    if (b64url(got.args) !== b64url(exp.args)) return "call " + (i + 1) + " has different details";
+  }
+  return "";
 }

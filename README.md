@@ -13,7 +13,7 @@ Three contracts exist in this repository and have passing tests: **Ink**, **Shop
 | Ink, the non-transferable writing allowance | Built and tested (53 checks) |
 | Shop, the cash register for memberships, packs, story fees, and promo links | Built and tested (89 checks) |
 | A practice stablecoin inside this repo | Not included. On testnet, deploy the official Koinos token and point Shop at it |
-| Stories (the books themselves, trials, the 3-project limit, archive, refunds) | Built, tested in the mock chain (381 checks), and uploaded to the Foundation testnet |
+| Stories (the books themselves, trials, open-project limits, archive, refunds, moderation) | Built and tested in the mock chain. The 2026-10 audit fixes need a fresh testnet deploy (the testnet is being reset) |
 | Sponsor (paying Mana for someone else) | Optional, later, a separate contract, OFF by default. Not in Stories |
 | Books NFT | Planned |
 | Website | Static pages in `web/`. Reads the testnet. GitHub Pages publishing needs one repo setting (see docs/UI.md) |
@@ -28,7 +28,7 @@ A writer pays for a month and receives Ink. The token a wallet shows is **SwarmT
 
 Story text is charged per UTF-16 code unit ("text unit"). A normal letter costs 1 Ink. Most emoji cost 2 Ink, because each is stored as two code units. A few older emoji such as ⭐ cost 1. A skin-tone emoji such as 👍🏽 or a flag such as 🇺🇸 costs 4. A family such as 👨‍👩‍👧 costs 8. The Stories contract counts this itself and refuses the text if the website's preview (`expected_ink`) disagrees, so nobody is charged a surprise amount. Ink's own public note is a separate limit of 64 UTF-16 code units.
 
-Public stories are the ones any allowed writer can add to. Private books are invite-only. Both of those live in the Stories contract. Shop only collects the open and close fees when Stories asks it to.
+Public stories are the ones any allowed writer can add to. Private books are invite-only. Both of those live in the Stories contract. Shop only collects the open fee when Stories asks it to. Closing a story is free.
 
 ### A payment, in one transaction
 
@@ -67,7 +67,7 @@ Both use 8 decimal places, so **$1.00 = 100,000,000** base units. Read `decimals
 | Trial writing | 1,000 characters per wallet, ever | — | Stories, built. Needs a claimed promo. Shop only records the claim |
 | Open projects | 3 per wallet | — | Stories, built |
 | Auto-archive | 60 days | — | Stories, built. One free revive |
-| Per-submission cap | 2,000 to start | — | Stories, built. Admin can set 100 to 4,000 after testnet Mana measurements |
+| Per-submission cap | 6,000 | — | Stories, built. Admin can set 100 to 6,000 |
 
 Writer claims are allowed every **30 days** (2,592,000 seconds). That wait is part of the contract, so an admin cannot shorten it. One purchase can be at most **24 months**. The Ink amount is locked when the Writer term starts. Changing the catalog later does not shrink months already paid for. When `paid_until` has passed, unclaimed months from that term are gone. An active Writer term cannot be replaced by a Reader purchase.
 
@@ -99,7 +99,7 @@ flowchart TD
   token -->|1 percent| founder
   shop -->|asks the token to move the payment| token
   shop -->|mint PURCHASE, MEMBERSHIP, STARTER, PROMO| ink
-  stories -->|pay_open_fee and pay_close_fee| shop
+  stories -->|pay_open_fee| shop
   stories -->|burn when text is added| ink
   stories -->|mint REFUND only| ink
   nft -->|planned: points at a finished book| stories
@@ -114,7 +114,7 @@ Shop does not mint Ink by itself. It calls Ink, and Ink checks that Shop was all
 | Shop | Prices, the payment split, memberships, packs, promo, and the calls that mint Ink |
 | Test stablecoin | Not in this repo. Use the official Koinos KCS-4 token on testnet. SDK 1.0.0 cannot build a safe token, because it lacks the allowance check a real token needs |
 | Sponsor | Optional and later. A separate contract, OFF by default, that could pay Mana for a user. Kept out of Stories so a bug in it can never reach Ink or refunds |
-| Stories | On the Foundation testnet (`stories/`). Books, chapters, the trial, the 3-open limit, the 60-day archive, private invites, editing, the final edit, and refunds |
+| Stories | On the Foundation testnet (`stories/`). Books, chapters, the trial, open-project limits, the 60-day archive, private invites, editing, paid changes, moderation, the final edit, and refunds |
 | Books NFT | Planned. A collectible for a finished book. Not a way to transfer Ink |
 | Website | Static files in `web/`. A browser talks to the public testnet node. See [docs/UI.md](docs/UI.md) |
 
@@ -231,7 +231,7 @@ yarn build:debug
 yarn test
 ```
 
-Success means `shop/build/debug/contract.wasm` exists and the test files together report **89 pass** and **0 fail**.
+Success means `shop/build/debug/contract.wasm` exists and the test files together report **104 pass** and **0 fail**.
 
 ### Stories
 
@@ -242,9 +242,20 @@ yarn build:release
 yarn test
 ```
 
-Success means `stories/build/release/contract.wasm` exists and the test files together report **381 pass** and **0 fail**.
+Success means `stories/build/release/contract.wasm` exists and the test files together report **426 pass** and **0 fail**.
 
-`yarn build:release` in any of the three folders makes the smaller wasm used for an upload. Tests use the debug build.
+### Mana sponsor and multisig wallet
+
+```bash
+cd sponsor     # then the same in multisig/
+yarn install
+yarn build:release
+yarn test
+```
+
+Success means **33 pass** (sponsor) and **23 pass** (multisig), with **0 fail**. See `sponsor/README.md` and `multisig/README.md`.
+
+`yarn build:release` in any contract folder makes the smaller wasm used for an upload. Tests use the debug build.
 
 ### Website, copy checker and deploy tool
 
@@ -255,10 +266,10 @@ cd web
 npm ci
 npm test
 cd ..
-node --test checker/__tests__/*.test.mjs deploy/__tests__/*.test.js
+node --test "checker/__tests__/*.test.mjs" "deploy/__tests__/*.test.js"
 ```
 
-Success means the website reports **128 pass** and the checker and deploy tool **180 pass**, both with **0 fail**. (`yarn test:deploy` in the root `package.json` runs only `deploy/__tests__/lib.test.js`; use the command above for all of them.)
+Success means the website reports **181 pass** and the checker and deploy tool **239 pass**, both with **0 fail**. (`yarn test:deploy` in the root `package.json` runs the deploy tool's tests.)
 
 ## Testnet
 
@@ -266,13 +277,13 @@ You do not need testnet coins to build or to run the tests. Do not run a testnet
 
 The admin wallet in the example config is `18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6`. Copy `deploy/testnet.env.example` to `deploy/testnet.env` if you want to change a public address. Never put a private key, seed phrase, or password in that file. The prepare script stops if it sees one.
 
-On Koinos, the address you upload from **becomes** the contract. Do not upload Ink or Shop onto the admin wallet. Create a new wallet for Ink and another for Shop. Keep those seeds yourself. After each upload, while that new wallet is open, call `set_admin` with the admin address.
+On Koinos, the address you upload from **becomes** the contract. Do not upload a contract onto the admin wallet. Create a new wallet for each of Ink, Shop and Stories, and keep those seeds yourself. Never reuse a contract wallet on another network.
 
 ```bash
 node deploy/prepare-testnet.js
 ```
 
-That builds both release files and prints the commands. It does not connect to a wallet. You upload yourself with [Koinos CLI](https://docs.koinos.io/developers/cli/). Pass `false false false` as the three overrides.
+That builds the three release files and prints the `deploy.js` commands, in order: upload each contract, propose and accept the admin, wire them together, and enable the test payment token. It does not connect to a wallet; you run each command and paste a key only at its hidden prompt. The full guide is [docs/TESTNET_DEPLOY.md](docs/TESTNET_DEPLOY.md).
 
 Mana is not a separate coin, and there is no mana faucet. Mana refills from the test KOIN on the address that signs. The upload is signed by the new contract wallet, so that wallet needs the coins.
 
@@ -313,7 +324,7 @@ Do not point Shop at mainnet vUSDT while you are on a testnet. Those contracts a
 1. Ink. Done and tested.
 2. Shop. Done and tested.
 3. Testnet rehearsal. The three contracts are on the Foundation testnet and wired together. Mana for a real write was measured outside this page (about 0.09 to 0.58). A signed write from the website still needs Kondor on a computer.
-4. Stories. Built, tested in the mock chain, and uploaded to the Foundation testnet. Enforces the trial, the 3-open limit, character ranges, private invites, the 60-day archive, refunds, and the UTF-16 Ink charge (most emoji cost 2).
+4. Stories. Built and tested in the mock chain. Enforces the trial, open-project limits, character ranges, private invites, the 60-day archive, refunds, moderation, and the UTF-16 Ink charge (most emoji cost 2).
 5. Website. A first static site is in `web/`. It can read the testnet. Publishing it is a GitHub Pages setting. See [docs/UI.md](docs/UI.md).
 6. Books NFT. Not started. Not required for the first public story.
 6a. Sponsor. Optional, later, a separate contract that is OFF by default. Not required.

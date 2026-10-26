@@ -17,6 +17,7 @@ import { Base58, MockVM, System, authority, chain, Protobuf, system_calls } from
 import { Stories } from "../Stories";
 import { stories } from "../proto/stories";
 import { LINK_ADDRESSES, inviteSig } from "./linkFixtures";
+import { ownEditArgs } from "./reviewed";
 
 const STORIES = Base58.decode("16adhn5XjJDJzs4oPv3MxnQuRpqv7PCJnt");
 const INK = Base58.decode("13Qrdvv3cXys9aryjZho6vHxDW3PRgX5pm");
@@ -217,7 +218,7 @@ describe("Stories security H1: only direct calls", () => {
     }, DIRECT_ONLY);
     fails(() => {
       viaOtherContract(); authorize(ALICE); allowCalls(1);
-      new Stories().edit_segment(new stories.edit_segment_arguments(ALICE, 1, 2, "Rewritten by an app.", 20));
+      new Stories().edit_segment(ownEditArgs(ALICE, 1, 2, "Rewritten by an app.", 20));
     }, DIRECT_ONLY);
     fails(() => {
       viaOtherContract(); authorize(ALICE); allowCalls(1);
@@ -241,7 +242,7 @@ describe("Stories security H1: only direct calls", () => {
     }, DIRECT_ONLY);
     fails(() => {
       viaOtherContract(); authorize(ALICE); allowCalls(1);
-      new Stories().close_story(new stories.close_story_arguments(ALICE, 1, USDT));
+      new Stories().close_story(new stories.close_story_arguments(ALICE, 1));
     }, DIRECT_ONLY);
     directly();
     expect(story(1).segment_count).toBe(2);
@@ -351,7 +352,7 @@ describe("Stories security M2: a long run of removed text cannot freeze the fina
     directly();
     authorize(ALICE);
     allowCalls(1);
-    new Stories().close_story(new stories.close_story_arguments(ALICE, 1, USDT));
+    new Stories().close_story(new stories.close_story_arguments(ALICE, 1));
     checkpoint();
 
     // Keeping seq 1 and jumping to seq 62 in one call would need 60 skips.

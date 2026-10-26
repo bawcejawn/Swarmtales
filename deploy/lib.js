@@ -6,6 +6,25 @@
 
 const crypto = require("crypto");
 
+// ---- MAINNET ADDRESSES (audit M-6) ----
+// Fill in each address once that contract is uploaded to mainnet (one line
+// each), and the payment stablecoin's address before set-asset. Until then
+// "" means "not pinned yet". On mainnet every command refuses any other
+// address unless PIN_OVERRIDE_FLAG is given; only `upload` may name an
+// address that is not pinned yet (that is how it gets one).
+const MAINNET_PINNED = {
+  ink: "",
+  shop: "",
+  stories: "",
+  token: "",
+  sponsor: "",
+  multisig: "",
+};
+const PINNED_ROLES = ["ink", "shop", "stories", "token", "sponsor", "multisig"];
+const CONTRACT_ROLES = ["ink", "shop", "stories", "sponsor", "multisig"];
+const PIN_OVERRIDE_FLAG = "--i-understand-this-address-is-not-pinned";
+const HASH_OVERRIDE_FLAG = "--i-understand-the-code-hash-is-not-verified";
+
 // ---- Signed invite/promo links (fixes H2 and H3) ----
 // Build the exact message the Shop and Stories contracts recover a
 // signature against. Callers pass raw address bytes (from koilib's
@@ -43,11 +62,14 @@ const NETWORKS = {
   },
   mainnet: {
     name: "Koinos MAINNET (real KOIN)",
-    rpc: "https://api.koinos.io",
-    trustedRpcs: ["https://api.koinos.io"],   // the only nodes --rpc may name on mainnet
+    // api.koinos.io stopped answering in October 2026; koinos.armana.io is a
+    // community node. Every run still checks the chain id before signing.
+    rpc: "https://koinos.armana.io",
+    trustedRpcs: ["https://koinos.armana.io", "https://api.koinos.io"],   // the only nodes --rpc may name on mainnet
     chainId: "EiBZK_GGVP0H_fXVAM3j6EAuz3-B-l3ejxRSewi7qIBfSA==",
     koin: "15DJN4a8SgrbGhhGksSBASiSYjGnMU8dGL",
     mainnet: true,
+    pinned: MAINNET_PINNED,
   },
 };
 
@@ -85,7 +107,7 @@ const DEFAULT_TEST_WRITE_SIZE = 100;
 
 // Story kinds and visibility from stories.proto (koilib needs numbers).
 const STORY_KIND = { BOOK: 1, SHORT: 2 };
-const STORY_VISIBILITY = { PUBLIC: 1, UNLISTED: 2, PRIVATE: 3 };
+const STORY_VISIBILITY = { PUBLIC: 1, PRIVATE: 3 };
 
 /** UTF-16 code units: exactly what Stories charges for text. */
 function inkCost(text) {
@@ -101,7 +123,7 @@ function inkCost(text) {
 function measurementText(units, emoji) {
   const n = Number(units);
   if (!Number.isInteger(n) || n < 1) fail("measurement size must be a whole number of at least 1");
-  const word = emoji ? "story\uD83D\uDE00 " : "story ";
+  const word = emoji ? "story😀 " : "story ";
   let out = "";
   while (out.length + word.length <= n) out += word;
   while (out.length < n) out += "a";
@@ -124,6 +146,16 @@ function asWhole(value, label) {
   const s = value.trim();
   if (!/^(0|[1-9][0-9]*)$/.test(s)) fail(label + " must be a whole number of 0 or more.");
   return BigInt(s);
+}
+
+/** A whole number from a flag, from `min` to `max`. */
+function wholeInRange(value, label, min, max) {
+  const n = Number(value);
+  if (typeof value !== "string" && typeof value !== "number") fail(label + " must be a whole number from " + min + " to " + max + ".");
+  if (!/^[0-9]+$/.test(String(value).trim()) || !Number.isInteger(n) || n < min || n > max) {
+    fail(label + " must be a whole number from " + min + " to " + max + ".");
+  }
+  return n;
 }
 
 /**
@@ -239,14 +271,14 @@ function planTestWrite(request, limits) {
  * shop.set_addresses replaces all four addresses at once. Build its
  * arguments from what the Shop has on chain now, changing only `stories`.
  * Refuses if the chain disagrees with what the user said, or if a
- * different Stories contract is already set.
+ * different Stories contract is already set: Shop's Stories address is set
+ * once, like its Ink address (AB-050, C1-07).
  */
 function shopAddressesForStories(onChain, wanted) {
   const cfg = onChain || {};
   const treasury = cfg.treasury || "";
   const founder = cfg.founder || "";
   const ink = cfg.ink || "";
-  const current = cfg.stories || "";
   if (!isAddress(treasury) || !isAddress(founder)) fail("Shop has no treasury or founder set yet. Run wire first.");
   // On mainnet the payout addresses are never taken from the node alone (AB-009).
   if (wanted.mainnet && (!wanted.treasury || !wanted.founder)) {
@@ -255,14 +287,12 @@ function shopAddressesForStories(onChain, wanted) {
   if (ink !== wanted.ink) fail("Shop points at Ink " + (ink || "(none)") + " but you gave --ink " + wanted.ink + ". Nothing was changed.");
   if (wanted.treasury && wanted.treasury !== treasury) fail("Shop treasury on chain is " + treasury + " but you gave --treasury " + wanted.treasury + ". Nothing was changed.");
   if (wanted.founder && wanted.founder !== founder) fail("Shop founder on chain is " + founder + " but you gave --founder " + wanted.founder + ". Nothing was changed.");
-  if (current && current !== wanted.stories && current !== wanted.replace) {
-    fail("Shop already points at a different Stories contract (" + current + "). To retire it, add --replace-stories " + current + ". Nothing was changed.");
-  }
+  requireSetOnce("Shop's Stories address", cfg.stories, wanted.stories);
   return { treasury, founder, ink, stories: wanted.stories };
 }
 
 // Ink amounts used by `wire` unless overridden (writer month, packs S/M/L,
-// starter for a book, starter for a short story).
+// starter for a book, a short story and a poem).
 const DEFAULT_INK_AMOUNTS = {
   writer_month: "15000",
   pack_s: "5000",
@@ -270,10 +300,9 @@ const DEFAULT_INK_AMOUNTS = {
   pack_l: "45000",
   starter_book: "20000",
   starter_short: "10000",
+  starter_poem: "2000",
 };
 
-// Testnet-only prices for `test-asset`, in base units of an 8-decimal token
-// (100000000 = 1 token). Small on purpose. These are NOT launch prices.
 // Enum values from shop.proto. koilib needs the numbers, not the names.
 const SHOP_ITEMS = {
   ITEM_READER_MONTH: 1,
@@ -283,8 +312,7 @@ const SHOP_ITEMS = {
   ITEM_PACK_L: 5,
   ITEM_OPEN_BOOK: 6,
   ITEM_OPEN_SHORT: 7,
-  ITEM_CLOSE_BOOK: 8,
-  ITEM_CLOSE_SHORT: 9,
+  ITEM_OPEN_POEM: 10,
 };
 const TIER_READER = 1;
 const TIER_WRITER = 2;
@@ -375,6 +403,8 @@ function classifyRejection(message) {
   return "PASS";
 }
 
+// Testnet-only prices for `test-asset`, in base units of an 8-decimal token
+// (100000000 = 1 token). Small on purpose. These are NOT launch prices.
 const TEST_PRICES = {
   ITEM_READER_MONTH: "100000000",
   ITEM_WRITER_MONTH: "200000000",
@@ -383,8 +413,7 @@ const TEST_PRICES = {
   ITEM_PACK_L: "200000000",
   ITEM_OPEN_BOOK: "100000000",
   ITEM_OPEN_SHORT: "50000000",
-  ITEM_CLOSE_BOOK: "50000000",
-  ITEM_CLOSE_SHORT: "25000000",
+  ITEM_OPEN_POEM: "30000000",
 };
 
 const ADDRESS_RE = /^1[1-9A-HJ-NP-Za-km-z]{25,34}$/;
@@ -405,10 +434,6 @@ function requireAddress(value, label) {
   return value;
 }
 
-/**
- * Parse argv (without node and script path).
- * Returns { command, target, flags } where flags maps name -> string|true.
- */
 /** Moderation reasons, as the Stories contract numbers them. */
 const MODERATION_REASONS = { copyright: 1, duplicate: 2, spam: 3, illegal: 4, other: 5 };
 
@@ -423,20 +448,19 @@ const VERSION_KINDS = { 1: "original", 2: "changed", 3: "removed", 4: "edited by
 const CHANGE_KINDS = [2, 3, 5];
 
 /**
- * Who a takedown may strike, from get_segment and get_versions (AB-028,
- * AB-029, AB-033). A part nobody else changed strikes its writer
- * automatically; the writer's own edits don't count as a change. Once anyone
- * else changed it, the contract refuses until the admin names the writer or a
- * wallet that changed it, or chooses no strike. `recorded` is the contract's
- * own list of changers (get_changers), citation-only ones included (AB-048);
+ * Who a takedown may strike, from get_segment, get_versions and get_changers
+ * (AB-028, AB-029, AB-033, AB-048). A part nobody else changed strikes its
+ * writer automatically; the writer's own edits don't count as a change. Once
+ * anyone else changed it, the contract refuses until the admin names the
+ * writer or a wallet that changed it, or chooses no strike. `recorded` is the
+ * contract's own list of changers (get_changers), citation-only ones included;
  * `changers` adds the ones the versions show. `candidates` is who the admin
  * may name: whoever last edited the text first (even the writer), then the
- * writer, then the other changers. When the part was changed by someone this
- * tool can't name (a contract without get_changers), `unseen` is true and
- * the candidates end with UNSEEN_CHANGER, so the admin is told to look.
+ * writer, then the other changers. If the part was changed but no changer can
+ * be named, `unseen` is true and the candidates end with UNSEEN_CHANGER.
  */
-const UNSEEN_CHANGER = "someone else changed this part that this tool can't name (a citation or a change made before this " +
-  "Stories version): look up the part's stories.citation_event and stories.revise_event on a block explorer";
+const UNSEEN_CHANGER = "someone else changed this part that this tool can't name: look up the part's " +
+  "stories.citation_event and stories.revise_event on a block explorer";
 
 function takedownStrike(seg, versions, strike, noStrike, recorded) {
   if (strike && noStrike) fail("Use --strike or --no-strike, not both.");
@@ -447,9 +471,7 @@ function takedownStrike(seg, versions, strike, noStrike, recorded) {
   for (const v of versions || []) if (CHANGE_KINDS.includes(Number(v.kind)) || (v.by && v.by !== writer && Number(v.kind) !== 1)) add(v.by);
   const lastEditedBy = (seg && seg.last_edited_by) || "";
   if (seg && seg.edited_by_others) add(lastEditedBy);
-  // A part revised before edited_by_others existed shows it only in its versions (AB-052).
-  const changed = !!(seg && (seg.edited_by_others || seg.other_version)) || Number((seg && seg.paid_changes) || 0) > 0 ||
-    changers.length > 0;
+  const changed = !!(seg && seg.edited_by_others) || Number((seg && seg.paid_changes) || 0) > 0 || changers.length > 0;
   const unseen = changed && changers.length === 0;
   const candidates = [];
   for (const who of [lastEditedBy, writer, ...changers]) if (who && !candidates.includes(who)) candidates.push(who);
@@ -458,23 +480,15 @@ function takedownStrike(seg, versions, strike, noStrike, recorded) {
 }
 
 /**
- * What the audit-2 upgrade reads differently for one part made by older code
- * (AB-052, AB-053), as lines to print; [] when nothing applies.
+ * What the admin reviewed before a takedown: the part's text_hash and
+ * version_count exactly as read and shown. The contract refuses the takedown
+ * if either changed since, so the strike always matches the reviewed text.
  */
-function legacyPartNotes(seq, seg, versions) {
-  if (!seg || !seg.author) return [];
-  const notes = [];
-  const others = [];
-  for (const v of versions || []) if (v.by && v.by !== seg.author && Number(v.kind) !== 1 && !others.includes(v.by)) others.push(v.by);
-  if (others.length && !seg.edited_by_others) {
-    notes.push("part " + seq + ": revised by " + others.join(", ") + " before edited_by_others existed (writer " + seg.author +
-      "). After the upgrade a takedown asks who gets the strike.");
-  }
-  if (seg.hidden && !seg.hidden_by_reports && !Number(seg.hidden_by || 0)) {
-    notes.push("part " + seq + ": hidden by the admin or the checker. After the upgrade only the admin can unhide it; " +
-      "to make it an admin hide, run deploy.js hide on it again with the admin key (one transaction).");
-  }
-  return notes;
+function takedownReview(seg) {
+  if (!seg || !seg.author) fail("There is no such part.");
+  if (seg.taken_down) fail("That part was already taken down. Nothing was sent.");
+  if (typeof seg.text_hash !== "string" || seg.text_hash === "") fail("Could not read the part's text fingerprint (text_hash). Nothing was sent.");
+  return { reviewed_hash: seg.text_hash, reviewed_versions: Number(seg.version_count || 0) };
 }
 
 // get_versions returns at most this many per call (AB-060), fewer when they
@@ -487,8 +501,6 @@ const VERSIONS_PER_READ = 5;
  * just its values. Each read goes on from the contract's next, or else right
  * after the last version returned, since a page stops early when its versions
  * are long (AB-070). A read that fails is tried once more for one version.
- * A Stories version without paging returns all of them on every call;
- * versions are kept by number, so that reads the same.
  */
 async function readVersions(page, versionCount) {
   const total = Number(versionCount || 0);
@@ -526,6 +538,76 @@ function versionPage(storiesC, storyId, seq) {
   };
 }
 
+// get_segments returns at most 10 per call, fewer once their text passes
+// about 64 KB (M-5); `next` says where the next page starts.
+const SEGMENTS_PER_READ = 10;
+
+/**
+ * Every part of a story, by sequence number from 1, read a page at a time.
+ * `page(start, limit)` returns one get_segments result ({ values, next }).
+ * A read that fails is tried once more for one part. Stops with an error
+ * if the parts read are not exactly `segmentCount`, so a book hash is never
+ * computed from a partial read.
+ */
+async function readSegments(page, segmentCount) {
+  const total = Number(segmentCount || 0);
+  const out = [];
+  let start = 1;
+  while (start <= total) {
+    let res;
+    try {
+      res = await page(start, SEGMENTS_PER_READ);
+    } catch (e) {
+      res = await page(start, 1);
+    }
+    const values = (res && res.values) || [];
+    if (!values.length) fail("Could not read part " + start + " of the story. Nothing was sent.");
+    out.push(...values);
+    start += values.length;
+    const next = Number((res && res.next) || 0);
+    if (next && next !== start) fail("The node's page of parts does not line up (next " + next + ", expected " + start + "). Nothing was sent.");
+  }
+  if (out.length !== total) fail("Read " + out.length + " parts but the story has " + total + ". Nothing was sent.");
+  return out;
+}
+
+/**
+ * The finished book as plain text, exactly as the website hashes it at
+ * finalize and on the book page (web/src/main.js bookText): the title, then
+ * every live, unhidden part in reading order, with "Chapter n" headings,
+ * joined by newlines. `readingOrder` is web/src/lib/order.js's, so both use
+ * one rule. Its sha256 (UTF-8) is the book's pdf_hash.
+ */
+function bookText(story, segments, readingOrder) {
+  const all = segments.map((segment, i) => ({ segment, index: i + 1, seq: i + 1, insertAfter: Number(segment.insert_after || 0) }));
+  const ordered = readingOrder(all).filter((b) => Number(b.segment.status) !== 2 && !b.segment.hidden);
+  const lines = [String(story.title || "Untitled")];
+  let chapter = 0;
+  for (const b of ordered) {
+    if (!chapter || b.segment.starts_chapter) {
+      chapter += 1;
+      lines.push("", "Chapter " + chapter, "");
+    }
+    lines.push(String(b.segment.text || ""));
+  }
+  return { text: lines.join("\n"), parts: ordered.length, hidden: segments.filter((s) => Number(s.status) !== 2 && s.hidden).length };
+}
+
+/** replace-pdf may run only on a finalized story that a takedown left needing a new book hash. */
+function requireNeedsNewPdf(story, storyId) {
+  if (!story || !story.opener) fail("There is no story " + storyId + ".");
+  if (Number(story.status) !== 4 || !story.needs_new_pdf) {
+    fail("Story " + storyId + " does not need a new book hash (only a finished book that had a part taken down does). Nothing was sent.");
+  }
+}
+
+/** A book link for replace_pdf / finalize: 1 to 200 plain characters. */
+function requirePdfUri(uri) {
+  const s = String(uri || "");
+  if (!/^[\x21-\x7e]{1,200}$/.test(s)) fail("The book link must be 1 to 200 plain characters (--uri).");
+  return s;
+}
+
 const HIDDEN_BY = { 1: "writer reports", 2: "the copy checker", 3: "the admin" };
 
 /**
@@ -534,24 +616,23 @@ const HIDDEN_BY = { 1: "writer reports", 2: "the copy checker", 3: "the admin" }
  * taking over that hide in one transaction: it becomes an admin hide, so the
  * opener can't restore it and removing it refunds nothing. The moderator key
  * may take over a hide writer reports made, as the copy checker does for a
- * copy (AB-071). Only the admin unhides an admin hide, or a hide from before
- * hidden_by that reports did not make (it may be the admin's, AB-074).
+ * copy (AB-071). Only the admin unhides an admin hide.
  */
 function hidePlan(seg, hidden, actor, admin) {
   if (!seg || !seg.author) fail("There is no such part.");
   if (Number(seg.status) !== 1) fail("That part was removed; nothing to hide or unhide.");
   const by = Number(seg.hidden_by || 0);
-  const who = HIDDEN_BY[by] || (seg.hidden_by_reports ? "writer reports" : "the admin or the checker, before hidden_by existed");
-  const maybeAdmin = by === 3 || (by === 0 && !seg.hidden_by_reports);
+  if (seg.hidden && !HIDDEN_BY[by]) fail("That part is hidden but says nobody hid it (hidden_by " + by + "). Check the Stories ABI is current. Nothing was sent.");
+  const who = HIDDEN_BY[by];
   if (!hidden) {
     if (!seg.hidden) fail("That part is not hidden. Nothing was sent.");
-    if (maybeAdmin && actor !== admin) fail("The admin hid this part (or may have), so only the admin key can unhide it. Nothing was sent.");
+    if (by === 3 && actor !== admin) fail("The admin hid this part, so only the admin key can unhide it. Nothing was sent.");
     return "UNHIDE (hidden by " + who + ")";
   }
   if (!seg.hidden) return "HIDE";
   if (by === 3) fail("The admin already hid this part. Nothing was sent.");
   if (actor !== admin) {
-    if (by === 1 || (by === 0 && seg.hidden_by_reports)) {
+    if (by === 1) {
       return "HIDE AS THE CHECKER (now hidden by writer reports; in one transaction it becomes the checker's hide: removing it " +
         "refunds nothing and restoring it gives up the refund)";
     }
@@ -569,9 +650,9 @@ function requireSetOnce(what, onChain, wanted) {
 }
 
 const SHOP_MOVE_HELP =
-  "Stories' Shop address and Shop's Ink address are set once and can never be changed (AB-050): both run inside " +
-  "users' own signed transactions. Moving to a new Shop or Ink needs a reviewed code upload with the contract key " +
-  "(docs/ADMIN_POWERS.md, docs/KEY_CUSTODY.md section 6), not wire.";
+  "Stories' Ink and Shop addresses and Shop's Ink and Stories addresses are set once and can never be changed " +
+  "(AB-050, C1-07): they run inside users' own signed transactions. Moving to a new contract needs a reviewed code " +
+  "upload with the contract key (docs/ADMIN_POWERS.md, docs/KEY_CUSTODY.md section 6), not wire.";
 
 /**
  * One line per kept version of a part, oldest first, with the full text, for
@@ -595,38 +676,75 @@ function versionHistory(versions, seg) {
   return lines;
 }
 
-function parseArgs(argv) {
+// ---------- command line ----------
+
+// Switches: present or absent, never followed by a value (O1-10).
+const BOOLEAN_FLAGS = [
+  "i-understand-this-is-mainnet", "i-understand-this-replaces-mainnet-code",
+  PIN_OVERRIDE_FLAG.slice(2), HASH_OVERRIDE_FLAG.slice(2),
+  "upgrade", "disable", "private", "emoji", "not-opener", "unhide", "no-strike", "unblock",
+];
+const SECRET_FLAGS = ["key", "wif", "private-key", "privatekey", "secret", "seed", "mnemonic", "password", "link-key"];
+const RETIRED_FLAGS = {
+  "expect-sha256": "--expect-sha256 is gone: the reviewed release hashes are pinned in deploy/release-hashes.json, and upload checks the build against them.",
+  "replace-stories": "--replace-stories is gone: Shop's Stories address is set once and can never be changed (C1-07).",
+  "replace-shop": SHOP_MOVE_HELP,
+};
+
+/**
+ * Parse argv (without node and script path) into
+ * { command, target, rest, flags }. A switch (BOOLEAN_FLAGS) never takes a
+ * value, so `--unhide x` is refused instead of read as "hide"; every other
+ * flag needs one. Keys, retired flags, repeated flags and (given `known`)
+ * flags no command uses are refused.
+ */
+function parseArgs(argv, known) {
   const positional = [];
   const flags = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg.startsWith("--")) {
-      const eq = arg.indexOf("=");
-      if (eq !== -1) {
-        flags[arg.slice(2, eq)] = arg.slice(eq + 1);
-      } else {
-        const next = argv[i + 1];
-        if (next !== undefined && !next.startsWith("--")) {
-          flags[arg.slice(2)] = next;
-          i++;
-        } else {
-          flags[arg.slice(2)] = true;
-        }
-      }
-    } else {
+    if (!arg.startsWith("--")) {
       positional.push(arg);
+      continue;
     }
-  }
-  const secretFlags = ["key", "wif", "private-key", "privatekey", "secret", "seed", "mnemonic", "password"];
-  for (const name of Object.keys(flags)) {
-    if (secretFlags.indexOf(name.toLowerCase()) !== -1) {
-      fail(
-        "Do not pass a key on the command line (--" + name + "). It would be saved in your " +
-          "terminal history. Run the command without it and paste the key at the hidden prompt."
-      );
+    const eq = arg.indexOf("=");
+    const name = arg.slice(2, eq === -1 ? undefined : eq);
+    if (SECRET_FLAGS.includes(name.toLowerCase())) {
+      fail("Do not pass a key on the command line (--" + name + "). It would be saved in your terminal history. " +
+        "Run the command without it and paste the key at the hidden prompt.");
+    }
+    if (RETIRED_FLAGS[name]) fail(RETIRED_FLAGS[name]);
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(name) || (known && !known.includes(name))) fail("--" + name + " is not a flag this tool knows. Nothing was done.");
+    if (Object.prototype.hasOwnProperty.call(flags, name)) fail("--" + name + " is given twice. Give it once.");
+    if (BOOLEAN_FLAGS.includes(name)) {
+      const next = argv[i + 1];
+      if (eq !== -1 || (next !== undefined && !next.startsWith("--"))) {
+        fail("--" + name + " is a switch and takes no value" + (eq !== -1 ? "" : ", but '" + next + "' follows it") +
+          ". Leave the value out (or move it before the switch). Nothing was done.");
+      }
+      flags[name] = true;
+    } else if (eq !== -1) {
+      flags[name] = arg.slice(eq + 1);
+    } else {
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith("--")) fail("--" + name + " needs a value. Nothing was done.");
+      flags[name] = next;
+      i++;
     }
   }
   return { command: positional[0], target: positional[1], rest: positional.slice(2), flags };
+}
+
+/**
+ * Refuse flags the command does not use, and positional values it does not
+ * take, so a typo or a stray word never changes what is sent.
+ */
+function checkCommandArgs(args, allowed, positionals) {
+  for (const name of Object.keys(args.flags)) {
+    if (!allowed.includes(name)) fail("'" + args.command + "' does not use --" + name + ". Nothing was done. Run help to see its flags.");
+  }
+  const extra = [args.target, ...args.rest].filter((v) => v !== undefined).slice(positionals || 0);
+  if (extra.length) fail("Unexpected '" + extra[0] + "' on the command line. Nothing was done.");
 }
 
 /**
@@ -663,6 +781,258 @@ function checkChainId(net, actual) {
   }
 }
 
+// ---------- pinned mainnet addresses and release hashes (M-6, O1-13) ----------
+
+function checkPinnedTable(pinned) {
+  for (const role of PINNED_ROLES) {
+    if (typeof pinned[role] !== "string" || (pinned[role] !== "" && !isAddress(pinned[role]))) {
+      fail("deploy/lib.js MAINNET_PINNED." + role + " must be \"\" or a Koinos address.");
+    }
+  }
+}
+checkPinnedTable(MAINNET_PINNED);
+
+/**
+ * On mainnet, `address` must be the pinned address for `role`. `uploading`
+ * lets `upload` name a contract address that is not pinned yet. Returns a
+ * warning line when the override flag let an unpinned address through.
+ */
+function checkPinned(net, role, address, flags, uploading) {
+  if (!net.mainnet || address === undefined) return null;
+  const pinned = net.pinned[role];
+  if (pinned === address || (!pinned && uploading)) return null;
+  const what = pinned ? "the pinned mainnet " + role + " address is " + pinned : "no mainnet " + role + " address is pinned in deploy/lib.js yet";
+  if (flags[PIN_OVERRIDE_FLAG.slice(2)] === true) {
+    return "WARNING: " + address + " is used as " + role + " although " + what + " (" + PIN_OVERRIDE_FLAG + ").";
+  }
+  fail("On mainnet, " + role + " must be the pinned address, but " + what + " and you gave " + address + ".\n" +
+    "Nothing was done. If the address in deploy/lib.js (MAINNET_PINNED) is wrong or missing, fix it there (one line) and have it reviewed. " +
+    "Only if you checked the address yourself, add " + PIN_OVERRIDE_FLAG + ".");
+}
+
+/** Every contract address the flags name, checked against the pinned table. `target` names the role of --contract/--expect. */
+function checkPinnedFlags(net, flags, target) {
+  const warnings = [];
+  for (const role of PINNED_ROLES) warnings.push(checkPinned(net, role, flags[role], flags, false));
+  for (const name of ["contract", "expect"]) {
+    if (flags[name] === undefined || !net.mainnet) continue;
+    if (!CONTRACT_ROLES.includes(target)) fail("Say which contract --" + name + " is: ink, shop, stories, sponsor or multisig.");
+    warnings.push(checkPinned(net, target, flags[name], flags, name === "expect"));
+  }
+  return warnings.filter(Boolean);
+}
+
+/** A key that controls a pinned MAINNET address is never used on testnet (one key per contract per network). */
+function refuseCrossNetworkKey(net, address) {
+  if (net.mainnet) return;
+  for (const role of PINNED_ROLES) {
+    if (NETWORKS.mainnet.pinned[role] && NETWORKS.mainnet.pinned[role] === address) {
+      fail(address + " is the pinned MAINNET " + role + " address. Never use a mainnet contract key on testnet " +
+        "(or a testnet key on mainnet): make a new wallet for each contract on each network. Nothing was signed.");
+    }
+  }
+}
+
+/** deploy/release-hashes.json: { ink, shop, stories } as "" (not pinned yet) or a lowercase sha256 hex. */
+function parseReleaseHashes(text) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (e) {
+    fail("deploy/release-hashes.json is not valid JSON.");
+  }
+  const out = {};
+  for (const key of Object.keys(data || {})) {
+    if (key !== "about" && !CONTRACT_ROLES.includes(key)) fail("deploy/release-hashes.json has an unknown entry '" + key + "'.");
+  }
+  for (const role of CONTRACT_ROLES) {
+    const v = data[role];
+    if (typeof v !== "string" || (v !== "" && !/^[0-9a-f]{64}$/.test(v))) {
+      fail("deploy/release-hashes.json: '" + role + "' must be \"\" or 64 lowercase hex characters.");
+    }
+    out[role] = v;
+  }
+  return out;
+}
+
+function sha256Hex(bytes) {
+  return crypto.createHash("sha256").update(Buffer.from(bytes)).digest("hex");
+}
+
+/**
+ * The wasm about to be uploaded against the release hash pinned in
+ * deploy/release-hashes.json (AB-006, O1-13). Mainnet uploads only the
+ * pinned release build. Testnet uploads anything and says whether it is the
+ * release. No message prints a hash, so nothing invites pasting one in.
+ * Returns true (the release), false (not it) or null (none pinned).
+ */
+function checkWasmHash(wasm, role, release, mainnet) {
+  const want = release[role];
+  if (mainnet && !want) {
+    fail("No release hash is pinned for " + role + " in deploy/release-hashes.json. Mainnet uploads only the reviewed " +
+      "release build: fill it in from the published release hashes (AUDIT_SCOPE.md), have it reviewed, and run this again. Nothing was sent.");
+  }
+  if (!want) return null;
+  const matches = sha256Hex(wasm) === want;
+  if (!matches && mainnet) {
+    fail("This " + role + " build is NOT the reviewed release build pinned in deploy/release-hashes.json. Rebuild from " +
+      "the release tag with the pinned toolchain (a debug, stale or changed build never matches). Do not edit the pinned " +
+      "hash to make it match. Nothing was sent.");
+  }
+  return matches;
+}
+
+/** The code hash the chain returns (get_contract_metadata: "0x1220" + sha256 hex) as plain sha256 hex, or null. */
+function codeHashFromMeta(meta) {
+  const raw = meta && meta.value && meta.value.hash;
+  const m = typeof raw === "string" && /^0x1220([0-9a-fA-F]{64})$/.exec(raw);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/**
+ * Before a wiring command (M-6): the code at `address` must be the release
+ * build for `role`. On mainnet a mismatch always stops; a hash the node
+ * would not give stops unless HASH_OVERRIDE_FLAG. Testnet only warns.
+ * Returns a line to print, or null.
+ */
+function checkCodeHash(net, role, address, hashHex, release, flags) {
+  const want = release[role];
+  if (!net.mainnet) {
+    if (!want) return null;
+    if (!hashHex) return "Note: could not read the code hash of " + role + " at " + address + " (testnet: carrying on).";
+    return hashHex === want ? null : "Note: " + role + " at " + address + " is not the pinned release build (fine on testnet).";
+  }
+  if (!want) {
+    fail("No release hash is pinned for " + role + " in deploy/release-hashes.json, so the code at " + address +
+      " can't be checked. Fill it in first. Nothing was sent.");
+  }
+  if (!hashHex) {
+    const why = "The node did not return the code hash of " + role + " at " + address + " (chain get_contract_metadata through " +
+      "invoke_system_call), so this tool can't confirm it runs the reviewed release build.";
+    if (flags[HASH_OVERRIDE_FLAG.slice(2)] === true) return "WARNING: " + why + " Carrying on because of " + HASH_OVERRIDE_FLAG + ".";
+    fail(why + "\nNothing was sent. Try again later, or check the hash on a block explorer and then add " + HASH_OVERRIDE_FLAG + ".");
+  }
+  if (hashHex !== want) {
+    fail("The code at " + address + " is NOT the reviewed " + role + " release build pinned in deploy/release-hashes.json. " +
+      "Do not wire it. Nothing was sent.");
+  }
+  return null;
+}
+
+// ---------- settings the admin commands send ----------
+
+const DEFAULT_REPORT_THRESHOLD = 3;
+const DEFAULT_STRIKE_LIMIT = 5;
+
+/**
+ * set_moderation arguments (O1-11). The threshold and strike limit stay as
+ * they are on chain unless given (0 on chain is the contract's default, 3 and 5).
+ */
+function planModeration(flags, cfg) {
+  if (!cfg) fail("Could not read Stories' settings. Nothing was sent.");
+  const off = flags.moderator === "off";
+  const moderator = off ? "" : requireAddress(flags.moderator, "moderator (or the word off)");
+  const threshold = flags.threshold === undefined ? Number(cfg.report_threshold || DEFAULT_REPORT_THRESHOLD) : wholeInRange(flags.threshold, "--threshold", 1, 20);
+  const strikes = flags.strikes === undefined ? Number(cfg.strike_limit || DEFAULT_STRIKE_LIMIT) : wholeInRange(flags.strikes, "--strikes", 1, 20);
+  return { moderator, report_threshold: threshold, strike_limit: strikes };
+}
+
+// The largest per-submission cap (O1-12): the node's read limit (M-5) and the
+// Stories contract both stop at 6,000.
+const CONTRIBUTION_CAP_MAX = 6000;
+
+/** set_limits arguments for stories-limits: given flags, else what the chain has. */
+function planStoriesLimits(flags, cfg) {
+  if (!cfg) fail("Could not read Stories' settings. Nothing was sent.");
+  const pick = (flag, current, fallback, min, max) => {
+    if (flags[flag] !== undefined) return wholeInRange(flags[flag], "--" + flag, min, max);
+    const n = Number(current || fallback);
+    if (n < min || n > max) fail("The chain's current value for --" + flag + " (" + n + ") is outside " + min + " to " + max + ". Give --" + flag + ".");
+    return n;
+  };
+  return {
+    contribution_cap: pick("cap", cfg.contribution_cap, CONTRIBUTION_CAP_MAX, 100, CONTRIBUTION_CAP_MAX),
+    trial_limit: cfg.trial_limit || 0,
+    open_limit: pick("open-limit", cfg.open_limit, 3, 1, 10),
+    archive_days: cfg.archive_days || 60,
+    inactivity_days: cfg.inactivity_days || 30,
+    full_price_projects: pick("full-price", cfg.full_price_projects, 3, 1, 10),
+    max_price_multiplier: pick("price-ceiling", cfg.max_price_multiplier, 4, 1, 1024),
+  };
+}
+
+// A newly enabled payment token can be used only after this wait (C1-01).
+const ASSET_WAIT_SECONDS = 7 * 86400;
+
+function utcTime(sec) {
+  return new Date(Number(sec) * 1000).toISOString().replace(".000Z", "Z");
+}
+
+/**
+ * What set-asset will do. After the Shop's first sale (`sold`), enabling starts
+ * its 7-day wait; before it, a token works at once. An enabled
+ * token's decimals and symbol can't change; turning a token off is at once.
+ * Re-enabling an enabled token is refused, so the wait is never restarted
+ * by mistake. Returns { args, summary }.
+ */
+function planAsset(current, wanted, nowSec, sold = true) {
+  const cur = current || {};
+  const token = requireAddress(wanted.token, "token");
+  if (!wanted.enabled) {
+    if (!cur.enabled) fail("That token is not enabled. Nothing to turn off.");
+    return {
+      args: { token, enabled: false, decimals: Number(cur.decimals || 0), symbol: String(cur.symbol || "") },
+      summary: "turn OFF payment token " + (cur.symbol || "") + " (" + token + "), at once",
+    };
+  }
+  const decimals = wholeInRange(wanted.decimals, "--decimals", 0, 18);
+  const symbol = String(wanted.symbol || "");
+  if (!/^[\x21-\x7e]{1,16}$/.test(symbol)) fail("--symbol must be 1 to 16 plain characters.");
+  if (cur.enabled) {
+    if (Number(cur.decimals) !== decimals || cur.symbol !== symbol) {
+      fail("That token is enabled as " + cur.symbol + " with " + cur.decimals + " decimals; an enabled token's decimals and symbol " +
+        "can't change. Turn it off (--disable) first; after the Shop's first sale, enabling it again starts a new 7-day wait. Nothing was sent.");
+    }
+    fail("That token is already enabled (usable from " + utcTime(cur.usable_from || 0) + "). Nothing to send.");
+  }
+  return {
+    args: { token, enabled: true, decimals, symbol },
+    summary: "ENABLE payment token " + symbol + " (" + token + ", " + decimals + " decimals). " + (sold
+      ? "The Shop has made sales, so everyone waits 7 days: it can be used from about " + utcTime(nowSec + ASSET_WAIT_SECONDS) +
+        " (the exact time is set when the transaction is in a block)"
+      : "The Shop has made no sale yet, so it can be used at once"),
+  };
+}
+
+/** A purchase needs the token enabled and past its wait (7 days when enabled after the first sale). */
+function requireUsableAsset(asset, nowSec, token) {
+  if (!asset || !asset.enabled) fail("The Shop does not accept " + token + ". Run test-asset (testnet) or set-asset first.");
+  if (Number(asset.usable_from || 0) > nowSec) {
+    fail("The Shop accepts " + token + " only from " + utcTime(asset.usable_from) + " (the 7-day wait after enabling a token once the Shop has made sales). Nothing was sent.");
+  }
+}
+
+/**
+ * min_ink for buy_membership (M-2): Writer is the Ink per month the buyer
+ * will get (their locked amount while a Writer term runs, else the catalog);
+ * Reader is 0.
+ */
+function membershipMinInk(tier, membership, cfg, nowSec) {
+  if (tier !== TIER_WRITER) return "0";
+  const m = membership || {};
+  if (Number(m.tier) === TIER_WRITER && Number(m.paid_until || 0) > nowSec && BigInt(m.ink_per_month || 0) > 0n) return String(m.ink_per_month);
+  if (!cfg || !BigInt(cfg.writer_ink || 0)) fail("Could not read the Shop's Writer Ink amount. Nothing was sent.");
+  return String(cfg.writer_ink);
+}
+
+/** WIF and link-key output only ever goes to a terminal, never into a file or pipe (O1-14). */
+function requireTerminal(isTTY, what) {
+  if (!isTTY) {
+    fail(what + " prints a secret key, so it only runs in a terminal.\n" +
+      "Run it again without redirecting or piping its output (no > file, no | tee).");
+  }
+}
+
 /**
  * Turn what the user pasted into constructor input for koilib's Signer.
  * Accepts a WIF (51-52 base58 chars) or a 64-char hex private key.
@@ -696,6 +1066,145 @@ function formatMana(rc) {
   const whole = n / 100000000n;
   const frac = (n % 100000000n).toString().padStart(8, "0").slice(0, 4);
   return whole.toString() + "." + frac;
+}
+
+// ---- Prices and Ink amounts (set-price, set-ink-amounts) ----
+// Item flags of set-price, in shop.proto numbers.
+const PRICE_FLAGS = { reader: 1, writer: 2, "pack-s": 3, "pack-m": 4, "pack-l": 5, book: 6, short: 7, poem: 10 };
+// Ink amount flags of set-ink-amounts: flag -> [set_ink_amounts field, shop config field].
+const INK_FLAGS = {
+  writer: ["writer_month", "writer_ink"], "pack-s": ["pack_s", "pack_s_ink"], "pack-m": ["pack_m", "pack_m_ink"], "pack-l": ["pack_l", "pack_l_ink"],
+  "starter-book": ["starter_book", "starter_book"], "starter-short": ["starter_short", "starter_short"], "starter-poem": ["starter_poem", "starter_poem"],
+};
+
+/** "1.5" of a token with `decimals` decimals in base units (a string). */
+function parseTokenAmount(value, decimals, label) {
+  const m = /^([0-9]{1,15})(?:\.([0-9]+))?$/.exec(String(value));
+  if (!m) fail(label + " must be an amount like 2 or 0.5.");
+  const frac = m[2] || "";
+  if (frac.length > decimals) fail(label + " has more than " + decimals + " decimals.");
+  return (BigInt(m[1]) * 10n ** BigInt(decimals) + BigInt((frac + "0".repeat(decimals)).slice(0, decimals) || "0")).toString();
+}
+
+/**
+ * set_price calls for one token. Each item flag (--reader, --writer, --pack-s,
+ * --pack-m, --pack-l, --book, --short, --poem) is a price in whole tokens, 0
+ * takes the item off sale. --rate N (Ink per 1 token) prices the Writer month
+ * and the three packs from the Ink they bring (rounded up), unless that item
+ * is given too.
+ */
+function planPrices(flags, decimals, cfg) {
+  const prices = {};
+  for (const [flag, item] of Object.entries(PRICE_FLAGS)) {
+    if (flags[flag] !== undefined) prices[item] = parseTokenAmount(flags[flag], decimals, "--" + flag);
+  }
+  if (flags.rate !== undefined) {
+    const m = /^([0-9]{1,12})(?:\.([0-9]{1,8}))?$/.exec(String(flags.rate));
+    if (!m) fail("--rate must be the Ink one token buys, like 100 or 2.5.");
+    const k = (m[2] || "").length;
+    const rateInt = BigInt(m[1] + (m[2] || ""));
+    if (rateInt === 0n) fail("--rate must be more than 0.");
+    const scale = 10n ** BigInt(decimals) * 10n ** BigInt(k);
+    for (const [flag, field] of [["writer", "writer_ink"], ["pack-s", "pack_s_ink"], ["pack-m", "pack_m_ink"], ["pack-l", "pack_l_ink"]]) {
+      if (prices[PRICE_FLAGS[flag]] !== undefined) continue;
+      const ink = BigInt((cfg && cfg[field]) || "0");
+      if (ink === 0n) fail("The Shop has no Ink amount for " + flag + " yet, so --rate can't price it. Set it with set-ink-amounts, or give --" + flag + ".");
+      prices[PRICE_FLAGS[flag]] = ((ink * scale + rateInt - 1n) / rateInt).toString();
+    }
+  }
+  const items = Object.keys(prices).map(Number).sort((a, b) => a - b);
+  if (!items.length) fail("Give at least one price: --reader --writer --pack-s --pack-m --pack-l --book --short --poem, or --rate.");
+  const names = Object.fromEntries(Object.entries(PRICE_FLAGS).map(([f, i]) => [i, f]));
+  return items.map((item) => ({ item, amount: prices[item], name: names[item] }));
+}
+
+/** set_ink_amounts arguments: each flag given, else what the chain has. */
+function planInkAmounts(flags, cfg) {
+  if (!cfg) fail("Could not read the Shop's settings. Nothing was sent.");
+  const args = {};
+  let changed = 0;
+  for (const [flag, [field, cfgField]] of Object.entries(INK_FLAGS)) {
+    if (flags[flag] !== undefined) {
+      args[field] = String(wholeInRange(flags[flag], "--" + flag, 0, 100000000));
+      changed++;
+    } else {
+      args[field] = String((cfg && cfg[cfgField]) || "0");
+    }
+  }
+  if (!changed) fail("Give at least one: --writer --pack-s --pack-m --pack-l --starter-book --starter-short --starter-poem.");
+  return args;
+}
+
+// ---- Multisig wallet (multisig/) ----
+const MULTISIG_MIN_SIGNERS = 2;
+const MULTISIG_MAX_SIGNERS = 10;
+
+/**
+ * The signers and threshold for multisig setup / set_signers, checked the way
+ * the contract checks them: 2 to 10 different addresses, none of them the
+ * multisig itself, threshold 2 to the number of signers.
+ */
+function planMultisigSigners(signersFlag, thresholdFlag, multisigAddress) {
+  const signers = String(signersFlag || "").split(",").map((s) => s.trim()).filter(Boolean).map((s) => requireAddress(s, "signers"));
+  if (signers.length < MULTISIG_MIN_SIGNERS || signers.length > MULTISIG_MAX_SIGNERS) fail("--signers takes 2 to 10 addresses, separated by commas.");
+  if (new Set(signers).size !== signers.length) fail("--signers lists the same address twice.");
+  if (signers.includes(multisigAddress)) fail("The multisig can't be one of its own signers.");
+  const threshold = thresholdFlag === undefined ? 2 : Number(thresholdFlag);
+  if (!Number.isInteger(threshold) || threshold < 2 || threshold > signers.length) fail("--threshold must be a whole number from 2 to the number of signers.");
+  return {
+    args: { signers, threshold },
+    summary: threshold + " of " + signers.length + ": " + signers.join(", "),
+  };
+}
+
+// ---- Mana sponsor (sponsor/) ----
+const SPONSOR_MAX_TOKENS = 4;
+const SPONSOR_CAP_LIMIT = 100000000000n; // 1,000 mana, the contract's own limit
+
+/**
+ * The set_config arguments for the sponsor, checked the same way the
+ * contract checks them, so a mistake stops here with a plain message.
+ * `f` holds the command's flags; mana caps are typed like "10" or "2.5".
+ */
+function planSponsorConfig(f, sponsorAddress) {
+  const ink = requireAddress(f.ink, "ink");
+  const shop = requireAddress(f.shop, "shop");
+  const stories = requireAddress(f.stories, "stories");
+  if (new Set([ink, shop, stories, sponsorAddress]).size !== 4) fail("--ink, --shop, --stories and --sponsor must be four different addresses.");
+  const tokens = f.tokens === undefined || f.tokens === "" ? [] : String(f.tokens).split(",").map((t) => requireAddress(t.trim(), "tokens"));
+  if (tokens.length > SPONSOR_MAX_TOKENS) fail("--tokens takes at most " + SPONSOR_MAX_TOKENS + " payment tokens.");
+  if (new Set(tokens).size !== tokens.length) fail("--tokens lists the same token twice.");
+  for (const t of tokens) {
+    if ([ink, shop, stories, sponsorAddress].includes(t)) fail("--tokens can't include a SwarmTales contract or the sponsor.");
+  }
+  const enabled = f.disable !== true;
+  const perTx = parseMana(f["per-tx"], "--per-tx");
+  const perAccount = parseMana(f["per-account"], "--per-account");
+  const perDay = parseMana(f["per-day"], "--per-day");
+  if (BigInt(perTx) > BigInt(perAccount) || BigInt(perAccount) > BigInt(perDay)) {
+    fail("Caps must be --per-tx <= --per-account <= --per-day.");
+  }
+  if (BigInt(perDay) > SPONSOR_CAP_LIMIT) fail("--per-day can't be above 1000 mana (the contract's limit).");
+  const config = {
+    enabled, ink, shop, stories, tokens,
+    max_mana_per_tx: perTx,
+    max_mana_per_account_day: perAccount,
+    max_mana_per_day: perDay,
+  };
+  const summary = "sponsor " + (enabled ? "ON" : "OFF") + ": pays for Ink " + ink + ", Shop " + shop + ", Stories " + stories +
+    (tokens.length ? " and approve(spender = Shop) on " + tokens.join(", ") : "") +
+    "; caps " + formatMana(perTx) + " mana per transaction, " + formatMana(perAccount) + " per account per day, " +
+    formatMana(perDay) + " for everyone per day";
+  return { args: { config }, summary };
+}
+
+/** A mana amount typed as KOIN-style decimals ("5", "0.25") in rc. */
+function parseMana(value, label) {
+  const m = /^([0-9]{1,9})(?:\.([0-9]{1,8}))?$/.exec(String(value));
+  if (!m) fail(label + " must be an amount of mana like 5 or 0.25.");
+  const rc = BigInt(m[1]) * 100000000n + BigInt((m[2] || "").padEnd(8, "0") || "0");
+  if (rc < 1n) fail(label + " must be more than 0.");
+  return rc.toString();
 }
 
 /** rc limit for the real send: 25% above the dry run, never above what the payer has. */
@@ -735,19 +1244,15 @@ function toKoilibAbi(generated) {
   return { methods, types: generated.types };
 }
 
-/**
- * sha256 (hex) of the wasm about to be uploaded (AB-006). With an expected
- * hash, any mismatch stops the upload: a stale, debug or tampered build is
- * never uploaded by mistake. Mainnet uploads must give one.
- */
 const MAINNET_UPGRADE_FLAG = "--i-understand-this-replaces-mainnet-code";
 
 /**
  * Whether `upload` may go ahead when the address already holds a contract.
  * Replacing code keeps the stored data. Testnet needs --upgrade. Mainnet
- * needs --upgrade and MAINNET_UPGRADE_FLAG too (on top of --expect-sha256 and
- * --i-understand-this-is-mainnet): it is the recovery path in KEY_CUSTODY.md
- * section 6 and the way to apply a reviewed contract fix after launch (AB-041).
+ * needs --upgrade and MAINNET_UPGRADE_FLAG too (on top of the pinned release
+ * hash and --i-understand-this-is-mainnet): it is the recovery path in
+ * KEY_CUSTODY.md section 6 and the way to apply a reviewed contract fix after
+ * launch (AB-041).
  */
 function checkUpgrade(exists, flags, mainnet, address) {
   if (!exists) return false;
@@ -761,30 +1266,6 @@ function checkUpgrade(exists, flags, mainnet, address) {
   return true;
 }
 
-function checkWasmHash(wasm, expected, mainnet) {
-  const actual = crypto.createHash("sha256").update(Buffer.from(wasm)).digest("hex");
-  if (expected === undefined) {
-    if (mainnet) fail("Mainnet uploads need --expect-sha256 <hex>: the sha256 of the release build you reviewed. This build's is " + actual + ". Nothing was sent.");
-    return actual;
-  }
-  if (typeof expected !== "string" || !/^[0-9a-fA-F]{64}$/.test(expected)) fail("--expect-sha256 must be 64 hex characters.");
-  if (expected.toLowerCase() !== actual) {
-    fail("The wasm's sha256 is " + actual + " but --expect-sha256 says " + expected.toLowerCase() + ". It does not match: rebuild or check you have the right file. Nothing was sent.");
-  }
-  return actual;
-}
-
-/**
- * Link keys (invite and promo secrets) are never taken from the command
- * line, where they would stay in shell history: they are pasted at the
- * hidden prompt instead (AB-013).
- */
-function refuseSecretFlag(flags, name) {
-  if (flags[name] !== undefined) {
-    fail("Don't put the link key on the command line (it stays in your shell history). Leave out --" + name + " and paste it at the hidden prompt.");
-  }
-}
-
 /** Stop a testnet-only command on mainnet. */
 function requireTestnet(net, command) {
   if (net.mainnet) fail(command + " is for testnet only.");
@@ -796,8 +1277,170 @@ function newLinkKeyHex() {
 }
 
 /** Read the user's single-line answer and decide if it confirms. */
-function isConfirmation(answer) {
-  return String(answer || "").trim() === "SEND";
+function isConfirmation(answer, word) {
+  return String(answer || "").trim() === (word || "SEND");
+}
+
+// ---------- multisig: prepared, unsigned transactions (M-12) ----------
+
+const PREPARED_FORMAT = "swarmtales-prepared-transaction/1";
+const PREPARED_HEADER_KEYS = ["chain_id", "rc_limit", "nonce", "operation_merkle_root", "payer", "payee"];
+const PREPARED_MAX_OPS = 64;
+// Mana limit for a prepared transaction unless --rc-limit is given (never above what the payer has).
+// Mana limit of a prepared transaction unless --rc-limit is given: 1 mana. Admin
+// calls use under 0.1 (measured on testnet, 25 Oct 2026: accept_admin 0.09, a
+// pause 0.06), and the node holds the whole limit of a waiting transaction.
+const DEFAULT_PREPARED_RC = "100000000";
+
+/** A nonce as the chain encodes it (koinos.chain.value_type, uint64_value = field 7), base64url. */
+// A nonce is a koinos.chain.value_type holding one varint. koilib (and so
+// every wallet) writes it as field 5 (tag 0x28); field 7 (tag 0x38) is
+// accepted too. Found live on testnet, 25 Oct 2026: the earlier check took
+// only 0x38 and refused every real nonce.
+const NONCE_TAGS = [0x28, 0x38];
+
+function nonceNumber(nonceB64) {
+  const b = Buffer.from(String(nonceB64 || ""), "base64url");
+  if (b.length < 2 || !NONCE_TAGS.includes(b[0])) fail("The transaction's nonce is not in the expected format.");
+  let n = 0n;
+  let shift = 0n;
+  for (let i = 1; i < b.length; i++) {
+    n |= BigInt(b[i] & 0x7f) << shift;
+    shift += 7n;
+    if (!(b[i] & 0x80)) {
+      if (i !== b.length - 1) fail("The transaction's nonce is not in the expected format.");
+      return n.toString();
+    }
+  }
+  fail("The transaction's nonce is not in the expected format.");
+}
+
+/**
+ * The JSON file `--prepare` writes and `cosign` / `submit` read: the unsigned
+ * (or partly signed) transaction, plus what each operation is meant to be
+ * (contract name, address, method, arguments) so every signer's tool can
+ * decode the bytes and refuse anything that differs. No key is ever in it.
+ */
+function preparedFile(net, tx, described, command, needs) {
+  const file = {
+    format: PREPARED_FORMAT,
+    network: net.key,
+    chain_id: net.chainId,
+    command,
+    prepared_at: new Date().toISOString(),
+    operations: described,
+    transaction: { id: tx.id, header: tx.header, operations: tx.operations, signatures: tx.signatures || [] },
+  };
+  if (needs) file.needs = needs;
+  return file;
+}
+
+/**
+ * Who must sign, when the acting account is a multisig: { account, signers,
+ * threshold }, read from the chain when the file was prepared. A guide for
+ * cosign and submit (they refuse a key that isn't one of the signers, and a
+ * file without enough of them); the chain decides in the end.
+ */
+function checkNeeds(needs) {
+  if (needs === undefined) return null;
+  if (!needs || typeof needs !== "object") fail("The file's list of signers is not in the expected format.");
+  requireAddress(needs.account, "needs.account");
+  if (!Array.isArray(needs.signers) || needs.signers.length < 1 || needs.signers.length > 10) fail("The file's list of signers is not in the expected format.");
+  for (const s of needs.signers) requireAddress(s, "needs.signers");
+  const t = Number(needs.threshold);
+  if (!Number.isInteger(t) || t < 1 || t > needs.signers.length) fail("The file's signature threshold is not in the expected format.");
+  return { account: needs.account, signers: needs.signers.slice(), threshold: t };
+}
+
+/**
+ * Check a prepared transaction file before anyone signs or sends it, with
+ * the signer's own ABIs and pinned addresses (never the file's word):
+ * the network and chain id, that the id is the hash of the header and the
+ * header commits to exactly these operations, that every operation is a
+ * call to Ink, Shop or Stories (pinned on mainnet) whose entry point and
+ * argument bytes are exactly the described method and arguments. Returns
+ * { tx, ops: [{ contract, contractId, method, description, args }] } with
+ * the arguments decoded from the bytes, for the summary.
+ * `deps` is { koilib, abiFor(contract), flags }.
+ */
+async function verifyPrepared(file, net, deps) {
+  const { Transaction, Contract } = deps.koilib;
+  if (!file || file.format !== PREPARED_FORMAT) fail("That is not a SwarmTales prepared transaction file.");
+  if (file.network !== net.key) {
+    fail("That file is for " + file.network + ", but this run is on " + net.key + ". Use --network " + file.network +
+      (file.network === "mainnet" ? " " + MAINNET_FLAG : "") + ". Nothing was signed.");
+  }
+  const tx = file.transaction || {};
+  const header = tx.header || {};
+  if (file.chain_id !== net.chainId || header.chain_id !== net.chainId) fail("The file's chain id is not " + net.name + "'s. Nothing was signed.");
+  for (const key of Object.keys(header)) if (!PREPARED_HEADER_KEYS.includes(key)) fail("The transaction header has an unexpected field '" + key + "'. Nothing was signed.");
+  for (const key of Object.keys(tx)) if (!["id", "header", "operations", "signatures"].includes(key)) fail("The transaction has an unexpected field '" + key + "'. Nothing was signed.");
+  if (!/^[1-9][0-9]*$/.test(String(header.rc_limit || ""))) fail("The transaction's mana limit (rc_limit) is missing.");
+  nonceNumber(header.nonce);
+  requireAddress(header.payer, "payer");
+  if (header.payee !== undefined) requireAddress(header.payee, "payee");
+  const sigs = tx.signatures || [];
+  if (!Array.isArray(sigs) || sigs.some((s) => typeof s !== "string" || !/^[A-Za-z0-9_-]+={0,2}$/.test(s))) fail("The file's signatures are not in the expected format.");
+  const ops = tx.operations;
+  const described = file.operations;
+  if (!Array.isArray(ops) || !Array.isArray(described) || !ops.length || ops.length !== described.length || ops.length > PREPARED_MAX_OPS) {
+    fail("The file's operations don't match its description. Nothing was signed.");
+  }
+  // The id must be the hash of this header, and the header must commit to these operations.
+  const again = { header: Object.assign({}, header), operations: ops };
+  delete again.header.operation_merkle_root;
+  await Transaction.prepareTransaction(again);
+  if (again.header.operation_merkle_root !== header.operation_merkle_root || again.id !== tx.id) {
+    fail("The transaction id or its operation fingerprint does not match the operations in the file. It was changed. Nothing was signed.");
+  }
+  const out = [];
+  const warnings = [];
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i];
+    const d = described[i] || {};
+    const call = op && op.call_contract;
+    if (!call || Object.keys(op).length !== 1) fail("Operation " + (i + 1) + " is not a contract call. This tool only signs calls to Ink, Shop and Stories.");
+    if (!CONTRACT_ROLES.includes(d.contract)) fail("Operation " + (i + 1) + " is not a call to Ink, Shop, Stories, the sponsor or the multisig.");
+    if (call.contract_id !== d.contract_id) fail("Operation " + (i + 1) + " calls " + call.contract_id + " but says " + d.contract_id + ". Nothing was signed.");
+    const warn = checkPinned(net, d.contract, call.contract_id, deps.flags || {}, false);
+    if (warn) warnings.push(warn);
+    const abi = deps.abiFor(d.contract);
+    const method = abi.methods[d.method];
+    if (!method || method.read_only) fail("Operation " + (i + 1) + ": " + d.contract + " has no write method '" + d.method + "'.");
+    if (call.entry_point !== method.entry_point) fail("Operation " + (i + 1) + " calls a different entry point than " + d.contract + "." + d.method + ". Nothing was signed.");
+    const c = new Contract({ id: call.contract_id, abi });
+    const expected = await c.encodeOperation({ name: d.method, args: d.args || {} });
+    if (expected.call_contract.args !== call.args) fail("Operation " + (i + 1) + "'s arguments are not the ones it describes. Nothing was signed.");
+    const decoded = await c.decodeOperation(op);
+    if (decoded.name !== d.method) fail("Operation " + (i + 1) + " decodes as " + decoded.name + ", not " + d.method + ". Nothing was signed.");
+    out.push({ contract: d.contract, contractId: call.contract_id, method: d.method, description: method.description || "", args: decoded.args || {} });
+  }
+  return { tx, ops: out, warnings, needs: checkNeeds(file.needs) };
+}
+
+/** The human summary every signer reads before signing, and `submit` shows before sending. */
+function preparedSummary(net, file, checked, signedBy) {
+  const h = checked.tx.header;
+  const lines = [
+    "Network:   " + net.name + " (chain id checked)",
+    "Prepared:  " + (file.prepared_at || "?") + " by the '" + (file.command || "?") + "' command",
+    "Payer:     " + h.payer + "  (pays the mana)" + (h.payee ? "\nPayee:     " + h.payee + "  (its nonce is used)" : ""),
+    "Nonce:     " + nonceNumber(h.nonce) + "  (of " + (h.payee || h.payer) + "; only one transaction can use it)",
+    "Mana limit:" + " " + formatMana(h.rc_limit),
+    "Transaction id: " + checked.tx.id,
+    "Operations (decoded from the bytes with this computer's own ABIs):",
+  ];
+  checked.ops.forEach((o, i) => {
+    lines.push("  " + (i + 1) + ". " + o.contract + " " + o.contractId + " ." + o.method + (o.description ? "  (" + o.description + ")" : ""));
+    lines.push("     " + JSON.stringify(o.args));
+  });
+  if (checked.needs) {
+    const n = checked.needs;
+    lines.push("Needs:     " + n.threshold + " of these " + n.signers.length + " signers of the multisig " + n.account + ":");
+    n.signers.forEach((s, i) => lines.push("             " + (i + 1) + ". " + s + (signedBy.includes(s) ? "  (signed)" : "")));
+  }
+  lines.push("Signatures so far: " + (signedBy.length ? signedBy.join(", ") : "none"));
+  return lines;
 }
 
 module.exports = {
@@ -814,6 +1457,9 @@ module.exports = {
   planTestWrite,
   shopAddressesForStories,
   NETWORKS,
+  MAINNET_PINNED,
+  PIN_OVERRIDE_FLAG,
+  HASH_OVERRIDE_FLAG,
   MAINNET_FLAG,
   MAINNET_UPGRADE_FLAG,
   checkUpgrade,
@@ -835,31 +1481,65 @@ module.exports = {
   fail,
   isAddress,
   requireAddress,
+  wholeInRange,
   parseArgs,
+  checkCommandArgs,
+  BOOLEAN_FLAGS,
   MODERATION_REASONS,
   requireReason,
   takedownStrike,
+  takedownReview,
   UNSEEN_CHANGER,
   requireSetOnce,
   SHOP_MOVE_HELP,
-  legacyPartNotes,
   versionHistory,
   VERSIONS_PER_READ,
   readVersions,
   versionPage,
+  readSegments,
+  bookText,
+  requireNeedsNewPdf,
+  requirePdfUri,
   hidePlan,
   resolveNetwork,
   checkChainId,
+  checkPinned,
+  checkPinnedFlags,
+  refuseCrossNetworkKey,
+  parseReleaseHashes,
+  sha256Hex,
+  checkWasmHash,
+  planSponsorConfig,
+  planPrices,
+  planInkAmounts,
+  parseTokenAmount,
+  planMultisigSigners,
+  codeHashFromMeta,
+  checkCodeHash,
+  planModeration,
+  CONTRIBUTION_CAP_MAX,
+  planStoriesLimits,
+  ASSET_WAIT_SECONDS,
+  utcTime,
+  planAsset,
+  requireUsableAsset,
+  membershipMinInk,
+  requireTerminal,
   classifySecret,
   checkSignerAddress,
   formatMana,
+  parseMana,
   rcLimitFor,
   isConfirmation,
-  checkWasmHash,
-  refuseSecretFlag,
   requireTestnet,
   newLinkKeyHex,
   toKoilibAbi,
+  PREPARED_FORMAT,
+  DEFAULT_PREPARED_RC,
+  nonceNumber,
+  preparedFile,
+  verifyPrepared,
+  preparedSummary,
   PROMO_DOMAIN,
   INVITE_DOMAIN,
   promoMessage,

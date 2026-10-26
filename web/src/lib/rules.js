@@ -4,18 +4,23 @@
  * why a click would fail, in the same cases the contracts refuse.
  */
 
-import { BOOK_MAX, BOOK_MIN, checkStoryText, checkTitle, SHORT_MAX, SHORT_MIN } from "./text.js";
+import { BOOK_MAX, BOOK_MIN, checkStoryText, checkTitle, POEM_MAX, POEM_MIN, SHORT_MAX, SHORT_MIN } from "./text.js";
 import { asWhole } from "./money.js";
 
 export const STORY_STATUS_OPEN = 1;
 export const VIS_PUBLIC = 1;
-export const VIS_UNLISTED = 2;
 export const VIS_PRIVATE = 3;
 export const KIND_BOOK = 1;
 export const KIND_SHORT = 2;
+export const KIND_POEM = 3;
+
+/** Each kind's length range and name, as the Stories contract has them. */
+export const KIND_RULES = {
+  [KIND_BOOK]: { min: BOOK_MIN, max: BOOK_MAX, name: "book", article: "A book" },
+  [KIND_SHORT]: { min: SHORT_MIN, max: SHORT_MAX, name: "short story", article: "A short story" },
+  [KIND_POEM]: { min: POEM_MIN, max: POEM_MAX, name: "poem", article: "A poem" },
+};
 export const TIER_WRITER = 2;
-export const ITEM_WRITER_MONTH = 2;
-export const ITEM_OPEN_SHORT = 7;
 
 export function isActiveWriter(membership, nowSeconds) {
   const tier = Number(membership && membership.tier ? membership.tier : 0);
@@ -81,9 +86,8 @@ export function assessWrite(input) {
   }
   const privileged = !!input.privileged;
   const visibility = Number(input.visibility || 0);
-  // Private stories (and older "unlisted" ones, which work the same way) are invite-only, and paid from the
-  // writers' pool while it has enough.
-  const inviteOnly = visibility === VIS_PRIVATE || visibility === VIS_UNLISTED;
+  // Private stories are invite-only, and paid from the writers' pool while it has enough.
+  const inviteOnly = visibility === VIS_PRIVATE;
   const fund = whole(input.fund, "writers' pool", 0n);
   const fundPays = inviteOnly && textCheck.ok && fund >= cost;
   if (textCheck.ok && !fundPays && balance != null && cost > balance) {
@@ -133,9 +137,9 @@ export function assessOpen(input) {
   const cost = textCheck.ok ? BigInt(textCheck.cost) : 0n;
   if (!textCheck.ok) problems.push("Opening text: " + textCheck.reason);
 
-  const isBook = Number(input.kind || KIND_SHORT) === KIND_BOOK;
-  const lo = isBook ? BOOK_MIN : SHORT_MIN;
-  const hi = isBook ? BOOK_MAX : SHORT_MAX;
+  const rules = KIND_RULES[Number(input.kind || KIND_SHORT)] || KIND_RULES[KIND_SHORT];
+  const lo = rules.min;
+  const hi = rules.max;
   const range = lo.toLocaleString("en-US") + " to " + hi.toLocaleString("en-US");
   // No length (or 0) means open-ended: the story may grow to the kind's
   // maximum and can be finished once it reaches the minimum.
@@ -147,7 +151,7 @@ export function assessOpen(input) {
     problems.push("Length must be a whole number from " + range + ".");
   }
   if (maxChars != null && (maxChars < BigInt(lo) || maxChars > BigInt(hi))) {
-    problems.push((isBook ? "A book" : "A short story") + " must be " + range + " characters.");
+    problems.push(rules.article + " must be " + range + " characters.");
   }
 
   const cap = whole(input.cap, "cap", null);
@@ -169,7 +173,7 @@ export function assessOpen(input) {
   if (c2 && c2 === c1) problems.push("The two categories must be different.");
 
   const visibility = Number(input.visibility || 0);
-  if (visibility !== VIS_PUBLIC && visibility !== VIS_UNLISTED && visibility !== VIS_PRIVATE) {
+  if (visibility !== VIS_PUBLIC && visibility !== VIS_PRIVATE) {
     problems.push("Pick Public or Private.");
   }
 
@@ -192,7 +196,7 @@ export function assessOpen(input) {
     problems.push("You already have the maximum number of open projects (" + openLimit + ").");
   }
 
-  const inviteOnly = visibility === VIS_UNLISTED || visibility === VIS_PRIVATE;
+  const inviteOnly = visibility === VIS_PRIVATE;
   let fund = 0n;
   try {
     fund = inviteOnly ? asWhole(input.fund == null || input.fund === "" ? "0" : input.fund, "writers' pool") : 0n;
@@ -200,7 +204,7 @@ export function assessOpen(input) {
     problems.push("The writers' pool must be a whole number of Ink.");
   }
   if (inviteOnly && fund < BigInt(lo)) {
-    problems.push("A private " + (isBook ? "book" : "short story") + " needs a writers' pool of at least " +
+    problems.push("A private " + rules.name + " needs a writers' pool of at least " +
       lo.toLocaleString("en-US") + " Ink, enough for the story to reach the length where it can be finished.");
   }
 
@@ -218,7 +222,7 @@ export function assessOpen(input) {
   const multiplier = BigInt(Math.max(1, Number(input.multiplier || 1)));
   const price = basePrice == null ? null : basePrice * multiplier;
   const tokenBalance = whole(input.tokenBalance, "token balance", null);
-  if (price == null || price === 0n) problems.push("Opening " + (isBook ? "a book" : "a short story") + " has no price in this token yet.");
+  if (price == null || price === 0n) problems.push("Opening " + (rules.article.replace(/^A /, "a ")) + " has no price in this token yet.");
   if (price != null && tokenBalance != null && tokenBalance < price) {
     problems.push("Your token balance is below the open price.");
   }
@@ -252,4 +256,19 @@ export function assessPromo(input) {
   if (input.paused) problems.push("The Shop is paused.");
   if (input.promoEnabled === false) problems.push("Promo claims are turned off.");
   return { ok: problems.length === 0, problems };
+}
+
+/**
+ * The least Ink per month a Writer purchase must bring (buy_membership's
+ * min_ink, audit M-2): what the page shows. A beneficiary already in a
+ * Writer term keeps that term's ink_per_month; otherwise the catalog's
+ * writer_ink applies. Returned as a whole-number string.
+ */
+export function writerMinInk(beneficiaryMembership, nowSeconds, shopCfg) {
+  if (isActiveWriter(beneficiaryMembership, nowSeconds)) {
+    const term = String((beneficiaryMembership && beneficiaryMembership.ink_per_month) || "0");
+    if (/^[1-9][0-9]*$/.test(term)) return term;
+  }
+  const catalog = String((shopCfg && shopCfg.writer_ink) || "0");
+  return /^(0|[1-9][0-9]*)$/.test(catalog) ? catalog : "0";
 }

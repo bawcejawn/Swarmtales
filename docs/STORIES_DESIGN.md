@@ -1,25 +1,22 @@
-# SwarmTales Stories contract: design spec
+# SwarmTales Stories contract: design reference
 
-Status: **Decisions answered by Carl (19 October 2026). Built and unit-tested in the working copy `/workspace/st-stories` (`stories/`). Not uploaded anywhere, nothing committed or pushed, not audited.**
-Based on: the settled design conversation (`storyloom/claude-conversation.md`; Storyloom is the old name of SwarmTales) and the repo at commit `02885a4` (Ink `assembly/Ink.ts`, Shop `shop/assembly/Shop.ts`, both `.proto` files, `README.md`, `docs/TESTNET_DEPLOY.md`).
+Status: current as of the 2026-10 mainnet audit fixes (branch `audit-2026-10-fixes`). This page describes the contract as built. Who can do what is in [ADMIN_POWERS.md](ADMIN_POWERS.md), including the table of what works at each stage of a story. The code is `stories/assembly/`: `Stories.ts` (reads, opening, writing, the final edit, archive), `StoriesAdmin.ts` (moderation and settings), `StoriesBase.ts` (storage and shared helpers) and `lib/` (fixed rules, keys, text checks).
 
-How to read this: every rule includes a short "why". Section 13 records your answers to the open questions. Section 14 lists places where the conversation and the code disagreed, and what was decided for each. Section 16 lists where the built contract differs from the earlier draft, and why.
+Every rule below has a short "why".
 
 ---
 
 ## 1. Purpose
 
-Stories is the contract that holds the books and short stories. It is where Ink gets **spent**.
+Stories holds the books and short stories, and it is where Ink gets **spent**.
 
-- Opening a story (a Book or a Short Story) collects the open fee through Shop, and Shop mints the opener's starter Ink.
-- Writing burns the writer's Ink: 1 Ink per character, and a typical emoji costs 2 (see section 6).
-- It records **who wrote what, when, and for how much Ink**, permanently and publicly. This is the "accurate, tamper-resistant tracking" requirement.
-- It enforces the rules: size ranges, the 3-open-projects limit, private allow-lists, the 1,000-character promo trial, the 60-day archive, editor edits and removals, **automatic Ink refunds** to the original author, the final AI-edit pass, and the admin-finalize rule.
-- It does **not** hold money. All stablecoin payments still go through Shop, which splits them 99% treasury / 1% founder.
+- Opening a story collects the open fee through Shop, and Shop mints the opener's starter Ink.
+- Writing burns the writer's Ink: one Ink per UTF-16 text unit (section 6).
+- It records **who wrote what, when, and for how much Ink**, permanently and publicly.
+- It enforces the rules: sizes, open-project limits and price doubling, private stories with invites and a writers' pool, the promo trial, paid changes, refunds, moderation, the final edit, archiving and the admin-finalize rule.
+- It never holds money. Stablecoin payments go through Shop.
 
-Why one contract for all stories: deploying a new contract per book would cost far more Mana. It would also scatter the history across many addresses.
-
----
+*Why one contract for all stories:* a contract per book would cost far more Mana and scatter the history.
 
 ## 2. How it fits with Ink and Shop
 
@@ -27,410 +24,178 @@ Why one contract for all stories: deploying a new contract per book would cost f
  Writer's wallet signs ONE transaction
         │
         ▼
-   ┌─────────┐  pay_open_fee / pay_close_fee   ┌──────┐  stablecoin transfer  ┌────────────┐
-   │ Stories │ ──────────────────────────────► │ Shop │ ────────────────────► │ vUSDT etc. │
-   │         │                                 │      │ ──mint STARTER──┐     └────────────┘
-   │         │  get_membership / promo check   │      │                 │
-   │         │ ◄────────────────────────────── │      │                 ▼
-   │         │                                 └──────┘            ┌───────┐
-   │         │ ── burn (CONTRIBUTION) ───────────────────────────► │  Ink  │
-   │         │ ── mint (REFUND only) ────────────────────────────► │       │
-   └─────────┘                                                     └───────┘
-        ▲
-        └── Books NFT (later) READS Stories. Stories never calls Books.
+   ┌─────────┐  pay_open_fee (max_price, min_ink)  ┌──────┐  stablecoin transfer  ┌────────────┐
+   │ Stories │ ──────────────────────────────────► │ Shop │ ────────────────────► │ stablecoin │
+   │         │  get_membership / get_promo_claimed │      │ ──mint STARTER──┐     └────────────┘
+   │         │ ◄────────────────────────────────── │      │                 ▼
+   │         │ ── burn (CONTRIBUTION) ───────────────────────────────► ┌───────┐
+   │         │ ── mint (REFUND only) ────────────────────────────────► │  Ink  │
+   └─────────┘                                                         └───────┘
 ```
 
-**Nothing in Ink or Shop has to change for Stories to work.** The current code already has what Stories needs:
-- **Ink:** `burn` (approved burner plus the owner's signature), and `mint` with reason `MINT_REFUND` (5).
-- **Shop:** `pay_open_fee` and `pay_close_fee` (Stories-only, through `config.stories`), plus the `get_membership` and `get_promo_claimed` reads.
+| Call | Entry point id | Arguments |
+|---|---|---|
+| `Ink.burn` | `0x859facc5` | `from` = the signer, `value`, reason 1, memo `s:`/`e:`/`c:<story>:<seq>` or `fund:<story>` |
+| `Ink.mint` (refund) | `0xdc6f17bb` | `to` = the part's writer or the opener (pool), reason 5, memo `r:<story>:<seq>` or `fund-back:<story>` |
+| `Shop.pay_open_fee` | `0x20a2e01e` | payer, kind, token, price multiplier, `max_price`, `min_ink` |
+| `Shop.get_membership` | `0x7701bbeb` | account |
+| `Shop.get_promo_claimed` | `0x280e7ef7` | account |
 
-So the current Ink/Shop testnet redeploy can go ahead unchanged.
+- Every outgoing call must exit with code 0 and must not answer a protobuf `false` (`08 00`), or the whole transaction fails.
+- State is written before Ink and Shop are called, and a reentrancy lock is held for the whole call.
+- Every outgoing call is recorded in an `external_call_event` with the exact bytes sent.
+- Every entry point must be called directly by a transaction, never through another contract (fix H1).
+- The Ink and Shop addresses are each set once (AB-037, AB-050).
 
-Why Books reads Stories rather than Stories calling Books: Stories can ship and be tested before Books exists. A Books bug also can never block a story from finalizing.
+**Wiring** (`deploy.js wire-stories`, one transaction, after `set-admin`): `stories.set_addresses(ink, shop)`, `ink.set_burner(Stories, true)`, `ink.set_minter(Stories, 32)` (REFUND only), `shop.set_addresses(treasury, founder, ink, Stories)` (Shop's Stories address is set once too), and the starting categories. The tool checks each contract's code hash against `deploy/release-hashes.json` first.
 
----
+## 3. Stored data
 
-## 3. What is stored
+### 3.1 Story
+`kind` (Book 1, Short 2), `opener`, `title` (1–100), two categories, `visibility` (Public 1, Private 3; Unlisted 2 is retired), `status`, `max_chars`, `used_chars`, `total_burned` / `total_refunded` (refunds can never pass burns, per story), counters, `free_chapters` (a website soft gate), `contributor_edition_min`, `created_at`, `last_activity_at` and `opener_last_active` (on the activity clock, section 4), `locked_at`, `admin_finalize_requested`, `finalizer_is_admin`, `final_cursor`, `running_hash`, `revived`, `pdf_uri` / `pdf_hash` (the book page link and the text hash), `editor_count`, `next_invite_id`, `hidden_count` (blocks finalizing while above 0), `needs_new_pdf`, the private-story pool (`fund`, `fund_added`), and the summary ("the story so far", up to 1,500 characters).
 
-All amounts are whole numbers. All times are **seconds** (the chain gives milliseconds; Stories divides by 1000, same as Shop).
+### 3.2 Part (segment, key story id + sequence number)
+`author`, `text`, `text_hash`, `original_cost`, `charged` (what the writer or pool paid and hasn't had back), `current_cost`, status (Active, Removed), chapter and AI flags, timestamps, final-edit fields, moderation fields (`hidden`, `hidden_by` 1 reports / 2 checker / 3 admin, `taken_down`, reason, `report_count`, `restored`, `refund_forfeited`), the writer's rights confirmation and Terms version, `insert_after`, `fund_paid` and `own_paid`, `citation` and the checker's `source_note`, `version_count`, `edited_by_others`, `paid_changes`.
 
-### 3.1 Story record (one per story, ids 1, 2, 3, …)
-| Field | Meaning |
-|---|---|
-| `kind` | BOOK or SHORT_STORY (same numbers as Shop's `story_kind`: 1 and 2) |
-| `opener` | Wallet that opened it. Never changes |
-| `title` | 1–100 characters, same character rules as story text, no Ink charge (the open fee covers it) |
-| `categories` | 1 or 2 category ids from the admin's list |
-| `visibility` | PUBLIC, UNLISTED (hidden from the gallery, anyone with the link may write), or PRIVATE (allow-list only) |
-| `status` | OPEN → LOCKED → EDITING → FINALIZED, or OPEN → ARCHIVED (section 4) |
-| `max_chars` | Chosen at opening within the kind's range. Fixed for this story forever |
-| `used_chars` | Current size of all live text, in Ink units |
-| `total_burned`, `total_refunded` | Lifetime Ink burned and refunded for this story. Used for an on-chain safety check (section 11) |
-| `segment_count`, `chapter_count`, `contributor_count` | Counters for the gallery and credits pages |
-| `free_chapters` | How many chapters the website shows to non-members (0–5, default 1; soft gate, UI only) |
-| `contributor_edition_min` | Surviving characters needed for a free Contributor Edition later (default 1,000) |
-| `created_at`, `last_activity_at`, `opener_last_active`, `locked_at` | Timestamps for the archive and admin-finalize rules |
-| `admin_finalize_requested` | The opener's "admin, please finalize" flag |
-| `finalizer` | Who runs the final edit: the opener, or the admin under the admin rule |
-| `close_fee_paid` | Whether the close fee was collected |
-| `final_cursor`, `running_hash` | Progress through the final edit, and the on-chain fingerprint of the final text |
-| `revived` | Whether the one free revive has been used |
-| `pdf_uri`, `pdf_hash` | Final PDF link (IPFS) and its hash, set at finalize |
+### 3.3 Other storage
+Editors (at most 10 per story), the allow-list and the wallets an opener or editor removed from it, invites (only the public address of each link key), contributor and surviving totals, live parts per writer, trial use, open-project counts, the append-only lists for the website (by opener, category, author, reading places), categories, reports, the per-story list of text hashes, Terms acceptance, account status (strikes, blocked), kept versions, and the changers of each part.
 
-### 3.2 Segment (one per contribution: `story id + sequence number`)
-| Field | Meaning |
-|---|---|
-| `author` | Who wrote it. Refunds always go here, never to an editor |
-| `text` | The text itself, stored on-chain. Cleared from contract storage on removal (the transaction history still has it) |
-| `text_hash` | sha256 of the current text, so anyone can verify it |
-| `original_cost` | Ink cost when first submitted. Never changes |
-| `charged` | Ink currently "paid in" for this segment. Only ever goes down (through refunds) |
-| `status` | ACTIVE or REMOVED |
-| `starts_chapter` | Whether this segment starts a new chapter |
-| `ai_assisted` | Self-declared by the writer. The chain can't verify it; it's an honesty flag |
-| `created_at`, `last_edited_by`, `last_edited_at` | Audit trail |
-| `final_mode`, `final_text`, `surviving` | Filled in during the final edit (section 5.4) |
+### 3.4 Settings and their fixed bounds
+| Setting | Default | Bounds (code) |
+|---|---|---|
+| Per-part size cap | 6,000 | 100–6,000 |
+| Promo trial per wallet | 1,000 | 0–5,000 |
+| Open projects per wallet | 10 | 1–10 |
+| Normal-price projects, price ceiling | 3, 4× | 1–10, 1–1,024× |
+| Shortest new text | 20 | 1–200 |
+| Archive after inactivity | 60 days | 30–365 |
+| Admin-finalize inactivity | 30 days | 30–365 |
+| Writer reports that hide a part, strike limit | 3, 5 | 1–20, 1–20 |
 
-### 3.3 Per-wallet and per-story lookups
-- `contributor_totals[story, author]`: live Ink-backed characters before the final edit.
-- `surviving_totals[story, author]`: set during the final edit. **This is the only source for credits pages and Contributor Edition eligibility**, as you decided.
-- `editors[story, wallet]`: at most 10 editors per story.
-- `allowed[story, wallet]`: the private-book allow-list.
-- `invites[story, invite_id]`: `{ code_hash, max_uses, uses, expires_at, revoked }`.
-- `trial_used[wallet]`: lifetime characters written under the promo trial.
-- `open_count[wallet]`: the opener's active projects (OPEN, LOCKED, or EDITING). The limit is 3.
-- Append-only lists for the website, so there's no paid indexer: `stories_by_opener[wallet]`, `stories_by_category[cat]`, and `segments_by_author[wallet]` (for "My Contributions").
-- `categories[id]`: `{ name, active }`. Admin-managed; starts with the 11 agreed categories.
+**Fixed in code:** Book 100,000–1,000,000 characters, Short Story 10,000–99,999, Poem 50–25,000 (0 at opening means up to the kind's maximum). A story within 100 characters of its own maximum (10 for a Poem) may close below the kind minimum. A private story's writers' pool must be at least the kind minimum (50 Ink for a Poem). Each kind has its own open price (Shop items 6, 7 and 10) and starter Ink. *Why:* openers sign up for these; changing them needs a published upgrade.
 
-### 3.4 Config
-`admin`, `paused`, `ink` address, `shop` address, and the adjustable limits. Each limit sits inside a hard-coded floor or ceiling, the same idea as Shop's 5% fee cap. That way an admin can't quietly make the rules harsher than the published bounds.
-
-| Setting | Start | Admin may set | Hard bound (code only) | Why bounded |
-|---|---|---|---|---|
-| Per-contribution cap | 2,000 Ink | 100–4,000 | 4,000 | Transaction size and Mana. Confirm the number on testnet |
-| Trial limit (promo writers) | 1,000 | 0–5,000 | 5,000 | Limits what a farmed wallet can spray |
-| Open projects per wallet | 3 | 1–10 | 10 | Spam |
-| Archive after inactivity | 60 days | 30–365 days | min 30 days | So stories can't be archived out from under people |
-| Admin-finalize inactivity | 30 days | 30–365 days | **min 30 days** | So the admin can't shrink it and grab books |
-
-**Fixed in code, not admin settings:** Book 100,000–1,000,000 characters, Short Story 10,000–99,999. These are the rules openers sign up for. Changing them takes a published upgrade, so nobody's goalposts move mid-story. Each story also keeps its own `max_chars` permanently.
-
----
+*Why 6,000:* a part, its versions and a page of reads stay well inside a node's read limit even in a three-byte script (audit M-5).
 
 ## 4. Life of a story
 
 ```
-open_story ──► OPEN ──(used_chars reaches max_chars, automatic)──► LOCKED
-                │  ▲                                                 │
-                │  └─ revive (opener, once, free)                    │
-                ▼                                                    │
-            ARCHIVED (no activity for 60 days; anyone may trigger)   │
-                                                                     │
-OPEN with close minimum met ──close_story (opener pays fee)──┐       │
-LOCKED ───────────────────────close_story (opener pays fee)──┤ ◄─────┘
-LOCKED / close-ready + admin rule ──admin_take_over (no fee)─┤
-                                                             ▼
-                                                          EDITING ──finalize──► FINALIZED
+open_story ──► OPEN ──(used_chars reaches max_chars)──► LOCKED
+                │  ▲                                       │
+                │  └─ revive (opener, once, free)          │
+                ▼                                          │
+            ARCHIVED (text and opener quiet for 60 days)    │
+OPEN with the close minimum met ──close_story (free)──┐    │
+LOCKED ───────────────────────────close_story (free)──┤ ◄──┘
+admin rule ───────────────────────admin_take_over─────┤
+                                                      ▼
+                                                   EDITING ──finalize──► FINALIZED
 ```
 
-- **Close minimum:** Book 100,000, Short Story 10,000. There's one extra rule: closing is also allowed once the story is within 100 characters of its own `max_chars`. *Why:* a 100,000-character Book filled to 99,998 can never auto-lock, because no contribution fits the last 2 characters, and it can't meet the 100,000 minimum either. Without this rule it would be stuck forever.
-- **LOCKED never reopens.** Edits stop at lock; the final edit is the only change after that.
+- **Close minimum:** the kind's minimum length, or within 100 characters of the story's own `max_chars`. *Why:* a Book at 99,998 of 100,000 could otherwise never close.
+- **A locked story reopens only after a takedown frees space.**
+- **The activity clock.** `last_activity_at` and `opener_last_active` are wall time minus every second Stories spent paused (`config.paused_seconds`, plus the current pause). It stands still while paused. *Why:* a long pause must never make stories archivable or open to an admin take-over (audit M-1).
+- **Archiving** needs both the text and the opener to have been quiet for the archive period. *Why:* a story its opener still manages stays open (audit S2-06). The pool goes back to the opener; writers' Ink stays spent.
+- **Revive** is free, once, only while the opener's next project would still be at the normal price (audit S2-03). A story archived a second time stays archived.
+- **Admin take-over:** the opener asked, or has been inactive for the inactivity period, and the story is LOCKED, close-ready, or in the opener's final edit. Not while paused.
 
----
+## 5. Entry points
 
-## 5. Entry points (who may call, what it costs)
-
-Every action takes the acting wallet as an argument and requires that wallet's signature (`System.checkAuthority`, same as Shop). Every write fails while Stories is paused. Ink costs below are in Ink units (section 6). "Opener activity" means the call refreshes `opener_last_active` when the opener makes it.
+Every action takes the acting wallet as an argument and requires its signature. Where each works by stage, and while paused, is in the table in ADMIN_POWERS.md.
 
 ### 5.1 Opening and settings
-| Entry point | Who | Costs | What it does |
+| Entry point | Who | Cost | Rules |
 |---|---|---|---|
-| `open_story(opener, kind, title, max_chars, categories[1–2], visibility, free_chapters, contributor_edition_min, opening_text, ai_assisted, expected_ink, token)` | Anyone. **No membership needed** | Stablecoin open fee ($20 Book / $10 Short, through Shop) **plus** Ink for `opening_text` | Checks everything first (range, `open_count < 3`, title, categories, text). Then calls `Shop.pay_open_fee`, which takes the fee and mints the starter Ink (20k / 10k) to the opener. Then it burns Ink for the opening text from that same balance. All of this is **one transaction**: any failure undoes all of it. Promo Ink can't open a story, because the fee is mandatory. |
-| `update_story(opener, story, title, category_1, category_2, visibility, free_chapters)` | Opener; not FINALIZED | Free (Mana only) | Settings. Opener activity |
-| `set_editor(opener, story, wallet, allowed)` | Opener (not blocked); not FINALIZED | Free | At most 10 editors |
-| `set_allowed(actor, story, wallets[≤20], allowed)` | Opener or editor (not blocked) | Free | Private allow-list |
-| `create_invite(story, link_signer, max_uses, expires_at)`, `revoke_invite` | Opener | Free | Stores only the **public address** of a per-link key. The private key lives in the invite link, never on chain (fix H2) |
-| `join_with_invite(wallet, story, invite_id, signature)` | Anyone with the link | Free | Adds the caller if the link key's signature over (contract, story, invite, **this wallet**) checks out, and the invite isn't revoked or expired and has uses left. A copied signature can't be reused for another wallet |
+| `open_story` | anyone not blocked | open fee (through Shop, × the price multiplier) plus Ink for the opening text, plus the pool for a private story | Checks everything first, then Shop takes the fee within `max_price` and mints at least `min_ink` starter Ink, then the opening text is burned, then the pool. One transaction. |
+| `update_story` | opener | free | Title, categories, visibility, free chapters. Public → Private needs the pool minimum. |
+| `set_editor` | opener | free | At most 10 editors. |
+| `set_allowed` | opener or editor | free | Up to 20 wallets per call. A removed wallet can't rejoin with an invite. |
+| `create_invite`, `revoke_invite` | opener | free | Only the public address of a per-link key is stored (fix H2). |
+| `join_with_invite` | the wallet the link signature names | free | Not revoked, not expired, uses left, not blocked. |
+| `top_up_fund` | opener | Ink | Private stories only, while open. |
 
-The wallet signs the opening as two operations in one transaction, the same pattern Shop already uses: (1) `approve` **Shop** (not Stories) to spend the open fee in the stablecoin, then (2) `Stories.open_story`. Shop is the contract that moves the stablecoin, so Shop is the one that needs the allowance.
-
-### 5.2 Writing
-| Entry point | Who | Costs | Rules |
+### 5.2 Writing and changing text (story OPEN)
+| Entry point | Who | Cost | Rules |
 |---|---|---|---|
-| `contribute(author, story, text, starts_chapter, ai_assisted, expected_ink)` | See eligibility below | **Ink = cost of `text`** (burned) | Story OPEN. Text passes the character rules (section 6). `cost == expected_ink` (so the wallet can't be charged a surprise amount). `cost ≤ per-contribution cap`. `used_chars + cost ≤ max_chars` (rejected, never cut short). The Ink burn must succeed. If `used_chars` then equals `max_chars`, the story auto-locks. |
+| `contribute` | public: Writer month, opener/editor, or the promo trial; private: opener, editor or invited wallet, with a Writer month (not the opener) | Ink = the text's cost (from the pool in a private story while it has enough) | Cost equals `expected_ink`; at most the cap; fits the space; at least the minimum length unless it fills the story; rights confirmation and current Terms; optional `insert_after` or `after_my_last`. |
+| `edit_segment` | the part's writer (not blocked, part not hidden, still on a private story's list) | rewording free; added letters cost Ink (the writer pays) | Rights confirmation and current Terms (F-04). The cap stops growth only (S2-05). Growth price at most `max_ink` (AB-049). A cut refunds `charged − new cost` (AB-035, AB-044). Kept as a version. |
+| `remove_segment` | the part's writer (even blocked or removed from the list); the opener or an editor only for a report-hidden part | free | Refunds `charged` unless the admin or the checker hid it (AB-012) or a restored checker hide gave up the refund (AB-062). The removed text stays as a version (F-06). |
+| `revise_part` | anyone who may write there, except the part's writer | `max(10, letters added + removed) × 2^(paid changes + 1)`, paid by the changer, never the pool | Up to 60 paid changes; empty text removes the part and refunds its writer. The part stays its writer's. A used-up promo trial can't make paid cuts. |
+| `set_citation` | writer, opener or editor | free | Up to 200 characters. Someone else's citation counts as a change for strikes. |
+| `set_story_summary` | opener, editor, or a writer with a live part (on the list in a private story) | free | Up to 1,500 characters. Admin and moderator may clear it. |
+| `set_reading_place` | any wallet | free | The reader's bookmark. The website keeps places in the browser and writes them on request. |
 
-**Eligibility to contribute** (all must hold):
-1. If the story is PRIVATE: the author is the opener, an editor, or on the allow-list.
-2. **And one of:**
-   - the opener or an editor of this story (no membership needed, as decided),
-   - an **active Writer**, read from Shop (`tier == WRITER` and `paid_until > now`),
-   - a **promo claimer** (`Shop.get_promo_claimed != 0`) whose `trial_used + cost ≤ trial limit` (1,000). Trial use counts what was written, not what's left after refunds, so a refund doesn't reset the trial.
+**The same exact text goes into a story once** (F-03): every new text is checked against the story's list of text hashes, which records the part that first had each text. A new part may not repeat any text the story ever had (edited away, removed and taken-down text included), and an edit, paid change or final edit may not copy another part's text. A part may go back to its own earlier wording, so a paid change can restore a part's original. *Why:* stops re-posting the same text to reset its history.
 
-Lapsed Writers keep their Ink but fail check 2 until they renew, as decided. Active Writers never use up trial allowance.
+**Versions.** Every change to a part's text is kept as a version naming who made it: the original, the writer's edits (from version 99 on, an edit replaces the writer's own newest version), each paid change, a removal, and the final edit. A part has at most 220 versions, so a takedown can always wipe them in one call. `get_versions` returns at most 5 per call and stops at about 64 KB.
 
-### 5.3 Editing before lock (story OPEN)
-| Entry point | Who | Costs | Rules |
-|---|---|---|---|
-| `remove_segment(editor, story, seq)` | The part's writer (the opener or an editor only for a hidden part) | Free | Status → REMOVED; text cleared from storage (hash kept); **refund `charged`**: in a pool-paid part, first what the writer paid themselves (`own_paid`, Ink `mint`, reason REFUND), the rest back to the pool; otherwise all to the writer; `used_chars` drops, so the space reopens. |
-| `edit_segment(editor, story, seq, new_text, expected_cost, max_ink)` | The part's writer only (not blocked; not while the part is hidden) | Rewording is free; letters beyond the current length cost 1 Ink each, paid by the writer (never the pool) | New text passes the character rules and isn't empty (use remove instead). Shortening is always allowed. A cut **refunds** `charged − new_cost` when that is above 0 (pool-paid parts: `own_paid` to the writer first, the rest to the pool), also after someone else changed the part. `charged` is what the writer (or the pool) paid and hasn't had back; letters others added with `revise_part` are never in it, so nobody gets back more than they paid (AB-035), and trimming then growing back never charges twice (AB-044). Growth must fit within `max_chars`, and the growth price must be at most `max_ink` (the price the page showed), so a part someone cut meanwhile can't make the edit cost more than agreed (AB-049). Every edit is kept as a version (kind 4). |
-| `revise_part(writer, story, seq, text, expected_ink, …)` | Anyone who may write in the story, except the part's own writer | `max(10, letters added + removed) × 2^(paid changes + 1)`, paid by the changer, **never the pool** | Up to 60 paid changes per part; the writer's own edits never use up their room (AB-047). Empty text removes the part and refunds `charged`. A cut refunds the writer `charged − new_cost` when above 0, like their own cut. The changer's citation and AI flag are kept on the version; the copy checker's source note stays. |
+### 5.3 Closing and the final edit
+| Entry point | Who | Rules |
+|---|---|---|
+| `close_story` | opener | Free. OPEN with the close minimum, or LOCKED → EDITING. |
+| `request_admin_finalize` | opener | Sets or clears the flag. |
+| `admin_take_over` | admin | Section 4. |
+| `submit_final_batch` | finalizer | Up to 20 items and 20,000 units of new text, in order. UNCHANGED, EDITED (within the light-edit allowance `max(original ÷ 10, min(20, original))`, measured from the part's live length) or REMOVED. Hidden parts can only be removed. A blocked finalizer may only remove hidden parts (F-08). |
+| `advance_final_cursor` | anyone | Folds up to 50 removed parts into the final hash. |
+| `finalize` | finalizer | Every part processed, nothing hidden. Stores the book link and text hash. The pool goes back to the opener. |
 
-**Light-edit allowance** (the final edit only, since October 2026; from "reject edits that grow more than 10% or +20 for short segments"):
-`allowance = max(original_cost ÷ 10, min(20, original_cost))`.
-It's a fixed number per segment, added to the part's **live length** (`current_cost`), so a part others grew can still be trimmed (AB-056). The final edit touches each part once, so it can't stack.
+### 5.4 Moderation (StoriesAdmin.ts)
+`set_segment_hidden` (admin or moderator), `set_source_note` (admin or moderator), `restore_segment` (opener or editor, not an admin hide, not in a finished book), `takedown_segment` (admin; bound to the reviewed `text_hash` and `version_count`; strike rules in ADMIN_POWERS.md), `report_segment` (any wallet once per part, not on finished books; reports from wallets that have written count), `replace_pdf` (admin, after a takedown in a finished book).
 
-*Why this exact shape:* it closes two loopholes in the original wording.
-- **(a) Shrink-then-regrow refunds:** shrink a 2,000 segment to 1,000 (refund 1,000), then regrow it to 2,000 for free. With this formula, the regrow is capped at 1,200.
-- **(b) Padding tiny segments:** a flat "+20 free" would let a 1-character contribution become 21. With this formula, short segments can at most double.
+### 5.5 Admin settings (StoriesAdmin.ts)
+`set_addresses`, `set_limits`, `set_min_contribution`, `add_category`, `set_category_active`, `set_paused` (keeps `paused_at` and `paused_seconds`), `set_moderation`, `set_blocked`, `set_terms`, `set_admin` / `accept_admin` (two steps).
 
-**Not allowed:** an author editing or deleting their own segment after submitting. You decided "only an editor can remove." An author who wants a change asks the opener or an editor.
+### 5.6 Reads
+`get_config`, `get_story`, `get_segment`, `get_segments` (up to 10 parts and about 64 KB, with `next`), `get_versions`, `get_changers`, totals, editor/allow-list/invite reads, trial use, open count and the next price multiplier, categories, the list reads (up to 50), reports, account status, Terms acceptance, reading places, and `quote_cost(text)`.
 
-### 5.4 Closing and the final edit
-| Entry point | Who | Costs | Rules |
-|---|---|---|---|
-| `close_story(opener, story, token)` | Opener | **Stablecoin close fee** ($5 Book / $2 Short, through `Shop.pay_close_fee`), with the same approve-Shop step as opening | Story OPEN with the close minimum met, or LOCKED. → EDITING, `finalizer = opener` |
-| `request_admin_finalize(opener, story, on/off)` | Opener | Free | Sets the flag |
-| `admin_take_over(story)` | Stories admin | **No fee** (waived, as decided) | Allowed only if (a) the opener's flag is set, **or** (b) the opener has been inactive ≥ 30 days **and** the story is LOCKED, close-ready, or EDITING with the opener as finalizer. → EDITING, `finalizer = admin` |
-| `submit_final_batch(finalizer, story, items[≤20])` | Finalizer only | Free | Items must go in order, starting at `final_cursor`; segments already removed are filled in automatically. Each item is UNCHANGED, EDITED (new text, light-edit rule applies), or REMOVED. Refunds follow the reimbursement rules. `surviving = min(final_cost, charged)`, added to `surviving_totals`. `running_hash = sha256(previous hash ‖ seq ‖ sha256(final text))`. UNCHANGED stores no second copy of the text. |
-| `finalize(finalizer, story, pdf_uri, pdf_hash)` | Finalizer only | Free | Every segment is processed (`final_cursor == segment_count`). Stores the PDF link and hash. → FINALIZED; `open_count` drops by 1 |
+## 6. Character counting
 
-Every AI suggestion is accepted or rejected by the finalizer **in the browser** before the batch is signed. The contract can't see the AI. It only enforces "light edits only" (the growth limit) and "refunds go to the author."
-
-### 5.5 Archive
-| Entry point | Who | Costs | Rules |
-|---|---|---|---|
-| `archive_if_stale(story)` | Anyone | Free (caller's Mana) | OPEN and no contribution or edit for 60 days. → ARCHIVED, `open_count` drops by 1. Text stays readable by link. **No refunds**: the writing happened. |
-| `revive(opener, story)` | Opener, once per story | Free | Needs `open_count < 3`. → OPEN, activity clock reset |
-
-Only OPEN stories can be archived. A LOCKED story with a vanished opener goes down the admin path instead.
-
-### 5.6 Admin
-`set_addresses(ink, shop)` (both set once, AB-037 and AB-050), `set_limits(...)` (within the hard bounds), `add_category(name)`, `set_category_active(id, on/off)`, `set_paused`, `set_admin`.
-Same admin pattern as Ink and Shop: the contract's own address is admin until `set_admin`, and every admin call needs `System.checkAuthority`.
-
-**The admin cannot:** edit or remove text, change a story's opener, move or burn anyone's Ink, refund outside the rules, or finalize except under the admin rule.
-
-### 5.7 Reads (free)
-`get_config`, `get_story`, `get_segment`, `get_segments(story, from, count)`, `get_contributor_total`, `get_surviving_total`, `is_editor`, `is_allowed`, `get_invite`, `get_trial_used`, `get_open_count`, `get_categories`, the list reads (by opener, by category, by author), and `quote_cost(text)`. `quote_cost` returns the exact Ink the contract would charge, so the website's preview can be checked against the chain.
-
----
-
-## 6. Character counting (and emojis = 2)
-
-**Decided rule: Ink cost = the number of UTF-16 code units in the text.** Carl approved this on 19 October 2026 (question 1). The README, `docs/TESTNET_DEPLOY.md`, Ink's new mainnet description, and this spec all say the same thing: 1 Ink per text unit; most emoji cost 2; a few older ones cost 1; skin tones and flags cost 4; a three-person family costs 8.
-
-*Why this rule:* the website (JavaScript `text.length`) and the contract (AssemblyScript `string.length`) both store text as UTF-16. They count identically by construction, with no Unicode tables inside the contract to bloat it or drift out of date when new emoji come out. "The chain is the referee" stays true and cheap.
-
-What users will see (checked on this box):
+**Ink cost = the number of UTF-16 code units** (JavaScript `text.length`). Decided 19 October 2026.
 
 | Text | Ink |
 |---|---|
 | `a`, `é`, `中` | 1 |
-| 😀 (most emoji) | **2** |
-| ❤️ (heart + color selector) | 2 |
-| ⭐ (an older emoji with no color selector) | **1** |
-| 👍🏽 (skin tone) and 🇺🇸 (flag) | 4 |
-| 👨‍👩‍👧 (family) | 8 |
-| `e` + combining accent (decomposed é) | 2 |
+| 😀 (most emoji), ❤️ | 2 |
+| ⭐ (an older emoji) | 1 |
+| 👍🏽, 🇺🇸 | 4 |
+| 👨‍👩‍👧 | 8 |
 
-So "an emoji costs 2" is true for typical emoji. A few older ones cost 1, and combined ones cost more. The website will say exactly that, and the live counter always shows the real number. The alternative, "every emoji is exactly 2," would need an emoji table inside the contract. That means more code, a bigger contract, and an upgrade every time Unicode adds emoji, so it was not chosen. Every row of the table above is a unit test in `stories/assembly/__tests__/Stories.spec.ts`, and the same rows are checked against the deploy script's own counter in `deploy/__tests__/lib.test.js`.
+*Why:* the website and the contract both store UTF-16, so they count identically with no Unicode tables in the contract. The browser normalizes to NFC and sends `expected_ink`; any mismatch fails before Ink moves.
 
-**How counting is kept reliable:**
-1. **The browser normalizes text to Unicode NFC before submitting.** A decomposed `é` becomes one character, so nobody is overcharged by their keyboard. The contract can't normalize (too costly), so it simply charges for what it receives.
-2. **The contract counts; the browser only previews.** The browser sends `expected_ink`. If the contract's count differs, the transaction fails before any Ink moves. A mismatch shows up as a clear error, never a surprise charge.
-3. **Character rules, rejected on-chain:**
-   - control characters other than newline (no tabs),
-   - invisible and spoofing characters: zero-width space U+200B, U+2060–2064, U+FEFF, and the bidi overrides and isolates U+202A–202E and U+2066–2069, which can make text display differently from what's stored, including in credits,
-   - lone surrogate halves,
-   - U+FFFD (the "broken text" marker; it means bad input was silently replaced),
-   - more than 3 newlines in a row,
-   - text with nothing visible (only spaces, no-break spaces, joiners or variation selectors).
+**Refused on-chain:** control characters other than newline, invisible and direction-control characters (U+200B, U+FEFF, U+2028/2029, U+2060–2064, U+202A–202E, U+2066–2069), lone surrogates, U+FFFD, more than 3 newlines in a row, and text with nothing visible. Titles, categories, notes and citations refuse line breaks; links are plain ASCII. The joiners U+200C and U+200D stay allowed.
 
-   Titles and category names also refuse line breaks. PDF links are plain ASCII only.
+## 7. Limits and anti-spam (summary)
 
-   The zero-width joiner (U+200D, needed for family and profession emoji) and ZWNJ (U+200C, needed for Persian and other scripts) stay allowed.
-4. **Capacity uses the same units.** `max_chars`, `used_chars`, the trial limit, the per-contribution cap, and surviving totals are all in Ink units, so there's one number everywhere.
+- The open fee is the main junk filter; promo Ink can't open a story. Open-project limit and price doubling (separate wallets avoid the doubling; that is accepted).
+- Promo trial: 1,000 characters per wallet, ever; refunds don't give trial back.
+- Per-part cap 6,000; a long chapter is several parts.
+- Editors: at most 10. Allow-list calls: at most 20 wallets.
+- Final-edit batches: at most 20 parts and 20,000 units.
+- Reports from wallets that have written count; enough of them hide a part until the opener, the checker or the admin acts.
 
----
-
-## 7. How Stories talks to Ink and Shop
-
-| Call | Entry point id | Arguments |
-|---|---|---|
-| `Ink.burn` | `0x859facc5` | `from = author`, `value = cost`, `reason = 1` (BURN_CONTRIBUTION), memo `s:<story>:<seq>` (well under Ink's 64-character limit) |
-| `Ink.mint` (refund) | `0xdc6f17bb` | `to = original author`, `value`, `reason = 5` (MINT_REFUND), memo `r:<story>:<seq>` |
-| `Shop.pay_open_fee` | `0x20a2e01e` | `payer = opener`, `kind`, `token` |
-| `Shop.pay_close_fee` | `0xb7a41295` | `payer = opener`, `kind`, `token` |
-| `Shop.get_membership` | `0x7701bbeb` | `account` |
-| `Shop.get_promo_claimed` | `0x280e7ef7` | `account` |
-
-(The ids are the first 4 bytes of sha256 of the name. They match Shop's existing `transfer` and `mint` constants.)
-
-**How each call's result is handled:**
-- Every outgoing call must return exit code 0, or Stories fails the whole transaction.
-- Stories also never trusts a call that answers `false`. A result whose bytes are a protobuf bool set to false (`08 00`) fails the whole transaction too, even though the exit code was 0. The unit tests feed both a reverted call and a `false` answer into every write that calls Ink or Shop.
-- Stories never moves stablecoins itself, so the "token transfer returned false" problem stays in Shop, which already guards against it.
-- Stories also checks the writer's signature **before** calling Ink. Ink checks it again; the early check just gives a clearer error.
-- Stories records each outgoing call in an event, as Shop does, so the burn and refund amounts can be checked against the exact call.
-
-**Wiring, after Stories is uploaded.** The deploy script does this in two transactions. First `set-admin stories` (signed by the Stories contract wallet), so the everyday admin wallet signs everything after it and the contract wallet's key can go back on paper. Then `wire-stories` (signed by the admin) does steps 1–4 and 6 in **one** transaction, so a half-wired state can't happen. Verify with `status --stories` afterwards.
-1. `stories.set_addresses(ink = <Ink>, shop = <Shop>)`
-2. `ink.set_burner(<Stories>, true)`. Note that Ink's burner list is a yes/no flag, not a mask.
-3. `ink.set_minter(<Stories>, 32)`: mask 32 is bit 5, **REFUND only**. Shop stays at 30. Stories must never get bits 1–4.
-4. `shop.set_addresses(treasury, founder, ink, stories = <Stories>)`. ⚠️ This call **replaces all four addresses**. Treasury and founder must be re-entered exactly as they are now, or payments go to the wrong place. `wire-stories` reads the current values from `shop.get_config` on chain and re-sends them unchanged. It refuses to continue if Shop's Ink is not the `--ink` you gave, if you passed `--treasury`/`--founder` and they differ from the chain, or if Shop already points at a *different* Stories.
-5. Confirm Shop's prices for OPEN_BOOK, OPEN_SHORT, CLOSE_BOOK, and CLOSE_SHORT, plus `starter_book` and `starter_short`. `pay_open_fee` refuses to run if any of these are 0.
-6. `stories.add_category` ×11 (Fantasy, Sci-Fi, Mystery & Thriller, Romance, Horror, Comedy, Adventure, Drama, Historical, Poetry & Experimental, Other).
-7. (Done first, see above.) `stories.set_admin(<admin wallet>)`. **The admin's recovery phrase must be on paper first** (the lesson from this week's lost testnet admin).
-
-Current testnet addresses to wire against (from Carl, 19 October 2026): Ink `195trftAvPnqeoPmHeGmxtwNYVUVdghm5x`, Shop `1JfggxPBqZqmSEe2ECYfxphH2UnKgf6Hth`, admin / treasury / founder `18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6`, test user `12SVw65QpMjFo9fnc651V7LhXKqVLg15Ww`. The Stories address is the new wallet Carl creates for the upload.
-
-Expected checks afterwards: `ink.is_burner(Stories) = true`, `ink.get_minter_reasons(Stories) = 32`, `shop.get_config.stories = Stories`.
-
----
-
-## 8. Limits and anti-spam (summary)
-
-- **Money filters:** the open fee ($20 / $10) is the main junk filter. Promo Ink can't open a story.
-- **3 active projects per opener.** Archived and finalized stories don't count.
-- **Promo trial:** 1,000 characters per wallet, ever. Opener and editor rights don't come from promo.
-- **Per-contribution cap:** 2,000 Ink to start, admin-adjustable from 100 up to a hard 4,000 (decided, question 3). The final number is set after `deploy.js measure` dry-runs 100, 500, 1,000, 2,000 and 4,000-character submissions on testnet. A long chapter is several submissions.
-- **Editors:** at most 10 per story. Allow-list and invite changes take at most 20 wallets per call.
-- **Final-edit batches:** at most 20 segments and at most 8,000 Ink units of new text per call, so one batch stays far below a block's limits.
-- **Character rules** in section 6.
-- **60-day archive,** callable by anyone.
-- Ranking, reports, and the "reported" hiding are website or later-contract features (section 12).
-
----
-
-## 9. Events (public, visible on explorers)
-
-`story_opened`, `story_settings_changed` (title, categories, visibility, free chapters), `editor_changed`, `allow_changed`, `invite_created`, `invite_revoked`, `invite_used`, `contribution_added` (story, seq, author, cost, chapter flag, ai flag, text hash), `segment_edited` (old and new cost, refund), `segment_removed` (refund), `story_locked` (auto), `story_closed` (fee paid), `admin_finalize_requested`, `admin_took_over`, `final_batch` (cursor, running hash), `story_finalized` (pdf uri and hash, final running hash), `story_archived`, `story_revived`, `external_call` (exact bytes sent to Ink or Shop), `category_changed`, `paused`, `admin_changed`, `limits_changed`.
-
-Ink's own `mint_event` and `burn_event` also fire for every burn and refund, with the memo linking them to the story and segment. The Shop `payment_event` for an open has the memo `open:book` or `open:short` but no story id, because Shop doesn't know it. Stories' `story_opened` event links the two.
-
----
-
-## 10. Edge cases and failure modes
-
-| Situation | What happens |
-|---|---|
-| Not enough Ink | Ink's burn fails ("not enough Ink"), so the whole contribution is undone |
-| Contribution bigger than the space left | Rejected with the remaining space in the message; the website warns first. Never cut short |
-| Story at 99,998 of 100,000 | Can't auto-lock, so the "within 100 of max" close rule lets the opener close |
-| Website count ≠ contract count | `expected_ink` mismatch: rejected, nothing charged |
-| Empty text or only whitespace | Rejected |
-| Two writers race for the last space | The first in a block wins; the second is rejected with no charge |
-| Ink paused | Contributions, edits, removals, and refunds all fail (refunds are mints). Settings still work. The website shows "writing paused" |
-| Shop paused, or a price or starter amount not set | Opening and closing fail; writing still works |
-| Writer membership expires mid-draft | The submit fails with "Writer membership is not active"; the draft stays in the browser |
-| Removed segment's author has lapsed | The refund still goes to them. Refunds don't need a membership |
-| Editor removes the opener's own text | Allowed (the opener chose that editor); the refund goes to the opener |
-| Opener loses their wallet (like the testnet admin this week) | The story can't be closed by them. After 30 days of no opener activity, the admin path finalizes it. Opener transfer is deliberately not supported (section 12) |
-| Finalizer stops halfway through the final edit | `final_cursor` remembers progress, so the website resumes. If the opener is the finalizer and is inactive 30 days, the admin can take over |
-| Story archived while the opener is away | The opener revives it once for free if they're under 3 active projects |
-| Category deactivated | Existing stories keep it; new stories can't pick it; the website hides empty categories |
-| Wallet with its own authority contract (smart wallet) | Works: Ink and Stories ask the wallet's authority as usual |
-| Lists grow huge | They're append-only with paging reads. A free GitHub Action index comes later, as planned |
-
----
-
-## 11. Security risks and mitigations
+## 8. Security notes
 
 | Risk | Mitigation |
 |---|---|
-| **The Stories key can upgrade the code**, and Stories may mint REFUND Ink, so a stolen key means unlimited free Ink | Admin and upload keys backed up on paper or hardware, never used day-to-day. Ink's admin can remove Stories as a minter in one call. Every refund is public and marked REFUND. The 48-hour announce-before-upgrade process applies. Ink only lets Stories mint REFUND, never purchase or promo Ink |
-| A bug refunds more than was burned | On-chain checks: a segment's refunds can never exceed its `original_cost`, and each story's `total_refunded ≤ total_burned`. Tests try to break both |
-| Taking someone's Ink | Impossible by design: Ink burns only with the owner's signature, and Stories always burns `from = the signer` |
-| Re-entry (a token or authority contract calling back mid-transaction) | The same reentrancy lock pattern as Shop, held across the whole call |
-| Spoofed text (bidi or invisible tricks in credits or titles) | Rejected characters (section 6) |
-| Editor abuse (mass removal) | Refunds go to authors. The opener picks editors and can remove them. Everything is public |
-| Refund farming through a colluding editor | Net zero Ink at best: the trial doesn't reset, and the light-edit formula blocks shrink-and-regrow |
-| Admin overreach | The admin can't touch text or Ink. The inactivity floor (30 days) and the bounds are hard-coded |
-| Bad or invalid input | Every address must be 25 bytes. Every count uses overflow-safe math. Fixed ranges for kind, visibility, and status |
-| Abusive text is permanent on-chain | Removal clears it from contract storage, and the website hides it, but the transaction history keeps it forever. The "text is public and permanent" notice stays at every submit |
-| Lost admin key | Same as Ink and Shop: there's no back door, so the key must be backed up |
+| The Stories contract key can replace the code, and Stories may mint REFUND Ink | Key kept offline (KEY_CUSTODY.md); release hashes pinned; the Ink admin can remove Stories as a minter in one call; every refund is public |
+| A bug refunds more than was burned | Per story, `total_refunded ≤ total_burned`; a part refunds only what its writer or pool paid and hasn't had back |
+| Taking someone's Ink | Ink burns only with the owner's signature; Stories always burns from the signer |
+| Re-entry, calls from other contracts | Reentrancy lock for the whole call; direct calls only |
+| Spoofed text | Character rules (section 6) |
+| A long pause used against openers | Activity clock; take-over and archiving refused while paused |
+| A takedown racing an edit | Bound to the reviewed text hash and version count |
+| Hidden text | Left out of the site and the book, but readable on-chain until taken down |
 
----
+## 9. Deliberately left out
 
-## 12. Deliberately left out of Stories v1 (and why)
+- NFTs and Contributor Editions: a later Books contract reads `surviving_totals`.
+- Sponsored Mana: a separate Sponsor contract later, OFF by default. *Why:* code that pays Mana should never sit next to the refund mint.
+- Transferring the opener role, co-openers, deleting a story.
+- Keepsakes and tips: a later Shop upgrade.
+- Close fees: closing has been free since October 2026.
 
-- **NFTs, the First Edition, and Contributor Edition claims.** These go in the Books contract later, which reads `surviving_totals` and `contributor_edition_min`. Keeping them out keeps Stories smaller.
-- **Reactions and reports.** Decided (question 4): a small separate contract, later. Stories can mint Ink refunds, so it stays as small as possible.
-- **Wallet-signed invite links.** Implemented after the October 2026 security review (fix H2): an invite stores only the public address of a per-link key; joining needs that key's signature over the joiner's own wallet, so nothing secret is on chain and a copied signature cannot be replayed. A direct allow-list remains.
-- **Keepsakes and tips.** Decided (19 October 2026): these are a **later Shop upgrade**. They are new Shop items, they don't involve Stories, and nothing for them is built now.
-- **Sponsorship.** Decided (question 6): offered later as a **separate Sponsor contract, OFF by default**. There is no sponsor code inside Stories. See question 6 for why.
-- **Pending or approval queues** (you chose open by default), and **authors editing their own text**.
-- **Transferring the opener role, co-openers, and deleting a story.**
-- **Sponsored Mana inside Stories** (users use their own wallet Mana; the optional Sponsor contract is separate, above), any AI inside the contract (impossible), view counts, and heat ranking (computed in the browser).
-- **The demo-mode reading window and the free-chapter soft gate.** These are website behavior; Stories only stores `free_chapters`.
-- **The First Edition sale and a platform token.** Parked, as you said.
+## 10. History (short)
 
----
-
-## 13. Decisions on the open questions (answered by Carl, 19 October 2026)
-
-1. **Emoji cost rule: the UTF-16 rule.** Most emoji 2 Ink; a few older ones like ⭐ cost 1; skin tones and flags 4; a three-person family 8. No emoji table in the contract.
-2. **Close fee when a story fills up: yes.** The opener pays the $5 / $2 close fee to start the final edit even when the story auto-locked at its maximum. The admin take-over path stays free.
-3. **Per-contribution cap: 2,000 to start.** Admin-adjustable with `set_limits`, bounded 100 to 4,000 in code. The final number comes from real testnet Mana measurements (`deploy.js measure`).
-4. **Reactions and reports: a separate contract, later.** Not in Stories v1.
-5. **Private-book invites: signed links plus direct adds.** An invite has a use limit (1–1,000) and an expiry (at most 365 days). Only the public address of a per-link key is stored; the private key travels in the link and signs a join bound to the joiner's wallet (fix H2). The opener or an editor can also add wallets directly.
-6. **Sponsorship: available later as a separate Sponsor contract, OFF by default.** Carl asked for whichever of "a disabled-by-default switch inside Stories" or "a separate Sponsor contract" is safer and simpler. **The separate contract is both:**
-   - *Isolation.* Paying someone's Mana on Koinos means a contract's `authorize()` approves being the payer, and that contract must hold KOIN for Mana. Inside Stories, a bug in that code would sit next to the Ink burn and REFUND mint powers. In its own contract, the worst a bug can do is spend the sponsor's own Mana. It can never mint Ink or touch refunds.
-   - *Simpler Stories.* Stories needs no `authorize()` override, holds no KOIN, and keeps its upload flags all false (as Ink and Shop do). An "off" switch in Stories would still ship that code to mainnet, ready to be switched on by mistake or by a stolen admin key.
-   - *Later, without risk.* A Sponsor contract can be written, tested and uploaded whenever Carl wants, without changing or re-uploading Stories. Until then it simply doesn't exist, which is the safest possible "off."
-
-Also confirmed on 19 October 2026: the **Short Story close minimum is 10,000** (section 14, item 10).
-
----
-
-## 14. Inconsistencies found (conversation vs. current code and docs), with decisions
-
-1. **The burner is not a mask.** Ink stores burners as a yes/no flag (`set_burner(account, allowed)`). Only minters use a reason mask. Wiring is `set_burner(Stories, true)` plus `set_minter(Stories, 32)`.
-2. **Emoji counting is described three different ways.**
-   - The conversation first said "graphemes, emoji = 1," then "Unicode code points; a few emoji count as 2 or more."
-   - The repo README says UTF-16 code units (typical emoji 2, flags and families more).
-   - `docs/TESTNET_DEPLOY.md` says flatly "2 Ink per emoji."
-   - Ink's on-chain description says "1 INK = 1 character."
-
-   **Decided:** the UTF-16 rule everywhere. README, `docs/TESTNET_DEPLOY.md` and this spec now say the same thing. Ink's on-chain description is changed **in code only, in the working copy, for the mainnet upload**: "Non-transferable writing allowance for SwarmTales. 1 INK per text unit; most emoji cost 2. No cash value. Creative use only." The Ink already on testnet (`195trftAvPnqeoPmHeGmxtwNYVUVdghm5x`) keeps its old description and is not touched.
-3. **Starter Ink.** The conversation once planned book-bound starter credit. It was then changed to normal Ink ("starter credits don't disappear"), and the Shop code matches the final decision (mints general Ink, reason STARTER). That means an opener could spend starter Ink in other stories. This is consistent with your decision, just worth knowing. **Decided:** keep it as built.
-4. **No story id on Shop's open payment.** Shop's starter mint memo is `open:book` / `open:short`. Stories' `story_opened` event provides the link. **Decided:** no Shop change.
-5. **There's no `is_writer` read in Shop.** Stories must repeat Shop's rule (`tier == WRITER && paid_until > now`, in seconds) from `get_membership`. It's a small duplication. Adding a Shop read would mean changing Shop, which isn't required. **Decided:** Stories repeats the rule; a test pins it (expired by one second = refused).
-6. **`shop.set_addresses` overwrites all four addresses.** Setting Stories means re-sending treasury and founder. The current deploy script sends `stories: ""`. A Stories wiring step must keep the live treasury and founder values. **Done:** `wire-stories` reads them from the chain (section 7).
-7. **Keepsake and tip items** appear in the conversation's Shop item list but not in `shop.proto` (items stop at CLOSE_SHORT). They're not needed for Stories. **Decided:** a later Shop upgrade; not built now.
-8. **The conversation says "Harbinger testnet,"** but the project actually uses `testnet.koinosfoundation.org`. Harbinger is a different network. **Decided:** the Koinos Foundation testnet, as the deploy script already checks.
-9. **The conversation's Ink sketch** had "mint/burn limited to Shop and Stories." The code matches, with a tighter rule: Shop can't burn, and Stories can mint REFUND only. **Decided:** keep the tighter rule (Stories mask 32).
-10. **The Short Story close minimum** was never stated outright. The conversation implies 10,000 (the bottom of the range). **Confirmed by Carl: 10,000.**
-11. **A Sponsor contract** was still on the roadmap after "no app-paid Mana" was decided. **Decided:** keep it as an optional, separate, later contract that is OFF by default (question 6). The README roadmap now says that.
-12. **Admin finalize in EDITING:** an early idea let *anyone* finalize the unedited text after 30 days. Your later decision ("only the opener or the admin finalizes") replaced it, and this spec follows the later decision. **Decided:** only the opener or the admin finalizes.
-
----
-
-## 15. Status and next steps
-
-1. Done: Stories and its unit tests (mock VM, no chain, no cost) in `/workspace/st-stories/stories`. Counting tests for every row of the section 6 table, and attack tests for the section 11 risks (unauthorized callers, cap boundaries, refund loopholes, closed and archived stories, private access, `false` answers from Ink and Shop).
-2. Done: deploy-script support (`upload stories`, `set-admin stories`, `wire-stories`, `status --stories`, `test-open`, `measure`, `stories-limits`).
-3. Next, Carl on testnet: upload, set-admin, wire, then `measure` to settle the per-contribution cap, then real writes, emoji counting, not-enough-Ink, too-long text and refunds.
-4. Before mainnet: a coverage review, an independent audit, and the mainnet Ink upload with the new description.
-
----
-
-## 16. How the built contract differs from the draft above (and why)
-
-1. **One text field per segment.** The final edit overwrites `text`; earlier versions live in the transaction history, and `text_hash` plus the story's running hash prove the final order. *Why:* storing every version would multiply storage Mana.
-2. **The final pass may push a story slightly past `max_chars`,** but each segment still only grows within its light-edit allowance. *Why:* a whole-book grammar pass at the very top of the range would otherwise be impossible.
-3. **Light-edit allowance is `max(original ÷ 10, min(20, original))`, measured from what is still paid for** (`charged + allowance`). *Why:* this closes shrink-then-regrow (refund, then grow back for free) and stops a 2-character segment being padded by 20. Tests try both.
-3a. **October 2026 (audit-fixes-2): the writer's own edits are paid growth, not an allowance.** Rewording is free, letters beyond the current length cost the normal rate, and shortening is always allowed; the light-edit allowance applies only to the final edit. A story's pool pays only for new parts. Every change to a part's text (writer edit, paid change, final edit) is kept as a version naming who made it, up to 100 per part, and a takedown wipes them all. Stories' Ink address is set once. *Why:* the October fix check (AB-032 to AB-040).
-3b. **October 2026, second fix check (AB-044 to AB-058).** A cut refunds what the writer paid beyond the new length, also after someone else's change. The writer's edits make versions up to version 99; past that an edit replaces the writer's own newest version, except that the first edit after someone else's change gets a new one. A part keeps up to 220 versions (99 + 60 paid changes + 60 answers + the final edit), so paid changes always fit. Stories' Shop and Shop's Ink are set once too. A part's `hidden_by` says who hid it; the opener can't restore an admin hide. `get_changers` lists every wallet that changed a part, citation-only ones too. *Why:* the second October fix check.
-3c. **October 2026, third fix check (AB-059 to AB-066).** A takedown decides the strike first and never reads version text: a per-part flag (`other_version`, set whenever someone other than the writer makes a version) answers "changed by someone else", and only parts with at most 61 versions (the most the old code kept) are also scanned version by version. `get_versions` returns at most 5 versions per call (`from`, `count`). Only the admin unhides an admin hide, and the admin can take over any other hide in place. Restoring a part the copy checker hid gives up its refund; the checker unhiding its own hide doesn't. A citation alone adds a changer only while the list has room for 12 beyond the paid changes. A blocked opener can't set editors or the allow-list. "A current writer" (who may update the story summary) owns a live part. *Why:* parts may be up to 10,000 characters, so the takedown must always fit in a block, and no write may loop over storage a user can grow for free.
-4. **`update_story` replaces separate setters** for title, categories, visibility and free chapters; `set_editor(…, allowed)` and `set_allowed(…, allowed)` replace add/remove pairs. *Why:* fewer entry points to secure and test.
-5. **The finalizer is stored as a flag (`finalizer_is_admin`), not an address.** When it is set, whoever is admin *at the time* finalizes. *Why:* if the admin wallet is rotated (as happened on testnet), a book mid-edit isn't stranded with a dead address. A test rotates the admin mid-edit.
-6. **`get_segments` returns at most 10 segments per read;** list reads return at most 50. *Why:* keeps read results within node limits for 4,000-unit segments.
-7. **Invite codes are 8–64 plain ASCII characters.** *Why:* no look-alike Unicode in codes people type.
-8. **The contract raises its system buffer to 64 KB at start-up.** *Why:* the SDK default (1 KB) is too small for a 4,000-unit text argument or a final batch.
-9. **Removed segments before the lock are folded into the running hash automatically** during the final pass, so the finalizer only submits live segments.
-10. **The trial counts what was written; refunds don't give trial back.** *Why:* otherwise write-remove-write would reset the trial.
-11. **State is written before Ink and Shop are called, and a reentrancy lock is held** for the whole call. If any call fails or answers `false`, the whole transaction is undone.
-12. **Each story enters a category list once,** however often it is re-tagged. *Why:* stops list spam.
-13. **`open_story` has no `starts_chapter` argument.** The opening text is always segment 1 and always starts chapter 1.
-14. **"Not enough space" errors don't include the number left,** because building that message costs code size; `get_story` (`max_chars − used_chars`) gives it, and the website shows it before submitting.
+- **19 October 2026:** design decisions (UTF-16 counting, invites as signed links, Sponsor contract separate).
+- **October 2026 security review:** direct calls only (H1), signed invite links (H2), bounded final-edit skips (M2).
+- **October 2026 audit fix rounds (AB-001 to AB-083):** moderation and strikes, versions, paid changes (`revise_part`), set-once Ink and Shop, the writers' pool, reading places, summaries and citations.
+- **2026-10 mainnet audit:** the activity clock (M-1), minimum Ink on opening (M-2), no reports on finished books (M-3), the allow-list on edits (M-4), byte-limited reads and the 6,000 cap (M-5), F-03 to F-09, S2-03, S2-05, S2-06, takedowns bound to the review, Unlisted retired, and the old-testnet migration code removed (testnet was reset).

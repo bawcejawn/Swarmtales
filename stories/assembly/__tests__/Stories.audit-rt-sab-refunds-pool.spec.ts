@@ -16,6 +16,7 @@ import {
   reset, configure, openAs, openPublic, invite, write, revise, ownerEdit, ownerRemove, segment, story,
   authorize, allowCalls, checkpoint, results, writerMonth, okCall,
 } from "./auditFixHelpers";
+import { ownEditArgs } from "./reviewed";
 
 let ID: u64 = 0;
 let SEQ: u64 = 0;
@@ -116,14 +117,14 @@ describe("RT-SAB-R3: max_ink cannot lock the writer out", () => {
     expect(() => {
       authorize(BOB);
       results([writerMonth(), okCall()]);
-      new Stories().edit_segment(new stories.edit_segment_arguments(BOB, ID, SEQ, TEXT, <u64>TEXT.length, MAXINK));
+      new Stories().edit_segment(ownEditArgs(BOB, ID, SEQ, TEXT, <u64>TEXT.length, MAXINK));
     }).toThrow("max_ink must refuse an edit that now costs more");
     MockVM.rollbackTransaction();
     MockVM.commitTransaction();
     ownerEdit(BOB, id, seq, BOB_60);                         // re-priced: 36
     expect(segment(id, seq).text).toBe(BOB_60, "RT-SAB-R3: the writer could not edit at the new price");
     authorize(BOB);
-    new Stories().edit_segment(new stories.edit_segment_arguments(BOB, id, seq,
+    new Stories().edit_segment(ownEditArgs(BOB, id, seq,
       "Bob writes a short scene in the harbour, gulls overhead now!", 60, 0));
     checkpoint();
     expect(segment(id, seq).text).toBe("Bob writes a short scene in the harbour, gulls overhead now!",

@@ -84,6 +84,7 @@ function check(id: u64, step: i32): void {
   }
 }
 
+// Edits add a counter so random texts never collide with the duplicate-text rule (audit F-03).
 describe("AUDIT fuzz (" + (POOL ? "pool" : "public") + ", seed " + SEED.toString() + "): rules 1-3 money paths", () => {
   beforeEach(() => { reset(); configure(); });
 
@@ -123,9 +124,9 @@ describe("AUDIT fuzz (" + (POOL ? "pool" : "public") + ", seed " + SEED.toString
           const kind = pick(4);
           let cut = old.length - 2 - <i32>pick(10);
           if (cut > 0 && old.charCodeAt(cut - 1) >= 0xd800 && old.charCodeAt(cut - 1) <= 0xdbff) cut--;
-          if (kind == 0 && cut > 1) ownerEdit(owner, id, seq, old.substring(0, cut) + "!");
+          if (kind == 0 && cut > 1) ownerEdit(owner, id, seq, old.substring(0, cut) + "!" + (counter++).toString());
           else if (kind == 1 && cut > 1) { const t = old.substring(0, cut) + "?" + (counter++).toString().substring(0, 1); ownerEdit(owner, id, seq, t != old ? t : t + "."); }
-          else if (kind == 2 && old.length > 4) ownerEdit(owner, id, seq, old.substring(0, 2) + "#");
+          else if (kind == 2 && old.length > 4) ownerEdit(owner, id, seq, old.substring(0, 2) + "#" + (counter++).toString());
           else ownerEdit(owner, id, seq, old + " " + phrase(1 + <i32>pick(4)));
         } else {
           if (pick(2) == 0) ownerRemove(owner, id, seq);

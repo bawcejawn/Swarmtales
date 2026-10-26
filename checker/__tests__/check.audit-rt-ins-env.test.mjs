@@ -9,7 +9,6 @@
 // silently stops hiding ("without it the checker only reports").
 // Asserts the SAFE behaviour: the job that reads MODERATOR_WIF names the
 // copy-checker environment. FAILS while the workflow lacks it.
-// Copy into checker/__tests__/ and run: node --test checker/__tests__/
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
