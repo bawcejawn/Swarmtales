@@ -11,7 +11,9 @@ syntax = "proto3";
 //
 // It is made to be the admin of the Ink, Shop and Stories contracts: their
 // admin checks ask this account to authorize, and this contract answers
-// "yes" only for a transaction with enough signer signatures.
+// "yes" only for a transaction with enough signer signatures, and, for a
+// call, only when the contract asking was called straight from the
+// transaction (not by other contract code running inside it).
 //
 //   setup        once, in the same transaction as the upload, signed by
 //                the account's own key. Sets the first signers.

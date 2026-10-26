@@ -6,7 +6,7 @@
 // ids, with test-only keys (never funded).
 // =====================================================================
 
-import { Arrays, Base58, MockVM, authority, protocol } from "@koinos/sdk-as";
+import { Arrays, Base58, MockVM, authority, chain, protocol } from "@koinos/sdk-as";
 import { Multisig } from "../Multisig";
 import { multisig } from "../proto/multisig";
 import { F } from "./fixtures";
@@ -79,8 +79,19 @@ function errorIs(message: string): void {
   MockVM.rollbackTransaction();
 }
 
+/**
+ * What the chain passes: for a call, which contract asks (Stories here) and
+ * who called it (nobody: the operation called Stories straight from the
+ * transaction).
+ */
 function auth(type: authority.authorization_type): bool {
-  return new Multisig().authorize(new authority.authorize_arguments(type)).value;
+  const call = type == authority.authorization_type.contract_call ? new authority.call_data(OUTSIDER) : null;
+  return new Multisig().authorize(new authority.authorize_arguments(type, call)).value;
+}
+
+/** Contract code (OUTSIDER) is now running: the next calls come from it. */
+function calledByContract(): void {
+  MockVM.setCaller(new chain.caller_data(OUTSIDER, chain.privilege.user_mode));
 }
 
 function setUp2of3(): void {
@@ -93,6 +104,8 @@ describe("multisig", () => {
   beforeEach(() => {
     MockVM.reset();
     MockVM.setContractId(SELF);
+    // Called straight from the transaction: no calling contract.
+    MockVM.setCaller(new chain.caller_data(new Uint8Array(0), chain.privilege.user_mode));
     MockVM.commitTransaction(); // so a rollback after an error keeps the contract id
   });
 
@@ -294,5 +307,47 @@ describe("multisig", () => {
     expect(auth(authority.authorization_type.contract_call)).toBe(false);
     signedBy(3, ["A", "B", "C"]);
     expect(auth(authority.authorization_type.contract_call)).toBe(true);
+  });
+
+  // ---- audit H-1: only a request straight from the transaction counts ----
+
+  it("refuses a call request from a contract that another contract called", () => {
+    setUp2of3();
+    signedBy(2, ["A", "B", "C"]);
+    const call = new authority.call_data(OUTSIDER, 0, D);
+    const args = new authority.authorize_arguments(authority.authorization_type.contract_call, call);
+    expect(new Multisig().authorize(args).value).toBe(false);
+    // The same request from a contract called by the transaction itself is fine.
+    const direct = new authority.authorize_arguments(authority.authorization_type.contract_call, new authority.call_data(OUTSIDER));
+    expect(new Multisig().authorize(direct).value).toBe(true);
+  });
+
+  it("refuses a call request that says nothing about the call", () => {
+    setUp2of3();
+    signedBy(2, ["A", "B", "C"]);
+    const args = new authority.authorize_arguments(authority.authorization_type.contract_call);
+    expect(new Multisig().authorize(args).value).toBe(false);
+  });
+
+  it("refuses set_signers called by another contract, even with every signature", () => {
+    setUp2of3();
+    signedBy(2, ["A", "B", "C", "OUTSIDER"]);
+    calledByContract();
+    LIST = [A, B, OUTSIDER];
+    expect(() => {
+      new Multisig().set_signers(new multisig.set_signers_arguments(LIST, 2));
+    }).toThrow();
+    errorIs("MULTISIG: call the multisig directly from the transaction, not through another contract");
+    expect(Arrays.equal(new Multisig().get_config(new multisig.get_config_arguments()).signers[2], C)).toBe(true);
+  });
+
+  it("refuses setup called by another contract", () => {
+    signedBy(1, ["SELF"]);
+    calledByContract();
+    expect(() => {
+      new Multisig().setup(new multisig.setup_arguments([A, B, C], 2));
+    }).toThrow();
+    errorIs("MULTISIG: call the multisig directly from the transaction, not through another contract");
+    expect(new Multisig().get_config(new multisig.get_config_arguments()).threshold).toBe(0);
   });
 });

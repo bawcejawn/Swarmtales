@@ -31,12 +31,21 @@ export class Multisig {
    * Called by the chain only. Before setup nothing is authorized. After
    * setup every kind of authority (calls, paying for a transaction,
    * replacing this code) needs `threshold` distinct current signers.
+   *
+   * For a call, the asking contract must also have been called straight
+   * from the transaction (`call.caller` empty). Otherwise any contract code
+   * running inside a quorum-signed transaction (a contract fee payer's
+   * authorize, or a contract called by one of the operations) would get the
+   * multisig's authority too (audit H-1).
    */
   authorize(args: authority.authorize_arguments): authority.authorize_result {
     const cfg = this.config.get()!;
     if (cfg.threshold == 0) return new authority.authorize_result(false);
-    if (
-      args.type != authority.authorization_type.contract_call &&
+    if (args.type == authority.authorization_type.contract_call) {
+      if (!args.call) return new authority.authorize_result(false);
+      const caller = args.call!.caller;
+      if (caller != null && caller.length > 0) return new authority.authorize_result(false);
+    } else if (
       args.type != authority.authorization_type.transaction_application &&
       args.type != authority.authorization_type.contract_upload
     ) {
@@ -55,6 +64,7 @@ export class Multisig {
    * call authority is already handed to `authorize`).
    */
   setup(args: multisig.setup_arguments): multisig.empty_object {
+    requireDirectCall();
     const cfg = this.config.get()!;
     System.require(cfg.threshold == 0, "MULTISIG: already set up");
     System.require(signedBy(this.contractId), "MULTISIG: setup must be signed by this account's own key");
@@ -69,6 +79,7 @@ export class Multisig {
   set_signers(args: multisig.set_signers_arguments): multisig.empty_object {
     const cfg = this.config.get()!;
     System.require(cfg.threshold > 0, "MULTISIG: not set up");
+    requireDirectCall();
     System.require(countSigners(cfg.signers) >= cfg.threshold, "MULTISIG: not enough signers signed");
     this.save(args.signers, args.threshold);
     return new multisig.empty_object();
@@ -153,4 +164,14 @@ function signedBy(account: Uint8Array): bool {
     if (Arrays.equal(account, signed[j])) return true;
   }
   return false;
+}
+
+/**
+ * Called straight from the transaction, not by another contract. Contract
+ * code inside a quorum-signed transaction must not change the signers
+ * (audit H-1).
+ */
+function requireDirectCall(): void {
+  const caller = System.getCaller().caller;
+  System.require(caller == null || caller.length == 0, "MULTISIG: call the multisig directly from the transaction, not through another contract");
 }
