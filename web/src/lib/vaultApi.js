@@ -209,12 +209,14 @@ export async function createVaultSession(name, fetchImpl) {
  * KOIN Vault's published integration (checked 19 October 2026) uses GET with
  * ?sessionId=&secret= for status and request-status. Whether it also accepts
  * the same fields as a JSON POST is not documented, so the first status call
- * of a session tries POST, and only if Vault answers in a way that means
- * "not this way" (405/404/400/415/501, a non-JSON answer, or a refused
- * cross-origin request) does it use GET for the rest of that session.
+ * of a session tries POST, and only if Vault answers with an explicit "not
+ * this way" status (404, 405, 415 or 501) does it use GET for the rest of
+ * that session. A network error, a refused cross-origin request, a 400 or a
+ * non-JSON answer is reported, never retried with the secret in a URL
+ * (audit L-22; owner decision 5, confirmed on launch day).
  * credentials.transport remembers the choice ("post" or "get").
  */
-const UNSUPPORTED_POST = new Set([400, 404, 405, 415, 501]);
+const UNSUPPORTED_POST = new Set([404, 405, 415, 501]);
 
 async function authedCall(path, fields, credentials, fetchImpl) {
   const body = { sessionId: credentials.sessionId, secret: credentials.secret, ...fields };
@@ -225,8 +227,7 @@ async function authedCall(path, fields, credentials, fetchImpl) {
       return json;
     } catch (error) {
       const probing = credentials.transport !== "post";
-      const unsupported = error instanceof VaultError &&
-        (error.status == null || UNSUPPORTED_POST.has(error.status) || /not JSON/.test(error.message));
+      const unsupported = error instanceof VaultError && error.status != null && UNSUPPORTED_POST.has(error.status);
       if (!probing || !unsupported) throw error;
     }
   }

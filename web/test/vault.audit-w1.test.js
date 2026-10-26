@@ -93,3 +93,30 @@ test("W1-04: the Vault wallet reports success only after the node shows the matc
     /doesn't show it yet/
   );
 });
+
+test("L-22: a network error, a refused request, a 400 or a non-JSON answer never falls back to GET", async () => {
+  const cases = [
+    ["network error", async () => { throw new TypeError("Failed to fetch"); }],
+    ["400", async () => json(400, { ok: false, error: "bad request" })],
+    ["500", async () => json(500, { ok: false, error: "oops" })],
+    ["not JSON", async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError("Unexpected token <"); } })],
+  ];
+  for (const [label, post] of cases) {
+    const creds = { sessionId: "sess", secret: "s3cret" };
+    const seen = [];
+    const fetchImpl = async (url, init) => {
+      seen.push({ method: init.method, url });
+      return init.method === "POST" ? post() : json(200, statusBody);
+    };
+    await assert.rejects(vaultStatus(creds, fetchImpl), label);
+    assert.deepEqual(seen.map((s) => s.method), ["POST"], label + ": no GET");
+    assert.ok(!seen.some((s) => s.url.includes("s3cret")), label);
+    assert.notEqual(creds.transport, "get", label);
+  }
+  // An explicit "not this way" still does, once.
+  for (const status of [404, 405, 415, 501]) {
+    const creds = { sessionId: "sess", secret: "s3cret" };
+    await vaultStatus(creds, async (url, init) => (init.method === "POST" ? json(status, { ok: false }) : json(200, statusBody)));
+    assert.equal(creds.transport, "get", String(status));
+  }
+});
