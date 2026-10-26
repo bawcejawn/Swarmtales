@@ -323,7 +323,7 @@ message ink_mint_call {
   string memo = 4;
 }
 
-// Wire-compatible with shop.pay_open_fee_arguments / pay_close_fee_arguments.
+// Wire-compatible with shop.pay_open_fee_arguments (closing a story is free; there is no close fee).
 message shop_fee_call {
   bytes payer = 1 [(koinos.btype) = ADDRESS];
   uint32 kind = 2;
