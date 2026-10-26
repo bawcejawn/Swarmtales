@@ -33,7 +33,12 @@
 //   for each token before enabling it; see docs/KEY_CUSTODY.md).
 //   Shop does not trust the token's reply. It reads the treasury's and
 //   the founder's balances before and after, and refuses the purchase
-//   unless each one went up by exactly its share.
+//   unless each one went up by exactly its share. That check is only as
+//   good as the token: the balances come from the same token, and the
+//   token's code runs inside the buyer's signed purchase. A token's issuer
+//   (whoever holds its upload key) is therefore a trust assumption, and
+//   the site and deploy tool use only tokens pinned with their code hash
+//   (audit H-3, L-6; docs/ADMIN_POWERS.md).
 //
 // WHO MAY CALL (security fix H1)
 //   Koinos' signature check only asks "did this wallet sign the

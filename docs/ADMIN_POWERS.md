@@ -48,7 +48,13 @@ The Ink admin **cannot** move or burn anyone's Ink directly. Ink cannot be trans
 - **Pause** purchases, Writer Ink claims, promos and the open fee.
 - **Propose a new admin** (two steps).
 
-The Shop admin **cannot** take back a payment that has already been split, or send the stablecoin anywhere except the buyer's own payment to the treasury and founder. A Writer month that isn't claimed before the Writer term ends is forfeited; nobody can claim it later.
+The Shop admin **cannot** take back a payment that has already been split, or send the stablecoin anywhere except the buyer's own payment to the treasury and founder. This holds **for an honest token**: the Shop calls the payment token's own code inside every buyer's signed purchase, and it checks the payment by asking that same token for balances, so a token's code is trusted, not checked. A Writer month that isn't claimed before the Writer term ends is forfeited; nobody can claim it later.
+
+**Payment-token issuers are a trust assumption (audit H-3, L-6).** Whoever holds a listed token's upload key (for vUSDT, its issuer) can give that token new code at any time, at the same address. The Shop's 7-day wait protects the Shop's *record* of a token, not the token's code. New token code would run inside every purchase a buyer signs and could, for example, move the buyer's KOIN (KOIN accepts the buyer's signature at any call depth) or report a payment that never happened. What limits this:
+
+- The website and the deploy tool only use tokens **pinned** with their address, symbol, decimals and **code hash** (`web/src/config.js` `PAYMENT_TOKENS`, `deploy/lib.js` `TOKEN_PINS`). Before showing a price or building a purchase the site reads the token's code hash from the chain and refuses a token whose code differs from its pin. The tool refuses to enable an address with no contract, or a token whose code differs from its pin; on mainnet it refuses any token that is not pinned.
+- When an issuer upgrades a pinned token, purchases with it stop on the site until its new code is reviewed and the pin updated (a reviewed one-line change).
+- SwarmTales launches with **one** payment token.
 
 ## Stories admin
 
