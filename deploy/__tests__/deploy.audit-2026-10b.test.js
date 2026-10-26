@@ -326,3 +326,12 @@ test("M-A: sponsor-config sponsors only the listed entry points, with caps of 1 
   const back = await sponsorC.decodeOperation(op);
   assert.strictEqual(back.args.config.calls.length, c.calls.length);
 });
+
+// ---------------------------------------------------------------- I-11
+
+test("I-11: --network takes only a network name, never an inherited property", () => {
+  for (const name of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+    assert.throws(() => lib.resolveNetwork({ network: name }), /Unknown network/, name);
+  }
+  assert.strictEqual(lib.resolveNetwork({}).key, "testnet");
+});

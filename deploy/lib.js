@@ -816,7 +816,8 @@ function checkCommandArgs(args, allowed, positionals) {
  */
 function resolveNetwork(flags) {
   const name = flags.network === undefined ? "testnet" : String(flags.network);
-  const net = NETWORKS[name];
+  // Own keys only: "__proto__" or "constructor" are not networks (audit I-11).
+  const net = Object.prototype.hasOwnProperty.call(NETWORKS, name) ? NETWORKS[name] : undefined;
   if (!net) fail("Unknown network '" + name + "'. Use testnet (default) or mainnet.");
   if (net.mainnet && flags[MAINNET_FLAG.slice(2)] !== true) {
     fail(
