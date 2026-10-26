@@ -14,7 +14,7 @@ import {
   planBlock, planCampaignEnabled, planCampaignLimits, planCategory, planCategoryActive, planClearSummary, planFee, planHide,
   planInkAmounts, planLimits, planMinContribution, planModeration, planPause, planPrice, planPromo, planPromoSwitch, planSetAdmin,
   planSourceNote, planTakedown, planTakeOver, planTerms, preparedFile, promoLink, SPONSOR_DEFAULT_CAPS, sponsorCommand, strikeChoices, toBaseUnits,
-  planAddToken, preparedRcLimit, ratePrice, RATE_ITEMS,
+  ADMIN_METHODS, canAdminister, planAddToken, preparedRcLimit, ratePrice, RATE_ITEMS,
 } from "../lib/admin.js";
 import { canonicalBase } from "../lib/site.js";
 import { formatUtc } from "../lib/money.js";
@@ -69,7 +69,14 @@ async function loadAdminData() {
     const c = await safe(read("stories", "get_category", { category_id: id }));
     categories.push({ id, name: (c && c.name) || "Category " + id, active: !!(c && c.active) });
   }
-  return { inkCfg: inkCfg || {}, shopCfg: shopCfg || {}, storiesCfg: storiesCfg || {}, sponsorCfg, prices, priceToken, tokens, campaigns, categories };
+  // The signers of each admin that is a multisig, so its signers see the controls (L-21).
+  const adminAddrs = [...new Set([inkCfg, shopCfg, storiesCfg].map((c) => c && c.admin).filter(Boolean))];
+  const signers = [];
+  for (const a of adminAddrs) {
+    const cfg = await safe(new Contract({ id: a, abi: abis.multisig, provider: getProvider() }).functions.get_config({}).then((r) => r.result));
+    if (cfg && Array.isArray(cfg.signers)) signers.push(cfg.signers);
+  }
+  return { inkCfg: inkCfg || {}, shopCfg: shopCfg || {}, storiesCfg: storiesCfg || {}, sponsorCfg, prices, priceToken, tokens, campaigns, categories, signers };
 }
 
 function reload() {
@@ -259,6 +266,13 @@ export function renderAdmin(page) {
     payerRow,
     h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: () => { admin.data = null; reload(); } }, ["Reload settings"]),
   ]));
+  // The controls only for an admin, or a signer of the admin multisig (audit L-21).
+  if (!canAdminister(me, Object.values(admins), d.signers)) {
+    append(container, notice("info", h("p", {}, [
+      "The admin controls show once you connect an admin wallet, or a signer of the admin multisig. The contracts check every permission again either way.",
+    ])));
+    return;
+  }
 
   append(container,
     emergencySection(d),
@@ -656,9 +670,10 @@ function handoverSection(admins) {
 
 function anySection() {
   const writeMethods = [];
-  for (const c of ["ink", "shop", "stories", "sponsor"]) {
+  // Only the admin-gated methods (audit L-21).
+  for (const c of Object.keys(ADMIN_METHODS)) {
     if (!ids()[c]) continue;
-    for (const [m, def] of Object.entries(abis[c].methods)) if (!def.read_only) writeMethods.push({ value: c + "." + m, label: c + "." + m });
+    for (const m of ADMIN_METHODS[c]) if (abis[c].methods[m]) writeMethods.push({ value: c + "." + m, label: c + "." + m });
   }
   const method = select(writeMethods, "stories.set_paused");
   const json = h("textarea", { rows: "4", placeholder: '{"paused": true}' });

@@ -69,3 +69,23 @@ test("M-D: the page's Turn off sends the token's recorded decimals and symbol, a
   const { appSource } = await import("./helpers/appSource.js");
   assert.match(appSource(), /planAsset\(\{ token: t\.address, enabled: false, decimals: t\.decimals, symbol: t\.symbol \}\)/);
 });
+
+test("L-21: the 'any other admin call' form offers only admin methods, and the controls only an admin or a multisig signer", async () => {
+  const { ADMIN_METHODS, canAdminister, planAny } = await import("../src/lib/admin.js");
+  for (const [c, list] of Object.entries(ADMIN_METHODS)) {
+    for (const m of list) assert.ok(abis[c].methods[m] && !abis[c].methods[m].read_only, c + "." + m + " is a write method");
+  }
+  assert.equal(ADMIN_METHODS.sponsor, undefined, "the sponsor's settings go through the deploy tool (L-17)");
+  for (const [c, m] of [["stories", "contribute"], ["stories", "report_segment"], ["shop", "buy_pack"], ["shop", "claim_promo"], ["stories", "set_reading_place"]]) {
+    throwsInput(() => planAny(abis, c, m, "{}"), /is not an admin method/);
+  }
+  assert.equal(planAny(abis, "stories", "set_paused", '{"paused":true}').method, "set_paused");
+  const MS_SIGNER = "1NJrBLUNiGRU66FNu1VmaTNsm8qs7ADXyf";
+  assert.equal(canAdminister(null, [A], []), false);
+  assert.equal(canAdminister(B, [A], []), false);
+  assert.equal(canAdminister(A, [A, C], []), true);
+  assert.equal(canAdminister(MS_SIGNER, [A], [[B, MS_SIGNER, C]]), true);
+  const { appSource, fnBody } = await import("./helpers/appSource.js");
+  const page = fnBody(appSource().replace(/\r\n/g, "\n"), "renderAdmin");
+  assert.ok(page.indexOf("canAdminister(") > 0 && page.indexOf("canAdminister(") < page.indexOf("emergencySection(d)"), "nothing is rendered before the check");
+});

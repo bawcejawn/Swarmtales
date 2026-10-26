@@ -478,12 +478,38 @@ export function sponsorCommand({ sponsor, enabled, ink, shop, stories, tokens, p
 
 // ---------------------------------------------------------------- any method
 
-/** Any write method, with its arguments as JSON (for anything without its own form). */
+/**
+ * The methods only an admin may call (audit L-21: the "any other admin call"
+ * form used to offer every write method, user ones too). The sponsor's
+ * set_config is changed only with the deploy tool (L-17).
+ */
+export const ADMIN_METHODS = {
+  ink: ["set_minter", "set_burner", "set_paused", "set_admin", "accept_admin"],
+  shop: ["set_promo_enabled", "create_campaign", "set_campaign_enabled", "set_campaign_limits", "add_single_use_signers", "set_asset",
+    "remove_asset", "set_price", "set_addresses", "set_ink_amounts", "set_fee_bps", "set_paused", "set_admin", "accept_admin"],
+  stories: ["set_segment_hidden", "set_source_note", "takedown_segment", "replace_pdf", "admin_take_over", "set_addresses", "set_limits",
+    "add_category", "set_category_active", "set_paused", "set_moderation", "set_blocked", "set_terms", "set_admin", "accept_admin",
+    "set_min_contribution"],
+};
+
+/**
+ * Whether the connected wallet may see the admin controls (audit L-21): it is
+ * an admin, or a signer of an admin multisig. admins is the list of admin
+ * addresses, signers the signer lists of those that are multisigs.
+ */
+export function canAdminister(me, admins, signers) {
+  if (!me) return false;
+  if ((admins || []).includes(me)) return true;
+  return (signers || []).some((list) => Array.isArray(list) && list.includes(me));
+}
+
+/** Any admin method, with its arguments as JSON (for anything without its own form). */
 export function planAny(abis, contract, method, json) {
   const abi = abis[contract];
   if (!abi) fail("Unknown contract.");
   const m = abi.methods[method];
   if (!m || m.read_only) fail(contract + " has no write method " + method + ".");
+  if (!(ADMIN_METHODS[contract] || []).includes(method)) fail(contract + "." + method + " is not an admin method.");
   let args;
   try {
     args = json && String(json).trim() ? JSON.parse(json) : {};
