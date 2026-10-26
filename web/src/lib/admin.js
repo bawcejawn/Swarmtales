@@ -420,8 +420,8 @@ export function planAny(abis, contract, method, json) {
  * `tx` is { id, header, operations } after Transaction.prepareTransaction;
  * `planned` the plan objects, with `contract_id` added.
  */
-export function preparedFile({ networkKey, chainId, tx, planned, preparedAt }) {
-  return {
+export function preparedFile({ networkKey, chainId, tx, planned, preparedAt, needs }) {
+  const file = {
     format: PREPARED_FORMAT,
     network: networkKey,
     chain_id: chainId,
@@ -430,4 +430,8 @@ export function preparedFile({ networkKey, chainId, tx, planned, preparedAt }) {
     operations: planned.map((p) => ({ contract: p.contract, contract_id: p.contract_id, method: p.method, args: p.args })),
     transaction: { id: tx.id, header: tx.header, operations: tx.operations, signatures: [] },
   };
+  // When the payer is a multisig: its public signer list, so cosign refuses
+  // any other key and submit counts the signatures (as the deploy tool does).
+  if (needs) file.needs = { account: needs.account, signers: needs.signers.slice(), threshold: Number(needs.threshold) };
+  return file;
 }

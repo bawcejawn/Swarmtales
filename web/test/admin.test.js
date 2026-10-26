@@ -163,3 +163,18 @@ test("admin: a new payment token priced from an Ink rate, in one transaction", a
   assert.deepEqual(plans[1].args, { item: 2, token: B, amount: "150000000" });
   throwsInput(() => planAddToken({ token: B, symbol: "vUSDC", decimals: "6", prices: {} }), /at least one price/);
 });
+
+test("admin: a page-made file can carry the multisig's signer list, which cosign reads", async () => {
+  const net = { ...NETWORKS.testnet };
+  const plans = [planPause("stories", true)];
+  plans[0].contract_id = "1Ebsy7ERirZWZwAio8Jz1zueuxQwNfKisR";
+  const ops = [await new Contract({ id: plans[0].contract_id, abi: abis.stories }).encodeOperation({ name: "set_paused", args: { paused: true } })];
+  const tx = { header: { chain_id: net.chainId, rc_limit: DEFAULT_PREPARED_RC, nonce: "KAI=", payer: A }, operations: ops };
+  await Transaction.prepareTransaction(tx);
+  const needs = { account: A, signers: [B, C], threshold: 2 };
+  const file = preparedFile({ networkKey: "testnet", chainId: net.chainId, tx, planned: plans, needs });
+  const checked = await deployLib.verifyPrepared(JSON.parse(JSON.stringify(file)), deployLib.resolveNetwork({}), {
+    koilib: { Transaction, Contract }, abiFor: (name) => abis[name], flags: {},
+  });
+  assert.deepEqual(checked.needs, needs);
+});

@@ -298,7 +298,9 @@ Membership and Open pages. After the Shop's first sale, a new token works 7 days
    node deploy/deploy.js submit accept.json
    ```
    `set-admin` asks for the **admin** key. The first `cosign` takes **signer 1**'s key, the second
-   **signer 2**'s (normally each on their own computer: copy `accept.json` across).
+   **signer 2**'s (normally each on their own computer: copy `accept.json` across). Only the three
+   signer keys work at `cosign`: the file lists them, and any other key (a contract wallet's, the
+   admin's) is refused before anything is signed.
 2. Pause and unpause with two signers, from the admin page: *Prepare a file*, Paying address =
    `1AQb8fmugoSPDmFTdq9ytPxrBjzLeXger2`, **Pause Stories** → `cosign` with signers 1 and 2 → `submit`.
    Then **Unpause Stories** the same way.

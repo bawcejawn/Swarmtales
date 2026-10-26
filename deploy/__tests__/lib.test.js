@@ -157,11 +157,15 @@ test("deploy files never write the key anywhere", () => {
   assert.ok(body.includes("writeFileSync("), "the write is inside writeTxFile");
   const calls = src.split("writeTxFile(").slice(1).map((s) => s.split(")")[0]);
   assert.deepStrictEqual(calls.slice(1).sort(), ["file, data, true", "session.prepare, file, false"].sort());
-  assert.match(src, /const file = lib\.preparedFile\(net, tx, described, session\.args\.command\);/);
+  assert.match(src, /const file = lib\.preparedFile\(net, tx, described, session\.args\.command, needs\);/);
   // What preparedFile keeps: nothing but the network, the description and the transaction.
   const f = lib.preparedFile({ key: "testnet", chainId: "x" }, { id: "0x", header: {}, operations: [] }, [], "pause");
   assert.deepStrictEqual(Object.keys(f).sort(), ["chain_id", "command", "format", "network", "operations", "prepared_at", "transaction"]);
   assert.deepStrictEqual(Object.keys(f.transaction).sort(), ["header", "id", "operations", "signatures"]);
+  // A multisig's public signer list may be added (addresses only).
+  const needs = { account: "1JvWfpzUmoUg22ja5JHnUAL5Y8qqP3gWa7", signers: ["1DJCpbz7oj7dXsceUDumFKtxqXj655CEJq", "1KL2S8rTVWRsndnMCnpeFD63X7xxKh5YA8"], threshold: 2 };
+  const g = lib.preparedFile({ key: "testnet", chainId: "x" }, { id: "0x", header: {}, operations: [] }, [], "pause", needs);
+  assert.deepStrictEqual(g.needs, needs);
 });
 
 test("negative checks: contract rejections pass, infrastructure errors do not", () => {

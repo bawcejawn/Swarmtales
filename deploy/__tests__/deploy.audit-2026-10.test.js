@@ -54,6 +54,7 @@ const ABI = (target) => lib.toKoilibAbi(JSON.parse(fs.readFileSync(path.join(REP
 function fakeNode(net, opts = {}) {
   const log = { constructed: 0, sent: [], reads: [] };
   const byAddr = { [opts.ink || INK]: "ink", [opts.shop || SHOP]: "shop", [opts.stories || STORIES]: "stories" };
+  if (opts.multisig) byAddr[opts.multisig] = "multisig";
   class FakeProvider {
     constructor() { log.constructed++; }
     async getChainId() { return net.chainId; }
@@ -206,8 +207,8 @@ test("M-6 / info: a key for a pinned mainnet contract is refused on testnet", ()
 
 // ---------------------------------------------------------------- M-12
 
-async function preparePause(file, extra = []) {
-  const node = fakeNode(TESTNET);
+async function preparePause(file, extra = [], nodeOpts = {}) {
+  const node = fakeNode(TESTNET, nodeOpts);
   const r = await run(["pause", "stories", "--contract", STORIES, "--admin", MULTISIG, "--prepare", file, ...extra], { node });
   return { r, node };
 }
@@ -348,6 +349,39 @@ test("M-12: submit joins copies signed on different computers, dry runs, then se
   await preparePause(c, ["--rc-limit", "2"]);
   r = await run(["submit", a, c], { node: fakeNode(TESTNET, { contractAccounts: [MULTISIG] }), answers: ["SEND"] });
   assert.match(r.error.message, /different transaction/);
+});
+
+test("M-12: a multisig's signer list goes in the file; cosign refuses other keys and submit counts", async () => {
+  const OTHER_KEY = koilib.Signer.fromSeed("not a signer");
+  const file = tmpFile("needs.json");
+  const ms = { multisig: MULTISIG, reads: { "multisig.get_config": { signers: [KEY1.getAddress(), KEY2.getAddress()], threshold: 2 } } };
+  const { r } = await preparePause(file, [], ms);
+  assert.ok(r.prepared, r.error && r.error.message);
+  const data = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.deepStrictEqual(data.needs, { account: MULTISIG, signers: [KEY1.getAddress(), KEY2.getAddress()], threshold: 2 });
+  assert.match(r.out, /Needs: +2 of these 2 signers of the multisig/);
+  let c = await run(["cosign", file], { answers: ["SIGN"], secret: OTHER_KEY.getPrivateKey("wif") });
+  assert.match(c.error.message, /not one of the signers this transaction needs/);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, "utf8")).transaction.signatures, [], "nothing was signed");
+  c = await run(["cosign", file], { answers: ["SIGN"], secret: KEY1.getPrivateKey("wif") });
+  assert.ifError(c.error);
+  let node = fakeNode(TESTNET, { contractAccounts: [MULTISIG] });
+  c = await run(["submit", file], { node, answers: ["SEND"] });
+  assert.match(c.error.message, /has 1 of the 2 signer signatures it needs/);
+  assert.deepStrictEqual(node.log.sent, []);
+  c = await run(["cosign", file], { answers: ["SIGN"], secret: KEY2.getPrivateKey("wif") });
+  assert.ifError(c.error);
+  node = fakeNode(TESTNET, { contractAccounts: [MULTISIG] });
+  c = await run(["submit", file], { node, answers: ["SEND"] });
+  assert.ifError(c.error);
+  assert.deepStrictEqual(node.log.sent.map((x) => x.broadcast), [false, true]);
+  // A tampered signer list is refused like any other change to the file's format.
+  const bad = JSON.parse(fs.readFileSync(file, "utf8"));
+  bad.needs.threshold = 9;
+  const badFile = tmpFile("bad-needs.json");
+  fs.writeFileSync(badFile, JSON.stringify(bad));
+  c = await run(["cosign", badFile], { answers: ["SIGN"], secret: KEY1.getPrivateKey("wif") });
+  assert.match(c.error.message, /threshold is not in the expected format/);
 });
 
 test("M-12: prepare works for every admin command and for no other", () => {

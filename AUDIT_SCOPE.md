@@ -103,8 +103,8 @@ Expected release sha256 (verified from a fresh clone of this branch):
 (Built with Node.js 22.22.0. These are copied into `deploy/release-hashes.json` once reproduced
 by a second person; the deploy tool refuses a mainnet upload or wiring that doesn't match.)
 
-Expected test totals: Ink 53, Stories 426, Shop 104, Sponsor 33, Multisig 23, web 180, checker 105,
-deploy 133; 0 failing.
+Expected test totals: Ink 53, Stories 426, Shop 104, Sponsor 33, Multisig 23, web 181, checker 105,
+deploy 134; 0 failing.
 The Stories suite takes about an hour on a two-core machine.
 
 ## Deployments

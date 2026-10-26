@@ -112,6 +112,7 @@ const SOURCES = {
   shop: "shop/assembly/proto/shop.proto",
   stories: "stories/assembly/proto/stories.proto",
   sponsor: "sponsor/assembly/proto/sponsor.proto",
+  multisig: "multisig/assembly/proto/multisig.proto",
 };
 
 export function buildAll() {

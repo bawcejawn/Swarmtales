@@ -573,7 +573,18 @@ async function prepareTx(signerAddr, provider, net, operations, onPrepared) {
     operations,
   };
   await Transaction.prepareTransaction(tx);
-  const file = lib.preparedFile(net, tx, described, session.args.command);
+  // When the acting account is a multisig, write down its signers, so cosign
+  // can refuse any other key and submit can count (a guide; the chain decides).
+  let needs;
+  try {
+    const cfg = await readOnly(provider, "multisig", signerAddr, "get_config", {});
+    if (cfg && Number(cfg.threshold) > 0 && Array.isArray(cfg.signers) && cfg.signers.length) {
+      needs = { account: signerAddr, signers: cfg.signers, threshold: Number(cfg.threshold) };
+    }
+  } catch (e) {
+    needs = undefined; // not a multisig (or an older node): no list
+  }
+  const file = lib.preparedFile(net, tx, described, session.args.command, needs);
   // Check the file exactly as every cosigner's tool will, before writing it.
   const checked = await lib.verifyPrepared(JSON.parse(JSON.stringify(file)), net, verifyDeps(f));
   writeTxFile(session.prepare, file, false);
@@ -609,6 +620,11 @@ async function cmdCosign(args) {
   const me = signer.getAddress();
   lib.refuseCrossNetworkKey(net, me);
   if (signedBy.includes(me)) lib.fail(me + " has already signed this transaction. Nothing was changed.");
+  const needs = checked.needs;
+  if (needs && !needs.signers.includes(me) && me !== checked.tx.header.payer) {
+    lib.fail("That key is for " + me + ", which is not one of the signers this transaction needs:\n  " + needs.signers.join("\n  ") +
+      "\nPaste one of their keys instead (a contract wallet's or the admin's key doesn't count). Nothing was signed.");
+  }
   await signer.signTransaction(checked.tx);
   writeTxFile(file, data, true);
   console.log("Signed by " + me + ". Signatures now: " + (signedBy.length + 1) + ". Pass " + file + " to the next signer, or run submit.");
@@ -634,8 +650,18 @@ async function cmdSubmit(args) {
   }
   const tx = Object.assign({}, checked.tx, { signatures });
   const signedBy = await signersOf(tx);
-  tx.signatures = signatures.filter((s, i) => signedBy.indexOf(signedBy[i]) === i);
-  const unique = [...new Set(signedBy)];
+  const needs = checked.needs;
+  // Each signer once; with a known signer list, only its signers and the payer.
+  const keep = (who, i) => signedBy.indexOf(who) === i && (!needs || needs.signers.includes(who) || who === tx.header.payer);
+  tx.signatures = signatures.filter((s, i) => keep(signedBy[i], i));
+  const unique = [...new Set(signedBy.filter((who, i) => keep(who, i)))];
+  if (needs) {
+    const have = needs.signers.filter((s) => unique.includes(s)).length;
+    if (have < needs.threshold) {
+      for (const line of lib.preparedSummary(net, base, checked, unique)) console.log(line);
+      lib.fail("It has " + have + " of the " + needs.threshold + " signer signatures it needs. Have more of the signers listed above run cosign. Nothing was sent.");
+    }
+  }
   console.log("");
   for (const w of checked.warnings) console.log(w);
   for (const line of lib.preparedSummary(net, base, checked, unique)) console.log(line);

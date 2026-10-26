@@ -4,7 +4,7 @@ Audit: "SwarmTales Mainnet Audit — audit-2026-10 (16de9dc)". Fixes on branch `
 Status: **Fixed** (code changed and tested), **Doc** (documented, no code change needed),
 **Owner** (an action only the owner can take), **Live** (a check on a real network).
 
-Tests after the fixes: Ink 53, Shop 104, Stories 426, Sponsor 33, Multisig 23, website 180, copy checker 105, deploy tool 133; 0 failing.
+Tests after the fixes: Ink 53, Shop 104, Stories 426, Sponsor 33, Multisig 23, website 181, copy checker 105, deploy tool 134; 0 failing.
 Live checks were run on a throwaway testnet deploy of these exact builds (Ink `1E6NEt…`, Shop `14oJ1f…`, Stories `1EzAZT…`).
 
 ## Medium
@@ -113,3 +113,4 @@ Also closed from earlier rounds: AB-079 (removed with the legacy code) and AB-08
 | Mainnet node | `https://koinos.armana.io` (community) in the site, the deploy tool and the checker; the chain id is checked before anything is signed. | config and checker tests |
 | Several payment tokens | Shop `get_assets` lists every token with a record (at most 10; `set_asset` refuses an 11th). The site reads them and lets the buyer pick ("Pay with"); every price, balance, approve and the sponsor check follow the pick. Admin page: "Add a payment token" reads the token's decimals and symbol from its contract and prices the Writer month and packs from "Ink for 1 token" (rounded up). Deploy tool: `set-price` (whole tokens, several items, `--rate`) and `set-ink-amounts` (keeps what isn't given). | Shop token-list tests; `admin.test.js`; `deploy.prices.test.js` |
 | Multisig signing found live (25 Oct 2026) | `cosign`/`submit` refused every real nonce: koilib writes the nonce as value_type field 5 (tag 0x28) and the check took only field 7. Both are read now; the tests' fake nodes use koilib's real encoding. Prepared transactions now default to a 1 mana limit (admin calls use under 0.1; the node holds the whole limit while a transaction waits). | Full rehearsal on testnet with a 2-of-3 test multisig (`1JvWfpzUmoUg22ja5JHnUAL5Y8qqP3gWa7`) as Stories admin: accept_admin (0.09 mana), pause refused with one signature ("has not authorized transaction") and sent with two, unpause, set_signers, handover back |
+| Multisig files name their signers (25 Oct 2026) | When the acting account is a multisig, `--prepare` (and the admin page) write its public signer list and threshold into the file (`needs`). `cosign` refuses a key that isn't one of them; `submit` refuses a file with too few of them and leaves out any other signature. A guide only: the chain's multisig still decides. Found when a contract key was pasted at a signer prompt. | `deploy.audit-2026-10.test.js` (needs); live on testnet: the admin key refused at cosign, one signature refused at submit, two sent |

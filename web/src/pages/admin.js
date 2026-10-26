@@ -121,7 +121,15 @@ async function prepare(plans, ops, status) {
   const nonce = await getProvider().getNextNonce(payer);
   const tx = { header: { chain_id: chainId, rc_limit: DEFAULT_PREPARED_RC, nonce, payer }, operations: ops };
   await Transaction.prepareTransaction(tx);
-  const file = preparedFile({ networkKey: network.mainnet ? "mainnet" : "testnet", chainId, tx, planned: plans });
+  let needs = null;
+  try {
+    const ms = new Contract({ id: payer, abi: abis.multisig, provider: getProvider() });
+    const { result } = await ms.functions.get_config({});
+    if (result && Number(result.threshold) > 0 && Array.isArray(result.signers)) needs = { account: payer, signers: result.signers, threshold: result.threshold };
+  } catch {
+    needs = null; // not a multisig
+  }
+  const file = preparedFile({ networkKey: network.mainnet ? "mainnet" : "testnet", chainId, tx, planned: plans, needs });
   const blob = new Blob([JSON.stringify(file, null, 2)], { type: "application/json" });
   const name = "swarmtales-" + plans[0].method.replace(/_/g, "-") + "-" + tx.id.slice(6, 14) + ".json";
   const link = h("a", { href: URL.createObjectURL(blob), download: name, class: "btn btn-primary btn-small" }, ["Download " + name]);

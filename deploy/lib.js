@@ -1321,8 +1321,8 @@ function nonceNumber(nonceB64) {
  * (contract name, address, method, arguments) so every signer's tool can
  * decode the bytes and refuse anything that differs. No key is ever in it.
  */
-function preparedFile(net, tx, described, command) {
-  return {
+function preparedFile(net, tx, described, command, needs) {
+  const file = {
     format: PREPARED_FORMAT,
     network: net.key,
     chain_id: net.chainId,
@@ -1331,6 +1331,25 @@ function preparedFile(net, tx, described, command) {
     operations: described,
     transaction: { id: tx.id, header: tx.header, operations: tx.operations, signatures: tx.signatures || [] },
   };
+  if (needs) file.needs = needs;
+  return file;
+}
+
+/**
+ * Who must sign, when the acting account is a multisig: { account, signers,
+ * threshold }, read from the chain when the file was prepared. A guide for
+ * cosign and submit (they refuse a key that isn't one of the signers, and a
+ * file without enough of them); the chain decides in the end.
+ */
+function checkNeeds(needs) {
+  if (needs === undefined) return null;
+  if (!needs || typeof needs !== "object") fail("The file's list of signers is not in the expected format.");
+  requireAddress(needs.account, "needs.account");
+  if (!Array.isArray(needs.signers) || needs.signers.length < 1 || needs.signers.length > 10) fail("The file's list of signers is not in the expected format.");
+  for (const s of needs.signers) requireAddress(s, "needs.signers");
+  const t = Number(needs.threshold);
+  if (!Number.isInteger(t) || t < 1 || t > needs.signers.length) fail("The file's signature threshold is not in the expected format.");
+  return { account: needs.account, signers: needs.signers.slice(), threshold: t };
 }
 
 /**
@@ -1396,7 +1415,7 @@ async function verifyPrepared(file, net, deps) {
     if (decoded.name !== d.method) fail("Operation " + (i + 1) + " decodes as " + decoded.name + ", not " + d.method + ". Nothing was signed.");
     out.push({ contract: d.contract, contractId: call.contract_id, method: d.method, description: method.description || "", args: decoded.args || {} });
   }
-  return { tx, ops: out, warnings };
+  return { tx, ops: out, warnings, needs: checkNeeds(file.needs) };
 }
 
 /** The human summary every signer reads before signing, and `submit` shows before sending. */
@@ -1415,6 +1434,11 @@ function preparedSummary(net, file, checked, signedBy) {
     lines.push("  " + (i + 1) + ". " + o.contract + " " + o.contractId + " ." + o.method + (o.description ? "  (" + o.description + ")" : ""));
     lines.push("     " + JSON.stringify(o.args));
   });
+  if (checked.needs) {
+    const n = checked.needs;
+    lines.push("Needs:     " + n.threshold + " of these " + n.signers.length + " signers of the multisig " + n.account + ":");
+    n.signers.forEach((s, i) => lines.push("             " + (i + 1) + ". " + s + (signedBy.includes(s) ? "  (signed)" : "")));
+  }
   lines.push("Signatures so far: " + (signedBy.length ? signedBy.join(", ") : "none"));
   return lines;
 }
