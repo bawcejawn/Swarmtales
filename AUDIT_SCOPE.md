@@ -134,8 +134,8 @@ The Stories suite takes about an hour on a two-core machine.
   for the end-to-end checks.
 - **Testnet mana sponsor:** `12eQDZUBAaoScqFTW4zSy4ziAoxctnCxyS` (a throwaway test key) was the
   first, set up for the testnet contracts above; the website now uses `1De7ea6SyHRT7SsHNnwLzTBuqf5ixZ1ZyZ`
-  (`MANA_PAYER` in `web/src/config.js`; read 25 Oct 2026: on, caps 4/20/300 mana, 1,000 mana). Both
-  run the build before M-A and L-17. Checked live on 23 Oct 2026: a wallet with no KOIN saved a bookmark
+  (`MANA_PAYER` in `web/src/config.js`; read 25 Oct 2026: on, caps 4/20/300 mana, 1,000 mana). The
+  first still runs the build before M-A and L-17; `1De7ea…` was upgraded to the fixed build on 26 Oct (below). Checked live on 23 Oct 2026: a wallet with no KOIN saved a bookmark
   and the site's test wallet did too (sponsor paid); a Reader month bought with approve + buy was
   paid; a token transfer, an approve for another spender, a payee who didn't sign, a mana limit over
   the cap and a call to another contract were all refused with the contract's message; the
