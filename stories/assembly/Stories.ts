@@ -2,7 +2,7 @@
 // SwarmTales Stories — smart contract (AssemblyScript, Koinos SDK)
 //
 // WHAT THIS CONTRACT DOES
-//   - Holds every Book and Short Story: who wrote what, when, and for
+//   - Holds every Book, Short Story and Poem: who wrote what, when, and for
 //     how much Ink.
 //   - Opening: Shop collects the open fee (99/1 split) and mints the
 //     starter Ink, then Stories burns Ink for the opening text. One
@@ -72,7 +72,7 @@
 //     while its pool holds the minimum.
 //   - The opener must set Ink aside in the story's fund (the writers'
 //     pool) when opening: at least the kind's minimum length (10,000 for a
-//     Short Story, 100,000 for a Book). It can be topped up later. Parts are paid from the fund while it has enough; otherwise
+//     Short Story, 100,000 for a Book, 50 for a Poem). It can be topped up later. Parts are paid from the fund while it has enough; otherwise
 //     the writer pays. The pool pays only for new parts, never for changes
 //     to a part: the changer, or the writer adding letters, pays. Refunds
 //     of fund-paid parts go back to the fund (after any Ink the writer
@@ -124,10 +124,10 @@
 
 import { System, Protobuf, SafeMath, Arrays } from "@koinos/sdk-as";
 import { stories } from "./proto/stories";
-import { MAX_SUMMARY, VERSION_CHANGED, VERSION_REMOVED, VERSION_EDITED, VERSION_FINAL, MIN_CHANGE_UNITS, MAX_PAID_CHANGES, MAX_VERSION_READ, MAX_VERSION_READ_BYTES, HIDDEN_BY_REPORTS, DAY_SECONDS, BOOK_MIN, BOOK_MAX, SHORT_MIN, SHORT_MAX, MAX_EDITORS, MAX_ACCOUNTS_PER_CALL, MAX_FREE_CHAPTERS, MAX_BATCH_ITEMS, MAX_BATCH_UNITS, MAX_SEGMENT_READ, MAX_SEGMENT_READ_BYTES, MAX_INVITE_USES, MAX_INVITE_DAYS, MAX_PDF_URI, MIN_PDF_HASH, MAX_PDF_HASH, INK_BURN_ENTRY, SHOP_OPEN_FEE_ENTRY, BURN_CONTRIBUTION } from "./lib/constants";
+import { MAX_SUMMARY, VERSION_CHANGED, VERSION_REMOVED, VERSION_EDITED, VERSION_FINAL, MIN_CHANGE_UNITS, MAX_PAID_CHANGES, MAX_VERSION_READ, MAX_VERSION_READ_BYTES, HIDDEN_BY_REPORTS, DAY_SECONDS, MAX_EDITORS, MAX_ACCOUNTS_PER_CALL, MAX_FREE_CHAPTERS, MAX_BATCH_ITEMS, MAX_BATCH_UNITS, MAX_SEGMENT_READ, MAX_SEGMENT_READ_BYTES, MAX_INVITE_USES, MAX_INVITE_DAYS, MAX_PDF_URI, MIN_PDF_HASH, MAX_PDF_HASH, INK_BURN_ENTRY, SHOP_OPEN_FEE_ENTRY, BURN_CONTRIBUTION } from "./lib/constants";
 import { u64Key, u32Key, pairKey, versionKey, idAddrKey, addrIdxKey, u32IdxKey, reportKey, foldHash } from "./lib/keys";
 import { str, utf8, isLowSurrogate, requireText, requireTitle, isPlainAscii, isAddress, requireAddress, requireCitation } from "./lib/text";
-import { allowance, closeReady, minContribution, openMultiplier, listLimit, requireVisibility, requirePool, cutRefund, refundable, clearSegment, nowSeconds, requireSigner } from "./lib/rules";
+import { allowance, closeReady, isKnownKind, kindMin, kindMax, minContribution, openMultiplier, listLimit, requireVisibility, requirePool, cutRefund, refundable, clearSegment, nowSeconds, requireSigner } from "./lib/rules";
 import { StoriesAdmin } from "./StoriesAdmin";
 
 // Story text, final batches and stored segments are larger than the
@@ -342,16 +342,16 @@ export class Stories extends StoriesAdmin {
     const token = requireAddress(args.token, "STORIES: invalid token address");
 
     const kind = args.kind;
-    System.require(kind == stories.story_kind.KIND_BOOK || kind == stories.story_kind.KIND_SHORT, "STORIES: kind must be Book or Short Story");
-    const isBook = kind == stories.story_kind.KIND_BOOK;
-    const lo = isBook ? BOOK_MIN : SHORT_MIN;
-    const hi = isBook ? BOOK_MAX : SHORT_MAX;
+    System.require(isKnownKind(kind), "STORIES: kind must be Book, Short Story or Poem");
+    const lo = kindMin(kind);
+    const hi = kindMax(kind);
     // 0 = no fixed size: the story may grow to its kind's maximum, and the
     // opener can close it any time after it reaches the kind's minimum.
     if (args.max_chars == 0) args.max_chars = hi;
-    System.require(args.max_chars >= lo && args.max_chars <= hi, isBook
-      ? "STORIES: a Book must be 100,000 to 1,000,000 characters"
-      : "STORIES: a Short Story must be 10,000 to 99,999 characters");
+    System.require(args.max_chars >= lo && args.max_chars <= hi,
+      kind == stories.story_kind.KIND_BOOK ? "STORIES: a Book must be 100,000 to 1,000,000 characters"
+        : kind == stories.story_kind.KIND_POEM ? "STORIES: a Poem must be 50 to 25,000 characters"
+          : "STORIES: a Short Story must be 10,000 to 99,999 characters");
 
     const title = requireTitle(args.title);
     this.requireCategories(args.category_1, args.category_2);

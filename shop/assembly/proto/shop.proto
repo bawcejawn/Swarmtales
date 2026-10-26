@@ -63,12 +63,14 @@ enum item {
   ITEM_OPEN_BOOK = 6;
   ITEM_OPEN_SHORT = 7;
   reserved 8, 9;                 // were the close fees (closing is free)
+  ITEM_OPEN_POEM = 10;
 }
 
 enum story_kind {
   KIND_UNSPECIFIED = 0;
   KIND_BOOK = 1;
   KIND_SHORT = 2;
+  KIND_POEM = 3;
 }
 
 // Why Shop asks Ink to mint. These numbers MUST match ink.mint_reason.
@@ -101,6 +103,7 @@ message config {
   uint64 starter_short = 15 [jstype = JS_STRING];
   bytes pending_admin = 16 [(koinos.btype) = ADDRESS];  // proposed by set_admin, waiting for accept_admin
   bool sold = 17;                // the Shop has taken a payment; from then on a newly enabled token waits 7 days (C1-01)
+  uint64 starter_poem = 18 [jstype = JS_STRING];  // starter Ink for opening a Poem
 }
 
 message asset {
@@ -369,6 +372,7 @@ message set_ink_amounts_arguments {
   uint64 pack_l = 4 [jstype = JS_STRING];
   uint64 starter_book = 5 [jstype = JS_STRING];
   uint64 starter_short = 6 [jstype = JS_STRING];
+  uint64 starter_poem = 7 [jstype = JS_STRING];
 }
 
 // @description Founder fee in basis points. 100 = 1%. Cannot exceed 500.
@@ -480,6 +484,7 @@ message ink_amounts_event {
   uint64 pack_l = 4 [jstype = JS_STRING];
   uint64 starter_book = 5 [jstype = JS_STRING];
   uint64 starter_short = 6 [jstype = JS_STRING];
+  uint64 starter_poem = 7 [jstype = JS_STRING];
 }
 
 // A payment token was enabled or disabled (C1-01). An enabled token can be

@@ -3,7 +3,7 @@ syntax = "proto3";
 // =====================================================================
 // SwarmTales Stories — interface definition
 //
-// One contract holds every Book and Short Story. Writing burns the
+// One contract holds every Book, Short Story and Poem. Writing burns the
 // writer's Ink (reason BURN_CONTRIBUTION). Removals and cuts refund the
 // part's writer (or the story's pool) through Ink mint with reason
 // MINT_REFUND (the only mint reason Stories is allowed), and only Ink
@@ -54,6 +54,7 @@ enum story_kind {
   KIND_UNSPECIFIED = 0;
   KIND_BOOK = 1;
   KIND_SHORT = 2;
+  KIND_POEM = 3;                 // 50 to 25,000 characters
 }
 
 enum visibility {
@@ -504,7 +505,7 @@ message quote_cost_arguments {
 
 // ---------- Opening and settings ----------
 
-// @description Open a Book or Short Story. Pays the open fee through Shop (which mints starter Ink), then burns Ink for the opening text.
+// @description Open a Book, Short Story or Poem. Pays the open fee through Shop (which mints starter Ink), then burns Ink for the opening text.
 // @read-only false
 // @result uint64
 message open_story_arguments {

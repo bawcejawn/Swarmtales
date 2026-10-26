@@ -190,8 +190,8 @@ Mainnet goes ahead only when **every** box is ticked:
       only), treasury, founder; recovery phrases on paper in two places (`docs/KEY_CUSTODY.md`).
 - [ ] **2-of-3 multisig admin**: the multisig contract re-audited, then rehearsed on testnet (C3).
 - [ ] **Mana sponsor** re-audited; your mainnet sponsor wallet made and loaded with KOIN (C5).
-- [ ] **A working mainnet node** for the site, the deploy tool and the checker (api.koinos.io is
-      down): a public node someone else runs, or one of yours behind a tunnel. Send me the URL.
+- [ ] **Mainnet node** `https://koinos.armana.io` (community node, set in the site, the deploy tool
+      and the checker): confirm it answers with the mainnet chain id (the check in section F).
 - [ ] **Release fingerprints**: two people build the merged commit and get the same hash for every contract (Ink, Shop, Stories, sponsor, multisig);
       I put them in `deploy/release-hashes.json` and the README (published).
 - [ ] **Domain** bought and set up (M-7): DNS, Settings → Pages → custom domain + Enforce HTTPS, then

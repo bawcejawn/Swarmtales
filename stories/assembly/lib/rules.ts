@@ -1,7 +1,7 @@
 // Small rules shared by the entry points. Pure functions, no storage.
 import { System, authority, SafeMath } from "@koinos/sdk-as";
 import { stories } from "../proto/stories";
-import { HIDDEN_BY_REPORTS, BOOK_MIN, SHORT_MIN, CLOSE_SLACK, MAX_LIST, DEFAULT_MIN_CONTRIBUTION, DEFAULT_REPORT_THRESHOLD, DEFAULT_FULL_PRICE_PROJECTS, DEFAULT_MAX_PRICE_MULTIPLIER, MAX_PRICE_MULTIPLIER } from "./constants";
+import { HIDDEN_BY_REPORTS, BOOK_MIN, BOOK_MAX, SHORT_MIN, SHORT_MAX, POEM_MIN, POEM_MAX, CLOSE_SLACK, POEM_CLOSE_SLACK, MAX_LIST, DEFAULT_MIN_CONTRIBUTION, DEFAULT_REPORT_THRESHOLD, DEFAULT_FULL_PRICE_PROJECTS, DEFAULT_MAX_PRICE_MULTIPLIER, MAX_PRICE_MULTIPLIER } from "./constants";
 import { str } from "./text";
 
 // Free growth for a light edit: 10% of the original, or up to 20 for
@@ -14,9 +14,27 @@ export function allowance(original: u64): u64 {
   return tenth > small ? tenth : small;
 }
 
+/** The smallest length a story of this kind may be closed at. */
+export function kindMin(kind: stories.story_kind): u64 {
+  if (kind == stories.story_kind.KIND_BOOK) return BOOK_MIN;
+  if (kind == stories.story_kind.KIND_POEM) return POEM_MIN;
+  return SHORT_MIN;
+}
+
+/** The largest size a story of this kind may have. */
+export function kindMax(kind: stories.story_kind): u64 {
+  if (kind == stories.story_kind.KIND_BOOK) return BOOK_MAX;
+  if (kind == stories.story_kind.KIND_POEM) return POEM_MAX;
+  return SHORT_MAX;
+}
+
+export function isKnownKind(kind: stories.story_kind): bool {
+  return kind == stories.story_kind.KIND_BOOK || kind == stories.story_kind.KIND_SHORT || kind == stories.story_kind.KIND_POEM;
+}
+
 export function closeReady(st: stories.story): bool {
-  const min = st.kind == stories.story_kind.KIND_BOOK ? BOOK_MIN : SHORT_MIN;
-  return st.used_chars >= min || SafeMath.add(st.used_chars, CLOSE_SLACK) >= st.max_chars;
+  const slack = st.kind == stories.story_kind.KIND_POEM ? POEM_CLOSE_SLACK : CLOSE_SLACK;
+  return st.used_chars >= kindMin(st.kind) || SafeMath.add(st.used_chars, slack) >= st.max_chars;
 }
 
 export function minContribution(cfg: stories.config): u64 {
@@ -53,10 +71,12 @@ export function requireVisibility(v: stories.visibility): void {
 // A private story's writers' pool must at least cover a story long enough
 // to close.
 export function requirePool(kind: stories.story_kind, fund: u64): void {
-  const isBook = kind == stories.story_kind.KIND_BOOK;
-  System.require(fund >= (isBook ? BOOK_MIN : SHORT_MIN), isBook
+  const msg = kind == stories.story_kind.KIND_BOOK
     ? "STORIES: a private Book needs a writers' pool of at least 100,000 Ink"
-    : "STORIES: a private Short Story needs a writers' pool of at least 10,000 Ink");
+    : kind == stories.story_kind.KIND_POEM
+      ? "STORIES: a private Poem needs a writers' pool of at least 50 Ink"
+      : "STORIES: a private Short Story needs a writers' pool of at least 10,000 Ink";
+  System.require(fund >= kindMin(kind), msg);
 }
 
 // Ink refunded when a part gets shorter. `charged` is what the writer (or

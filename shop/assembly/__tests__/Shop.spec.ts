@@ -915,6 +915,74 @@ describe("Shop: story fees", () => {
     expect(decodeMint(mints()[0]).value).toBe(10000);
     expect(lastPayment().price).toBe(ONE_6 * 10);
   });
+
+  it("charges the Poem price and mints Poem starter Ink", () => {
+    authorize(SHOP);
+    new Shop().set_ink_amounts(new shop.set_ink_amounts_arguments(15000, 5000, 15000, 45000, 20000, 10000, 2000));
+    new Shop().set_price(new shop.set_price_arguments(shop.item.ITEM_OPEN_POEM, USDT, ONE_6 * 3));
+    expect(new Shop().get_config(new shop.get_config_arguments()).starter_poem).toBe(2000);
+    expect(new Shop().get_price(new shop.get_price_arguments(shop.item.ITEM_OPEN_POEM, USDT)).value).toBe(ONE_6 * 3);
+    authorize(ALICE);
+    callAs(STORIES);
+    fund(USDT, ALICE, ONE_6 * 3);
+    allowPay(USDT, ONE_6 * 3, 1);
+    new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_POEM, USDT, 0, ANY_PRICE, 2000));
+    applyTransfers();
+    const pay = lastPayment();
+    expect(pay.item).toBe(shop.item.ITEM_OPEN_POEM);
+    expect(pay.price).toBe(ONE_6 * 3);
+    expect(pay.ink_amount).toBe(2000);
+    const minted = decodeMint(mints()[0]);
+    expect(minted.value).toBe(2000);
+    expect(minted.memo).toBe("open:poem");
+    expect(getBal(USDT, ALICE)).toBe(0);
+    const amounts = MockVM.getEvents();
+    let seen = false;
+    for (let i = 0; i < amounts.length; i++) {
+      if (amounts[i].name == "shop.ink_amounts_event") {
+        const ev = Protobuf.decode<shop.ink_amounts_event>(amounts[i].data!, shop.ink_amounts_event.decode);
+        if (ev.starter_poem == 2000) seen = true;
+      }
+    }
+    expect(seen).toBe(true);
+  });
+
+  it("refuses a Poem open until its starter Ink is set", () => {
+    authorize(SHOP);
+    new Shop().set_price(new shop.set_price_arguments(shop.item.ITEM_OPEN_POEM, USDT, ONE_6 * 3));
+    authorize(ALICE);
+    callAs(STORIES);
+    allowPay(USDT, ONE_6 * 3, 1);
+    expect(() => {
+      new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_POEM, USDT, 0, ANY_PRICE));
+    }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: starter Ink amount is not set");
+  });
+
+  it("refuses a Poem open with no Poem price, and the retired item numbers", () => {
+    authorize(SHOP);
+    new Shop().set_ink_amounts(new shop.set_ink_amounts_arguments(15000, 5000, 15000, 45000, 20000, 10000, 2000));
+    expect(() => {
+      new Shop().set_price(new shop.set_price_arguments(<shop.item>8, USDT, ONE_6));
+    }).toThrow();
+    expect(() => {
+      new Shop().set_price(new shop.set_price_arguments(<shop.item>11, USDT, ONE_6));
+    }).toThrow();
+    authorize(ALICE);
+    callAs(STORIES);
+    expect(() => {
+      new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, shop.story_kind.KIND_POEM, USDT, 0, ANY_PRICE, 2000));
+    }).toThrow();
+  });
+
+  it("refuses an unknown story kind", () => {
+    authorize(ALICE);
+    callAs(STORIES);
+    expect(() => {
+      new Shop().pay_open_fee(new shop.pay_open_fee_arguments(ALICE, <shop.story_kind>4, USDT, 0, ANY_PRICE));
+    }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: kind must be Book, Short Story or Poem");
+  });
 });
 
 describe("Shop: pause", () => {

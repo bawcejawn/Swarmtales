@@ -238,7 +238,7 @@ a:hover { color: var(--accent-hover); }
 .reader-layout { display: flex; flex-wrap: wrap; gap: 48px; margin-top: 40px; }
 .reader-main { flex: 999 1 560px; min-width: 0; }
 .reader-aside { flex: 1 1 280px; min-width: 0; display: flex; flex-direction: column; gap: 32px; }
-.reader-column { max-width: 760px; }
+.reader-column { max-width: 1100px; }
 .chapter-bar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
 .chapter-title { margin: 48px 0 16px; font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--honey); }
 .chapter-title.first { margin-top: 0; }
@@ -278,7 +278,7 @@ a:hover { color: var(--accent-hover); }
 
 /* ---------- composer & forms ---------- */
 
-.composer { margin-top: 56px; max-width: 760px; }
+.composer { margin-top: 56px; max-width: 1100px; }
 .field { display: block; margin-top: 20px; }
 .field > span { display: block; font-weight: 600; margin-bottom: 8px; }
 .field .help { display: block; font-weight: 400; font-size: 14px; color: var(--muted); margin-top: 6px; }
@@ -411,7 +411,7 @@ dialog.sheet::backdrop { background: rgba(27, 31, 42, 0.45); }
 .account-choice .mono { font-size: 13px; color: var(--text-2); }
 
 /* Open a story: short story or book */
-.kind-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 32px; max-width: 760px; }
+.kind-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 32px; max-width: 1100px; }
 .kind-choice {
   display: flex; flex-direction: column; gap: 4px; text-align: left; font: inherit; color: var(--ink); cursor: pointer;
   background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--radius); padding: 16px 18px; min-height: 44px;

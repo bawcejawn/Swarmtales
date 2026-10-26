@@ -411,16 +411,17 @@ export class Shop {
 
     const kind = args.kind;
     System.require(
-      kind == shop.story_kind.KIND_BOOK || kind == shop.story_kind.KIND_SHORT,
-      "SHOP: kind must be Book or Short Story"
+      kind == shop.story_kind.KIND_BOOK || kind == shop.story_kind.KIND_SHORT || kind == shop.story_kind.KIND_POEM,
+      "SHOP: kind must be Book, Short Story or Poem"
     );
     const assetId = this.requireAddress(args.token, "SHOP: invalid token address");
     this.requireEnabledAsset(assetId);
 
     const cfg = this.loadConfig();
     const isBook = kind == shop.story_kind.KIND_BOOK;
-    const item = isBook ? shop.item.ITEM_OPEN_BOOK : shop.item.ITEM_OPEN_SHORT;
-    const starter = isBook ? cfg.starter_book : cfg.starter_short;
+    const isPoem = kind == shop.story_kind.KIND_POEM;
+    const item = isBook ? shop.item.ITEM_OPEN_BOOK : isPoem ? shop.item.ITEM_OPEN_POEM : shop.item.ITEM_OPEN_SHORT;
+    const starter = isBook ? cfg.starter_book : isPoem ? cfg.starter_poem : cfg.starter_short;
     System.require(starter > 0, "SHOP: starter Ink amount is not set");
     this.requireMinInk(starter, args.min_ink);
     const base = this.requirePrice(<u32>item, assetId);
@@ -429,7 +430,7 @@ export class Shop {
     System.require(multiplier <= MAX_PRICE_MULTIPLIER, "SHOP: price multiplier is too high");
     const price = SafeMath.mul(base, multiplier);
     this.requireMaxPrice(price, args.max_price);
-    const memo = isBook ? "open:book" : "open:short";
+    const memo = isBook ? "open:book" : isPoem ? "open:poem" : "open:short";
 
     this.takePayment(payer, assetId, <u32>item, price, starter, MINT_STARTER, memo);
     this.leave();
@@ -598,8 +599,9 @@ export class Shop {
     cfg.pack_l_ink = args.pack_l;
     cfg.starter_book = args.starter_book;
     cfg.starter_short = args.starter_short;
+    cfg.starter_poem = args.starter_poem;
     this.saveConfig(cfg);
-    const ev = new shop.ink_amounts_event(cfg.writer_ink, cfg.pack_s_ink, cfg.pack_m_ink, cfg.pack_l_ink, cfg.starter_book, cfg.starter_short);
+    const ev = new shop.ink_amounts_event(cfg.writer_ink, cfg.pack_s_ink, cfg.pack_m_ink, cfg.pack_l_ink, cfg.starter_book, cfg.starter_short, cfg.starter_poem);
     System.event("shop.ink_amounts_event", Protobuf.encode(ev, shop.ink_amounts_event.encode), []);
     this.leave();
     return new shop.empty_object();
@@ -1095,7 +1097,7 @@ export class Shop {
   }
 
   private isItem(item: u32): bool {
-    return item >= <u32>shop.item.ITEM_READER_MONTH && item <= <u32>shop.item.ITEM_OPEN_SHORT;
+    return (item >= <u32>shop.item.ITEM_READER_MONTH && item <= <u32>shop.item.ITEM_OPEN_SHORT) || item == <u32>shop.item.ITEM_OPEN_POEM;
   }
 
   private isPack(pack: shop.item): bool {

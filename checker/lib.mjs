@@ -538,6 +538,7 @@ export function recordSent(state, action) {
 const KNOWN_CHAINS = {
   "https://testnet.koinosfoundation.org": "EiAIKVvm6-V2qmsmUvPJy09vCCLbtn9lHFpwrJbcTIEWRQ==",
   "https://api.koinos.io": "EiBZK_GGVP0H_fXVAM3j6EAuz3-B-l3ejxRSewi7qIBfSA==",
+  "https://koinos.armana.io": "EiBZK_GGVP0H_fXVAM3j6EAuz3-B-l3ejxRSewi7qIBfSA==",
 };
 
 /**

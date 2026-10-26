@@ -17,6 +17,7 @@ export const KIND = {
   0: "Unset",
   1: "Book",
   2: "Short story",
+  3: "Poem",
 };
 
 export const TIER = {

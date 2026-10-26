@@ -173,3 +173,19 @@ test("opening an invite-only story needs a writers' pool and enough Ink", () => 
   assert.equal(pub.price, "400");
   assert.equal(pub.ok, true);
 });
+
+test("opening a poem: 50 to 25,000 characters, its own price, a 50 Ink private pool", () => {
+  const poem = {
+    title: "Small hours", rightsConfirmed: true, openingText: "The moon, a lantern.", maxChars: "0", kind: 3,
+    cap: "4000", category1: 1, category2: 0, visibility: 1, freeChapters: 0, editionMin: "0",
+    openCount: 0, openLimit: 3, inkBalance: "0", starter: "2000", price: "300000000", tokenBalance: "1000000000",
+  };
+  assert.equal(assessOpen(poem).ok, true);
+  assert.equal(assessOpen({ ...poem, maxChars: "50" }).ok, true);
+  assert.equal(assessOpen({ ...poem, maxChars: "25000" }).ok, true);
+  assert.match(assessOpen({ ...poem, maxChars: "49" }).problems.join(" "), /A poem must be 50 to 25,000 characters/);
+  assert.match(assessOpen({ ...poem, maxChars: "25001" }).problems.join(" "), /A poem must be 50 to 25,000 characters/);
+  assert.match(assessOpen({ ...poem, price: "0" }).problems.join(" "), /Opening a poem has no price/);
+  assert.match(assessOpen({ ...poem, visibility: 3, fund: "49" }).problems.join(" "), /private poem needs a writers' pool of at least 50 Ink/);
+  assert.equal(assessOpen({ ...poem, visibility: 3, fund: "50" }).problems.some((p) => /writers' pool/.test(p)), false);
+});

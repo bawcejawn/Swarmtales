@@ -117,6 +117,13 @@
  *       (signed by the sponsor wallet's own key. --tokens: payment tokens whose approve(spender = Shop) it pays for.
  *        Caps: per transaction <= per account per day <= everyone per day <= 1000 mana. --disable switches it off)
  *
+ * Multisig wallet (multisig/):
+ *   node deploy/deploy.js multisig-create --expect <fresh wallet> --signers <a>,<b>,<c> [--threshold 2]
+ *       (uploads the multisig contract onto a FRESH wallet and sets its signers in the same transaction,
+ *        signed by that wallet's key. After it, the address acts only with the signers' quorum)
+ *   node deploy/deploy.js multisig-signers --multisig <addr> --signers <a>,<b>,<c> [--threshold 2] --prepare <file.json>
+ *       (replace a lost or leaked signer: prepared, then cosigned by the current quorum, then submitted)
+ *
  * Multisig admin (any admin command above, when the admin is a multisig wallet):
  *   node deploy/deploy.js <admin command> <its usual flags> --prepare <file.json> [--payer <addr>] [--payee <addr>] [--rc-limit <mana>]
  *       (builds the transaction WITHOUT signing it and writes it to a new file. No key is asked. --payer pays the
@@ -165,6 +172,15 @@ const CONTRACTS = {
     buildHint: "cd sponsor; npx yarn@1.22.22 build:release; cd ..",
     authorizesTransactionApplication: true,
   },
+  // The multisig turns on all three flags: calls, payments and code uploads
+  // all need its quorum. It is uploaded only by multisig-create, together
+  // with its setup in the same transaction.
+  multisig: {
+    wasm: path.join(root, "multisig", "build", "release", "contract.wasm"),
+    abi: path.join(root, "multisig", "abi", "multisig.abi"),
+    buildHint: "cd multisig; npx yarn@1.22.22 build:release; cd ..",
+    createdBy: "multisig-create",
+  },
 };
 
 // What this run is doing: its arguments, its network once connected, and
@@ -195,7 +211,7 @@ function readFileOrFail(file, hint) {
 
 function contractFiles(target) {
   const c = CONTRACTS[target];
-  if (!c) lib.fail("Say which contract: ink, shop, stories or sponsor.");
+  if (!c) lib.fail("Say which contract: ink, shop, stories, sponsor or multisig.");
   return c;
 }
 
@@ -648,6 +664,7 @@ async function cmdSubmit(args) {
 async function cmdUpload(args) {
   const target = args.target;
   const c = contractFiles(target);
+  if (c.createdBy) lib.fail("Upload the " + target + " with: node deploy/deploy.js " + c.createdBy + " (it sets the signers in the same transaction).");
   const expected = lib.requireAddress(args.flags.expect, "expect");
   const wasm = readFileOrFail(c.wasm, "Build first: " + c.buildHint);
   const abiText = readFileOrFail(c.abi, "Build first: " + c.buildHint).toString("utf8");
@@ -715,6 +732,65 @@ async function cmdUpload(args) {
   console.log("Contract address: " + expected);
   if (net.mainnet) console.log("Next: pin it in deploy/lib.js (MAINNET_PINNED." + target + ") and have that one-line change reviewed.");
   console.log("Send back: the transaction id above (" + txId + ") and the block number.");
+}
+
+/**
+ * Turn a fresh wallet into an m-of-n multisig: upload the multisig contract
+ * with all three authority flags on AND set its first signers, in ONE
+ * transaction signed by that wallet's own key. After it, the key alone can't
+ * do anything for that address.
+ */
+async function cmdMultisigCreate(args) {
+  const f = args.flags;
+  const c = contractFiles("multisig");
+  const expected = lib.requireAddress(f.expect, "expect");
+  const plan = lib.planMultisigSigners(f.signers, f.threshold, expected);
+  const wasm = readFileOrFail(c.wasm, "Build first: " + c.buildHint);
+  const abiText = readFileOrFail(c.abi, "Build first: " + c.buildHint).toString("utf8");
+  const { net, provider } = await connect(f, "multisig");
+  const release = lib.checkWasmHash(wasm, "multisig", releaseHashes(), net.mainnet);
+  console.log("wasm: " + (release === true ? "the release build pinned in deploy/release-hashes.json"
+    : release === false ? "NOT the pinned release build (allowed on testnet only)" : "no release hash pinned yet (allowed on testnet only)"));
+  lib.refuseCrossNetworkKey(net, expected);
+  let meta = null;
+  try {
+    meta = await provider.call("contract_meta_store.get_contract_meta", { contract_id: expected });
+  } catch (e) {
+    if (net.mainnet) lib.fail("Could not check whether " + expected + " already has a contract. Nothing was sent.");
+  }
+  if (meta && meta.meta) lib.fail(expected + " already has a contract. A multisig is made only once, on a fresh wallet. Nothing was sent.");
+  const signer = await getSigner(provider, expected, "the fresh wallet that becomes the multisig");
+  const { Contract } = koilib();
+  const contract = new Contract({ id: expected, signer, provider, bytecode: new Uint8Array(wasm) });
+  const { operation: upload } = await contract.deploy({
+    abi: abiText,
+    authorizesCallContract: true,
+    authorizesTransactionApplication: true,
+    authorizesUploadContract: true,
+    signTransaction: false,
+    sendTransaction: false,
+  });
+  const setup = await contractOf("multisig", expected, provider).encodeOperation({ name: "setup", args: plan.args });
+  console.log("Authority: after this, " + expected + " acts only with " + plan.summary + ". Its own key no longer counts.");
+  const txId = await dryRunThenSend(signer, provider, net, [upload, setup],
+    "upload the multisig to " + expected + " and set its signers (" + plan.summary + "), in one transaction");
+  console.log("");
+  console.log("Multisig address: " + expected);
+  if (net.mainnet) console.log("Next: pin it in deploy/lib.js (MAINNET_PINNED.multisig) and have that one-line change reviewed.");
+  console.log("Check it: node deploy/deploy.js status --multisig " + expected + (net.mainnet ? " --network mainnet " + lib.MAINNET_FLAG : ""));
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
+/** Replace the multisig's signers or threshold: always prepared, then cosigned by the current quorum. */
+async function cmdMultisigSigners(args) {
+  const f = args.flags;
+  const multisig = lib.requireAddress(f.multisig, "multisig");
+  const plan = lib.planMultisigSigners(f.signers, f.threshold, multisig);
+  if (!session.prepare) lib.fail("Changing signers needs the current signers' quorum: add --prepare <file.json>, then cosign and submit.");
+  const { net, provider } = await connect(f, "multisig");
+  const signer = await getSigner(provider, multisig, "the multisig");
+  const op = await contractOf("multisig", multisig, provider).encodeOperation({ name: "set_signers", args: plan.args });
+  await dryRunThenSend(signer, provider, net, [op], "multisig.set_signers: " + plan.summary);
 }
 
 /**
@@ -1726,6 +1802,7 @@ async function cmdStatus(args) {
   await show("stories", f.stories);
   await show("user", f.buyer);
   await show("sponsor", f.sponsor);
+  await show("msig", f.multisig);
   const read = async (target, addr, name, a) => {
     try {
       return await readOnly(provider, target, addr, name, a);
@@ -1768,6 +1845,14 @@ async function cmdStatus(args) {
     if (f.story) console.log("story " + f.story + ": " + JSON.stringify(await read("stories", f.stories, "get_story", { story_id: f.story })));
     if (f.buyer) console.log("open projects of user: " + JSON.stringify(await read("stories", f.stories, "get_open_count", { account: f.buyer })));
   }
+  if (f.multisig) {
+    console.log("");
+    const meta = await provider.invokeGetContractMetadata(f.multisig).catch(() => null);
+    const m = meta && meta.value;
+    console.log("multisig authority flags (want call true, pay true, upload true): " +
+      (m && m.hash ? "call " + !!m.authorizes_call_contract + ", pay " + !!m.authorizes_transaction_application + ", upload " + !!m.authorizes_upload_contract : "(no contract)"));
+    console.log("multisig.get_config: " + JSON.stringify(await read("multisig", f.multisig, "get_config")));
+  }
   if (f.sponsor) {
     console.log("");
     const meta = await provider.invokeGetContractMetadata(f.sponsor).catch(() => null);
@@ -1786,7 +1871,9 @@ async function cmdStatus(args) {
 const COMMON_FLAGS = ["network", "rpc", "i-understand-this-is-mainnet", lib.PIN_OVERRIDE_FLAG.slice(2)];
 const PREPARE_FLAGS = ["prepare", "payer", "payee", "rc-limit"];
 const COMMANDS = {
-  "status": { run: cmdStatus, flags: "ink shop admin user buyer stories story token sponsor" },
+  "status": { run: cmdStatus, flags: "ink shop admin user buyer stories story token sponsor multisig" },
+  "multisig-create": { run: cmdMultisigCreate, flags: "expect signers threshold" },
+  "multisig-signers": { run: cmdMultisigSigners, prepare: true, flags: "multisig signers threshold" },
   "sponsor-config": { run: cmdSponsorConfig, flags: "sponsor ink shop stories tokens per-tx per-account per-day disable" },
   "upload": { run: cmdUpload, positionals: 1, flags: "expect upgrade i-understand-this-replaces-mainnet-code" },
   "set-admin": { run: cmdSetAdmin, positionals: 1, prepare: true, flags: "contract admin from" },

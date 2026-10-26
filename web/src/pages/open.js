@@ -1,5 +1,5 @@
 /**
- * Open a story (book or short story).
+ * Open a story (book, short story or poem).
  */
 import { contracts } from "../config.js";
 import { encode, quoteCost } from "../chain.js";
@@ -20,6 +20,8 @@ const OPEN_KINDS = {
     blurb: "10,000 to 99,999 characters. Quick to fill, good for a first story." },
   book: { kind: 1, name: "book", title: "Open a book", min: 100000, max: 1000000, priceKey: "bookPrice", starterKey: "starter_book",
     blurb: "100,000 to 1,000,000 characters. A long project with many chapters and writers." },
+  poem: { kind: 3, name: "poem", title: "Open a poem", min: 50, max: 25000, priceKey: "poemPrice", starterKey: "starter_poem",
+    blurb: "50 to 25,000 characters. From a haiku to a long poem, verse by verse." },
 };
 
 export function renderOpen(page) {

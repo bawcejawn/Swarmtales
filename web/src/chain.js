@@ -193,7 +193,7 @@ async function mapPool(items, limit, fn) {
 }
 
 export async function loadOverview() {
-  const [storiesCfg, shopCfg, asset, writerPrice, shortPrice, bookPrice, packS, packM, packL, tokenDecimals, now] = await Promise.all([
+  const [storiesCfg, shopCfg, asset, writerPrice, shortPrice, bookPrice, packS, packM, packL, tokenDecimals, now, poemPrice] = await Promise.all([
     read("stories", "get_config", {}),
     read("shop", "get_config", {}),
     read("shop", "get_asset", { token: contracts.paymentToken }),
@@ -206,6 +206,7 @@ export async function loadOverview() {
     // The token's own decimals, checked against config.js before any price is shown (M-8).
     read("token", "decimals", {}).catch(() => null),
     getHeadSeconds(),
+    read("shop", "get_price", { item: 10, token: contracts.paymentToken }).catch(() => null),
   ]);
   const price = (r) => (r && r.value ? r.value : "0");
   const nextCat = Number((storiesCfg && storiesCfg.next_category_id) || 0);
@@ -222,6 +223,7 @@ export async function loadOverview() {
     writerPrice: writerPrice && writerPrice.value ? writerPrice.value : "0",
     shortPrice: shortPrice && shortPrice.value ? shortPrice.value : "0",
     bookPrice: bookPrice && bookPrice.value ? bookPrice.value : "0",
+    poemPrice: poemPrice && poemPrice.value ? poemPrice.value : "0",
     packs: [
       { item: 3, name: "Small", price: price(packS), ink: (shopCfg && shopCfg.pack_s_ink) || "0" },
       { item: 4, name: "Medium", price: price(packM), ink: (shopCfg && shopCfg.pack_m_ink) || "0" },

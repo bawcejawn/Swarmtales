@@ -18,9 +18,10 @@ const MAINNET_PINNED = {
   stories: "",
   token: "",
   sponsor: "",
+  multisig: "",
 };
-const PINNED_ROLES = ["ink", "shop", "stories", "token", "sponsor"];
-const CONTRACT_ROLES = ["ink", "shop", "stories", "sponsor"];
+const PINNED_ROLES = ["ink", "shop", "stories", "token", "sponsor", "multisig"];
+const CONTRACT_ROLES = ["ink", "shop", "stories", "sponsor", "multisig"];
 const PIN_OVERRIDE_FLAG = "--i-understand-this-address-is-not-pinned";
 const HASH_OVERRIDE_FLAG = "--i-understand-the-code-hash-is-not-verified";
 
@@ -61,8 +62,10 @@ const NETWORKS = {
   },
   mainnet: {
     name: "Koinos MAINNET (real KOIN)",
-    rpc: "https://api.koinos.io",
-    trustedRpcs: ["https://api.koinos.io"],   // the only nodes --rpc may name on mainnet
+    // api.koinos.io stopped answering in October 2026; koinos.armana.io is a
+    // community node. Every run still checks the chain id before signing.
+    rpc: "https://koinos.armana.io",
+    trustedRpcs: ["https://koinos.armana.io", "https://api.koinos.io"],   // the only nodes --rpc may name on mainnet
     chainId: "EiBZK_GGVP0H_fXVAM3j6EAuz3-B-l3ejxRSewi7qIBfSA==",
     koin: "15DJN4a8SgrbGhhGksSBASiSYjGnMU8dGL",
     mainnet: true,
@@ -289,7 +292,7 @@ function shopAddressesForStories(onChain, wanted) {
 }
 
 // Ink amounts used by `wire` unless overridden (writer month, packs S/M/L,
-// starter for a book, starter for a short story).
+// starter for a book, a short story and a poem).
 const DEFAULT_INK_AMOUNTS = {
   writer_month: "15000",
   pack_s: "5000",
@@ -297,6 +300,7 @@ const DEFAULT_INK_AMOUNTS = {
   pack_l: "45000",
   starter_book: "20000",
   starter_short: "10000",
+  starter_poem: "2000",
 };
 
 // Enum values from shop.proto. koilib needs the numbers, not the names.
@@ -308,6 +312,7 @@ const SHOP_ITEMS = {
   ITEM_PACK_L: 5,
   ITEM_OPEN_BOOK: 6,
   ITEM_OPEN_SHORT: 7,
+  ITEM_OPEN_POEM: 10,
 };
 const TIER_READER = 1;
 const TIER_WRITER = 2;
@@ -408,6 +413,7 @@ const TEST_PRICES = {
   ITEM_PACK_L: "200000000",
   ITEM_OPEN_BOOK: "100000000",
   ITEM_OPEN_SHORT: "50000000",
+  ITEM_OPEN_POEM: "30000000",
 };
 
 const ADDRESS_RE = /^1[1-9A-HJ-NP-Za-km-z]{25,34}$/;
@@ -810,7 +816,7 @@ function checkPinnedFlags(net, flags, target) {
   for (const role of PINNED_ROLES) warnings.push(checkPinned(net, role, flags[role], flags, false));
   for (const name of ["contract", "expect"]) {
     if (flags[name] === undefined || !net.mainnet) continue;
-    if (!CONTRACT_ROLES.includes(target)) fail("Say which contract --" + name + " is: ink, shop, stories or sponsor.");
+    if (!CONTRACT_ROLES.includes(target)) fail("Say which contract --" + name + " is: ink, shop, stories, sponsor or multisig.");
     warnings.push(checkPinned(net, target, flags[name], flags, name === "expect"));
   }
   return warnings.filter(Boolean);
@@ -1062,6 +1068,28 @@ function formatMana(rc) {
   return whole.toString() + "." + frac;
 }
 
+// ---- Multisig wallet (multisig/) ----
+const MULTISIG_MIN_SIGNERS = 2;
+const MULTISIG_MAX_SIGNERS = 10;
+
+/**
+ * The signers and threshold for multisig setup / set_signers, checked the way
+ * the contract checks them: 2 to 10 different addresses, none of them the
+ * multisig itself, threshold 2 to the number of signers.
+ */
+function planMultisigSigners(signersFlag, thresholdFlag, multisigAddress) {
+  const signers = String(signersFlag || "").split(",").map((s) => s.trim()).filter(Boolean).map((s) => requireAddress(s, "signers"));
+  if (signers.length < MULTISIG_MIN_SIGNERS || signers.length > MULTISIG_MAX_SIGNERS) fail("--signers takes 2 to 10 addresses, separated by commas.");
+  if (new Set(signers).size !== signers.length) fail("--signers lists the same address twice.");
+  if (signers.includes(multisigAddress)) fail("The multisig can't be one of its own signers.");
+  const threshold = thresholdFlag === undefined ? 2 : Number(thresholdFlag);
+  if (!Number.isInteger(threshold) || threshold < 2 || threshold > signers.length) fail("--threshold must be a whole number from 2 to the number of signers.");
+  return {
+    args: { signers, threshold },
+    summary: threshold + " of " + signers.length + ": " + signers.join(", "),
+  };
+}
+
 // ---- Mana sponsor (sponsor/) ----
 const SPONSOR_MAX_TOKENS = 4;
 const SPONSOR_CAP_LIMIT = 100000000000n; // 1,000 mana, the contract's own limit
@@ -1277,7 +1305,7 @@ async function verifyPrepared(file, net, deps) {
     const d = described[i] || {};
     const call = op && op.call_contract;
     if (!call || Object.keys(op).length !== 1) fail("Operation " + (i + 1) + " is not a contract call. This tool only signs calls to Ink, Shop and Stories.");
-    if (!CONTRACT_ROLES.includes(d.contract)) fail("Operation " + (i + 1) + " is not a call to Ink, Shop or Stories.");
+    if (!CONTRACT_ROLES.includes(d.contract)) fail("Operation " + (i + 1) + " is not a call to Ink, Shop, Stories, the sponsor or the multisig.");
     if (call.contract_id !== d.contract_id) fail("Operation " + (i + 1) + " calls " + call.contract_id + " but says " + d.contract_id + ". Nothing was signed.");
     const warn = checkPinned(net, d.contract, call.contract_id, deps.flags || {}, false);
     if (warn) warnings.push(warn);
@@ -1382,6 +1410,7 @@ module.exports = {
   sha256Hex,
   checkWasmHash,
   planSponsorConfig,
+  planMultisigSigners,
   codeHashFromMeta,
   checkCodeHash,
   planModeration,

@@ -74,9 +74,14 @@ export const BOOK_MIN: u64 = 100000;
 export const BOOK_MAX: u64 = 1000000;
 export const SHORT_MIN: u64 = 10000;
 export const SHORT_MAX: u64 = 99999;
+// Poems (October 2026): a haiku to a long poem of about 4,000 words.
+export const POEM_MIN: u64 = 50;
+export const POEM_MAX: u64 = 25000;
 // A story this close to its own maximum may be closed even below the
 // kind minimum, so a 100,000 Book stuck at 99,998 is not stuck forever.
 export const CLOSE_SLACK: u64 = 100;
+// The same for a Poem, scaled down: a poem's whole range is small.
+export const POEM_CLOSE_SLACK: u64 = 10;
 
 export const MAX_TITLE: i32 = 100;
 export const MAX_CATEGORY_NAME: i32 = 32;

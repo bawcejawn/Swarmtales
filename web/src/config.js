@@ -32,7 +32,9 @@ export const NETWORKS = {
   mainnet: {
     id: "mainnet",
     name: "Koinos mainnet",
-    rpc: "https://api.koinos.io",
+    // A community node (api.koinos.io stopped answering in October 2026).
+    // The page checks the chain id before anything is signed.
+    rpc: "https://koinos.armana.io",
     chainId: "EiBZK_GGVP0H_fXVAM3j6EAuz3-B-l3ejxRSewi7qIBfSA==",
     mainnet: true,
   },
