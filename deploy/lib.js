@@ -1287,12 +1287,21 @@ const PREPARED_FORMAT = "swarmtales-prepared-transaction/1";
 const PREPARED_HEADER_KEYS = ["chain_id", "rc_limit", "nonce", "operation_merkle_root", "payer", "payee"];
 const PREPARED_MAX_OPS = 64;
 // Mana limit for a prepared transaction unless --rc-limit is given (never above what the payer has).
-const DEFAULT_PREPARED_RC = "500000000";
+// Mana limit of a prepared transaction unless --rc-limit is given: 1 mana. Admin
+// calls use under 0.1 (measured on testnet, 25 Oct 2026: accept_admin 0.09, a
+// pause 0.06), and the node holds the whole limit of a waiting transaction.
+const DEFAULT_PREPARED_RC = "100000000";
 
 /** A nonce as the chain encodes it (koinos.chain.value_type, uint64_value = field 7), base64url. */
+// A nonce is a koinos.chain.value_type holding one varint. koilib (and so
+// every wallet) writes it as field 5 (tag 0x28); field 7 (tag 0x38) is
+// accepted too. Found live on testnet, 25 Oct 2026: the earlier check took
+// only 0x38 and refused every real nonce.
+const NONCE_TAGS = [0x28, 0x38];
+
 function nonceNumber(nonceB64) {
   const b = Buffer.from(String(nonceB64 || ""), "base64url");
-  if (b.length < 2 || b[0] !== 0x38) fail("The transaction's nonce is not in the expected format.");
+  if (b.length < 2 || !NONCE_TAGS.includes(b[0])) fail("The transaction's nonce is not in the expected format.");
   let n = 0n;
   let shift = 0n;
   for (let i = 1; i < b.length; i++) {

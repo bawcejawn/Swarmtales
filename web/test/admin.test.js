@@ -8,7 +8,7 @@ import { Contract, Signer, Transaction } from "koilib";
 import { abis } from "../src/generated/abis.js";
 import {
   AdminInputError, DEFAULT_PREPARED_RC, SHOP_ITEMS, planAny, planAsset, planBlock, planFee, planHide, planInkAmounts, planLimits,
-  planModeration, encodeNonce, planPause, planPrice, planPromo, planSponsor, planTakedown, planTerms, preparedFile, promoLink, strikeChoices, toBaseUnits,
+  planModeration, planPause, planPrice, planPromo, planSponsor, planTakedown, planTerms, preparedFile, promoLink, strikeChoices, toBaseUnits,
 } from "../src/lib/admin.js";
 import { NETWORKS } from "../src/config.js";
 
@@ -119,7 +119,7 @@ test("admin: a prepared file from the page passes the deploy tool's cosign check
   plans[1].contract_id = SHOP;
   const ops = [];
   for (const p of plans) ops.push(await new Contract({ id: p.contract_id, abi: abis[p.contract] }).encodeOperation({ name: p.method, args: p.args }));
-  const tx = { header: { chain_id: net.chainId, rc_limit: DEFAULT_PREPARED_RC, nonce: "OAU=", payer: A }, operations: ops };
+  const tx = { header: { chain_id: net.chainId, rc_limit: DEFAULT_PREPARED_RC, nonce: "KAU=", payer: A }, operations: ops };
   await Transaction.prepareTransaction(tx);
   const file = preparedFile({ networkKey: "testnet", chainId: net.chainId, tx, planned: plans });
   const deployNet = deployLib.resolveNetwork({});
@@ -136,11 +136,16 @@ test("admin: a prepared file from the page passes the deploy tool's cosign check
   assert.ok(Signer); // koilib loads in node for the page's link keys
 });
 
-test("admin: the nonce is encoded the way the chain and cosign read it", () => {
-  for (const n of [1, 5, 127, 128, 300, 16384, 123456789]) {
-    assert.equal(deployLib.nonceNumber(encodeNonce(n)), String(n), "nonce " + n);
+test("admin: cosign reads the nonce koilib (every wallet, and this page) writes", async () => {
+  const { Provider } = await import("koilib");
+  const p = new Provider(["http://127.0.0.1:1"]);
+  for (const n of [1, 2, 31, 127, 128, 300, 16384, 123456789]) {
+    p.getNonce = async () => n - 1;
+    assert.equal(deployLib.nonceNumber(await p.getNextNonce("1")), String(n), "nonce " + n);
   }
-  assert.equal(encodeNonce(5), "OAU=");
+  assert.equal(deployLib.nonceNumber("KAI="), "2"); // as read live from testnet, 25 Oct 2026
+  assert.equal(deployLib.nonceNumber("OAU="), "5");
+  assert.throws(() => deployLib.nonceNumber("CAI="), /nonce is not in the expected format/);
 });
 
 test("admin: a new payment token priced from an Ink rate, in one transaction", async () => {

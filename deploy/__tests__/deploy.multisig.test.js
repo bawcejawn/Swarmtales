@@ -37,7 +37,7 @@ function fakeNode(meta) {
       if (method === "contract_meta_store.get_contract_meta") return meta && meta.hash ? { meta: { abi: "" } } : {};
       throw new Error("unexpected node call " + method);
     }
-    async getNextNonce() { return "OAU="; }
+    async getNextNonce() { return "KAU="; } // koilib's real encoding (field 5)
     async invokeGetContractMetadata() { return { value: meta }; }
     async sendTransaction(tx, broadcast) {
       log.sent.push({ tx: JSON.parse(JSON.stringify(tx)), broadcast });

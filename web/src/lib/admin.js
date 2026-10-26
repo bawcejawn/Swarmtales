@@ -9,8 +9,8 @@
 import { asWhole, formatUnits } from "./money.js";
 
 export const PREPARED_FORMAT = "swarmtales-prepared-transaction/1";
-/** Mana limit of a prepared transaction unless changed (5 mana, as the deploy tool). */
-export const DEFAULT_PREPARED_RC = "500000000";
+/** Mana limit of a prepared transaction (1 mana, as the deploy tool; admin calls use under 0.1). */
+export const DEFAULT_PREPARED_RC = "100000000";
 
 /** Shop items, by their shop.proto numbers (8 and 9 are retired). */
 export const SHOP_ITEMS = [
@@ -414,27 +414,6 @@ export function planAny(abis, contract, method, json) {
 }
 
 // ---------------------------------------------------------------- multisig files
-
-/**
- * A transaction nonce as the chain and the deploy tool expect it: a
- * koinos.chain.value_type with uint64_value (field 7), base64url. (The
- * browser build of koilib encodes it under another field, which cosign
- * refuses, so the page encodes it itself.)
- */
-export function encodeNonce(next) {
-  let n = BigInt(next);
-  if (n < 1n) fail("Bad nonce.");
-  const bytes = [0x38];
-  do {
-    let b = Number(n & 0x7fn);
-    n >>= 7n;
-    if (n > 0n) b |= 0x80;
-    bytes.push(b);
-  } while (n > 0n);
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_");
-}
 
 /**
  * A prepared transaction file the deploy tool's `cosign` and `submit` take.

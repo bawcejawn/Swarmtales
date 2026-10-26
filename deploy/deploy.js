@@ -137,7 +137,7 @@
  *   node deploy/deploy.js <admin command> <its usual flags> --prepare <file.json> [--payer <addr>] [--payee <addr>] [--rc-limit <mana>]
  *       (builds the transaction WITHOUT signing it and writes it to a new file. No key is asked. --payer pays the
  *        mana: the admin multisig itself (default) or a separate wallet, which must then also cosign. --payee: whose
- *        nonce is used (default: the payer's). --rc-limit: most mana it may use (default 5, never above the payer's))
+ *        nonce is used (default: the payer's). --rc-limit: most mana it may use (default 1, never above the payer's))
  *   node deploy/deploy.js cosign <file.json>
  *       (each signer, on their own computer: decodes and shows every operation, refuses a file that was changed
  *        or names other contracts, then adds ONE signature from the key pasted at the hidden prompt. No network needed)

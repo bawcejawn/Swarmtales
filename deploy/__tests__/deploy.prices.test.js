@@ -33,7 +33,7 @@ function fakeNode(net, opts = {}) {
       if (method === "contract_meta_store.get_contract_meta") return (opts.contractAccounts || []).includes(params.contract_id) ? { meta: { abi: "" } } : {};
       throw new Error("unexpected node call " + method);
     }
-    async getNextNonce() { return "OAU="; }
+    async getNextNonce() { return "KAU="; } // koilib's real encoding (field 5)
     async invokeGetContractMetadata(id) {
       if (!opts.codeHash) throw new Error("invoke_system_call not available");
       return { value: { hash: "0x1220" + opts.codeHash(id) } };

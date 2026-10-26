@@ -10,7 +10,7 @@ import { abis } from "../generated/abis.js";
 import { contracts, DEFAULT_PAYMENT, network, SITE } from "../config.js";
 import { encode, getProvider, read, verifyChain } from "../chain.js";
 import {
-  AdminInputError, DEFAULT_PREPARED_RC, INK_AMOUNT_FIELDS, encodeNonce, REASONS, SHOP_ITEMS, fromBaseUnits, planAcceptAdmin, planAny, planAsset,
+  AdminInputError, DEFAULT_PREPARED_RC, INK_AMOUNT_FIELDS, REASONS, SHOP_ITEMS, fromBaseUnits, planAcceptAdmin, planAny, planAsset,
   planBlock, planCampaignEnabled, planCampaignLimits, planCategory, planCategoryActive, planClearSummary, planFee, planHide,
   planInkAmounts, planLimits, planMinContribution, planModeration, planPause, planPrice, planPromo, planPromoSwitch, planSetAdmin,
   planSourceNote, planSponsor, planTakedown, planTakeOver, planTerms, preparedFile, promoLink, strikeChoices, toBaseUnits,
@@ -117,7 +117,8 @@ async function prepare(plans, ops, status) {
   const chainId = await verifyChain();
   const payer = String(admin.payer || "").trim();
   if (!/^1[1-9A-HJ-NP-Za-km-z]{25,34}$/.test(payer)) throw new AdminInputError("Type the paying address (the multisig, or a wallet that will also cosign) above.");
-  const nonce = encodeNonce(Number(await getProvider().getNonce(payer)) + 1);
+  // The same nonce encoding every wallet uses (koilib), which the chain takes.
+  const nonce = await getProvider().getNextNonce(payer);
   const tx = { header: { chain_id: chainId, rc_limit: DEFAULT_PREPARED_RC, nonce, payer }, operations: ops };
   await Transaction.prepareTransaction(tx);
   const file = preparedFile({ networkKey: network.mainnet ? "mainnet" : "testnet", chainId, tx, planned: plans });
