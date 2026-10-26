@@ -48,7 +48,9 @@ The whole repository. The most security-sensitive parts:
   `web/src/lib/admin.js`: signs admin calls with the connected wallet or writes a prepared file that
   the deploy tool's `cosign` checks); `multisig-create` / `multisig-signers` in the deploy tool; the
   swappable mana payer (`MANA_PAYER` in `web/src/config.js`); the community mainnet node
-  `koinos.armana.io` (chain id checked before anything is signed).
+  `koinos.armana.io` (chain id checked before anything is signed); several payment tokens: Shop
+  `get_assets` (at most 10 tokens with a record), a "Pay with" choice on the site, an "Add a payment
+  token" form priced from an Ink rate, and `set-price` / `set-ink-amounts` in the deploy tool.
 - **New since the audit (please review in full):** `sponsor/assembly/Sponsor.ts` (pays mana for
   other people's transactions: which transactions, caps, signature recovery) and
   `multisig/assembly/Multisig.ts` (m-of-n `authorize()` for calls, payments and uploads; setup and
@@ -94,15 +96,15 @@ Expected release sha256 (verified from a fresh clone of this branch):
 |---|---|
 | Ink | `537f523396c1e195c0262e10dd574c28492b269d247a6025a10f30461b2308dc` |
 | Stories | `231674514bb71c3a44a761babff8df0b27efc3313ccd499f18e9ccebde2335c1` |
-| Shop | `eb8650584c6be10b6e7978d167bf7639c6dcff97f94ccffe3184bd49ee42ae94` |
+| Shop | `15759f4c5b489c71675e4ee2273eaae62f6e64957fa837a5d9229855a6fd8910` |
 | Sponsor | `ed36d0bfc49a52a687489be4f46373b8c12bea52551785582223d66c219f4ad0` |
 | Multisig | `c4867a75bb90afa9b27a64a0452c093e38843764f8171aac0516d8fd2738ddb8` |
 
 (Built with Node.js 22.22.0. These are copied into `deploy/release-hashes.json` once reproduced
 by a second person; the deploy tool refuses a mainnet upload or wiring that doesn't match.)
 
-Expected test totals: Ink 53, Stories 426, Shop 102, Sponsor 33, Multisig 23, web 179, checker 105,
-deploy 127; 0 failing.
+Expected test totals: Ink 53, Stories 426, Shop 104, Sponsor 33, Multisig 23, web 180, checker 105,
+deploy 133; 0 failing.
 The Stories suite takes about an hour on a two-core machine.
 
 ## Deployments

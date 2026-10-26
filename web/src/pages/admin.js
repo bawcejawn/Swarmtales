@@ -5,15 +5,16 @@
  * transaction file for the multisig signers, the same file the deploy tool's
  * `cosign` and `submit` take. The contracts check every permission again.
  */
-import { Signer, Transaction, utils } from "koilib";
+import { Contract, Signer, Transaction, utils } from "koilib";
 import { abis } from "../generated/abis.js";
-import { contracts, network, SITE } from "../config.js";
+import { contracts, DEFAULT_PAYMENT, network, SITE } from "../config.js";
 import { encode, getProvider, read, verifyChain } from "../chain.js";
 import {
   AdminInputError, DEFAULT_PREPARED_RC, INK_AMOUNT_FIELDS, encodeNonce, REASONS, SHOP_ITEMS, fromBaseUnits, planAcceptAdmin, planAny, planAsset,
   planBlock, planCampaignEnabled, planCampaignLimits, planCategory, planCategoryActive, planClearSummary, planFee, planHide,
   planInkAmounts, planLimits, planMinContribution, planModeration, planPause, planPrice, planPromo, planPromoSwitch, planSetAdmin,
   planSourceNote, planSponsor, planTakedown, planTakeOver, planTerms, preparedFile, promoLink, strikeChoices, toBaseUnits,
+  planAddToken, ratePrice, RATE_ITEMS,
 } from "../lib/admin.js";
 import { canonicalBase } from "../lib/site.js";
 import { formatUtc } from "../lib/money.js";
@@ -23,7 +24,7 @@ import { send } from "../app/send.js";
 import { connectButton, failure, field, loadingLine, notice, setMeta, statusBox } from "../app/ui.js";
 
 const CONTRACT_LABEL = { ink: "Ink", shop: "Shop", stories: "Stories", sponsor: "Mana sponsor" };
-const admin = { mode: "wallet", payer: "", data: null, loading: false, error: "" };
+const admin = { mode: "wallet", payer: "", data: null, loading: false, error: "", priceToken: "" };
 
 function ids() {
   return { ink: contracts.ink, shop: contracts.shop, stories: contracts.stories, sponsor: contracts.sponsor };
@@ -37,9 +38,21 @@ async function loadAdminData() {
     safe(read("stories", "get_config", {})),
     contracts.sponsor && contracts.sponsorKind === "sponsor" ? safe(read("sponsor", "get_config", {})) : Promise.resolve(null),
   ]);
+  // Every token the Shop has a record of, the page's own token first.
+  const tokenIds = [DEFAULT_PAYMENT.address];
+  const listed = await safe(read("shop", "get_assets", {}));
+  for (const t of (listed && listed.tokens) || []) if (!tokenIds.includes(t)) tokenIds.push(t);
+  const tokens = [];
+  for (const address of tokenIds) {
+    const a = await safe(read("shop", "get_asset", { token: address }));
+    tokens.push({ address, enabled: !!(a && a.enabled), symbol: (a && a.symbol) || (address === DEFAULT_PAYMENT.address ? DEFAULT_PAYMENT.symbol : "?"),
+      decimals: a && a.symbol ? Number(a.decimals) : DEFAULT_PAYMENT.decimals, usable_from: (a && a.usable_from) || "0" });
+  }
+  const priceToken = tokens.find((t) => t.address === admin.priceToken) || tokens[0];
+  admin.priceToken = priceToken.address;
   const prices = {};
   await Promise.all(SHOP_ITEMS.map(async (item) => {
-    const r = await safe(read("shop", "get_price", { item: item.id, token: contracts.paymentToken }));
+    const r = await safe(read("shop", "get_price", { item: item.id, token: priceToken.address }));
     prices[item.id] = (r && r.value) || "0";
   }));
   const campaigns = [];
@@ -55,7 +68,7 @@ async function loadAdminData() {
     const c = await safe(read("stories", "get_category", { category_id: id }));
     categories.push({ id, name: (c && c.name) || "Category " + id, active: !!(c && c.active) });
   }
-  return { inkCfg: inkCfg || {}, shopCfg: shopCfg || {}, storiesCfg: storiesCfg || {}, sponsorCfg, prices, campaigns, categories };
+  return { inkCfg: inkCfg || {}, shopCfg: shopCfg || {}, storiesCfg: storiesCfg || {}, sponsorCfg, prices, priceToken, tokens, campaigns, categories };
 }
 
 function reload() {
@@ -313,8 +326,11 @@ function randomKeyHex() {
 }
 
 function pricesSection(d) {
-  const dec = contracts.paymentDecimals;
-  const sym = contracts.paymentSymbol;
+  const t = d.priceToken;
+  const dec = t.decimals;
+  const sym = t.symbol;
+  const pick = select(d.tokens.map((x) => ({ value: x.address, label: x.symbol + (x.enabled ? "" : " (off)") + " · " + x.address })), t.address);
+  pick.addEventListener("change", () => { admin.priceToken = pick.value; admin.data = null; reload(); });
   const inputs = {};
   const rows = SHOP_ITEMS.map((item) => {
     inputs[item.id] = input(fromBaseUnits(d.prices[item.id], dec));
@@ -328,13 +344,14 @@ function pricesSection(d) {
     const plans = [];
     for (const item of SHOP_ITEMS) {
       const base = toBaseUnits(inputs[item.id].value, dec, item.name + " price");
-      if (base !== String(d.prices[item.id] || "0")) plans.push(planPrice(item.id, contracts.paymentToken, inputs[item.id].value, dec, sym));
+      if (base !== String(d.prices[item.id] || "0")) plans.push(planPrice(item.id, t.address, inputs[item.id].value, dec, sym));
     }
     if (!plans.length) throw new AdminInputError("No price changed.");
     return plans;
   });
-  return section("Prices", "Prices in " + sym + " (" + contracts.paymentToken + "). 0 takes an item off sale. One confirmation saves every changed price.", [
-    h("table", { class: "admin-table" }, [h("tr", {}, ["Item", "Now", "New price (" + sym + ")"].map((t) => h("th", {}, [t]))), ...rows]),
+  return section("Prices", "Prices of every item, per payment token. 0 takes an item off sale for that token. One confirmation saves every changed price.", [
+    field("Token", pick),
+    h("table", { class: "admin-table" }, [h("tr", {}, ["Item", "Now", "New price (" + sym + ")"].map((x) => h("th", {}, [x]))), ...rows]),
     save,
   ]);
 }
@@ -487,13 +504,76 @@ function storiesSettingsSection(d) {
 }
 
 function tokensSection(d) {
-  const token = input(contracts.paymentToken);
-  const decimals = input(String(contracts.paymentDecimals));
-  const symbol = input(contracts.paymentSymbol);
-  return section("Payment tokens", "Turn a token on or off for payments. After the Shop's first sale, a newly enabled token can only be used 7 days later (everyone can see it coming). Turning one off works at once.", [
-    row(field("Token address", token), field("Decimals", decimals), field("Symbol", symbol)),
-    row(actionButton("Turn the token ON", () => planAsset({ token: token.value, enabled: true, decimals: decimals.value, symbol: symbol.value })),
-      actionButton("Turn the token OFF", () => planAsset({ token: token.value, enabled: false }), { danger: true })),
+  const list = h("table", { class: "admin-table" }, [
+    h("tr", {}, ["Token", "Symbol", "Decimals", "Status", ""].map((x) => h("th", {}, [x]))),
+    ...d.tokens.map((t) => h("tr", {}, [
+      h("td", { class: "mono small" }, [t.address]),
+      h("td", {}, [t.symbol]),
+      h("td", {}, [String(t.decimals)]),
+      h("td", {}, [t.enabled ? (Number(t.usable_from) * 1000 > Date.now() ? "on from " + formatUtc(Number(t.usable_from)) : "on") : "off"]),
+      h("td", {}, [t.enabled
+        ? actionButton("Turn off", () => planAsset({ token: t.address, enabled: false }), { danger: true })
+        : actionButton("Turn on", () => planAsset({ token: t.address, enabled: true, decimals: t.decimals, symbol: t.symbol }))]),
+    ])),
+  ]);
+
+  // Add a token: read its decimals and symbol from its own contract, then
+  // price the Writer month and the packs from an Ink rate.
+  const addr = input("", { placeholder: "Token contract address" });
+  const symbol = input("");
+  const decimals = input("");
+  const rate = input("", { placeholder: "e.g. 100" });
+  const prices = {};
+  const priceInputs = SHOP_ITEMS.map((item) => {
+    prices[item.id] = input("", { placeholder: "not for sale" });
+    return field(item.name, prices[item.id]);
+  });
+  const readStatus = h("p", { class: "meta small" }, []);
+  const readBtn = h("button", { type: "button", class: "btn btn-secondary btn-small" }, ["Read the token"]);
+  readBtn.addEventListener("click", async () => {
+    readStatus.textContent = "Reading…";
+    try {
+      const c = new Contract({ id: addr.value.trim(), abi: utils.tokenAbi, provider: getProvider() });
+      const [dRes, sRes] = await Promise.all([c.functions.decimals({}), c.functions.symbol({})]);
+      decimals.value = String(dRes.result ? dRes.result.value : 0);
+      symbol.value = String(sRes.result ? sRes.result.value : "");
+      readStatus.textContent = "Read from the token contract: " + symbol.value + ", " + decimals.value + " decimals.";
+      fillFromRate();
+    } catch (error) {
+      readStatus.textContent = "Couldn't read that token: " + (error && error.message ? error.message : String(error));
+    }
+  });
+  const rateNote = h("p", { class: "meta small" }, []);
+  function fillFromRate() {
+    if (!rate.value.trim() || decimals.value === "") return;
+    try {
+      const shown = [];
+      for (const r of RATE_ITEMS) {
+        const base = ratePrice(d.shopCfg[r.cfg] || "0", rate.value, Number(decimals.value));
+        prices[r.id].value = fromBaseUnits(base, Number(decimals.value));
+        shown.push(SHOP_ITEMS.find((i) => i.id === r.id).name + " " + prices[r.id].value);
+      }
+      rateNote.textContent = "From the rate: " + shown.join(", ") + " " + symbol.value + ". You can change any of them.";
+    } catch (error) {
+      rateNote.textContent = error.message;
+    }
+  }
+  rate.addEventListener("input", fillFromRate);
+  const add = actionButton("Add the token and its prices", () => {
+    const p = {};
+    for (const item of SHOP_ITEMS) p[item.id] = prices[item.id].value;
+    return planAddToken({ token: addr.value, symbol: symbol.value, decimals: decimals.value, prices: p });
+  });
+  return section("Payment tokens", "Tokens buyers can pay with. Buyers pick one on the Membership and Open pages. After the Shop's first sale, a newly added token can be used only 7 days later (everyone can see it coming). Turning one off works at once.", [
+    list,
+    h("h3", { class: "h4" }, ["Add a payment token"]),
+    row(field("Token address", addr), readBtn),
+    readStatus,
+    row(field("Symbol", symbol), field("Decimals", decimals), field("Ink for 1 token", rate, "Prices the Writer month and the packs from the Ink they bring (rounded up).")),
+    rateNote,
+    h("div", { class: "admin-grid" }, priceInputs),
+    add,
+    h("p", { class: "meta small" }, ["If the mana sponsor should pay for buyers using the new token, add it to the sponsor's payment tokens below too."]),
   ]);
 }
 

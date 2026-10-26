@@ -169,6 +169,15 @@ message get_asset_arguments {
   bytes token = 1 [(koinos.btype) = ADDRESS];
 }
 
+// @description Every payment token the Shop has a record of (on or off), at most 10, so the site can offer each enabled one
+// @read-only true
+// @result token_list
+message get_assets_arguments {}
+
+message token_list {
+  repeated bytes tokens = 1 [(koinos.btype) = ADDRESS];
+}
+
 // @description Price of one item in one token's base units (0 = not for sale)
 // @read-only true
 // @result uint64

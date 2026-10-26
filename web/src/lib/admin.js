@@ -184,9 +184,49 @@ export function planAsset({ token, enabled, decimals, symbol }) {
   if (!enabled) return call("shop", "set_asset", { token: t, enabled: false, decimals: 0, symbol: "" }, "Turn OFF payment token " + t);
   const d = whole(decimals, "Decimals", 0, 18);
   const s = String(symbol || "").trim();
-  if (!/^[A-Za-z0-9]{1,12}$/.test(s)) fail("The symbol must be 1 to 12 letters or digits.");
+  if (!/^[A-Za-z0-9]{1,16}$/.test(s)) fail("The symbol must be 1 to 16 letters or digits.");
   return call("shop", "set_asset", { token: t, enabled: true, decimals: Number(d), symbol: s },
     "Turn ON payment token " + s + " (" + t + ", " + d + " decimals). After the Shop's first sale, a newly enabled token waits 7 days.");
+}
+
+/**
+ * A price from an Ink rate: `ink` Ink at `rate` Ink per 1 token, in the
+ * token's base units, rounded up (the buyer never gets Ink for less than
+ * the rate). Returns a string.
+ */
+export function ratePrice(ink, rate, decimals) {
+  const m = /^([0-9]{1,12})(?:\.([0-9]{1,8}))?$/.exec(String(rate == null ? "" : rate).trim());
+  if (!m) fail("The rate must be the Ink one token buys, like 100 or 2.5.");
+  const k = (m[2] || "").length;
+  const r = BigInt(m[1] + (m[2] || ""));
+  if (r === 0n) fail("The rate must be more than 0.");
+  const scale = 10n ** BigInt(decimals) * 10n ** BigInt(k);
+  const n = BigInt(ink || 0);
+  return ((n * scale + r - 1n) / r).toString();
+}
+
+/** The items priced from the Ink they bring, and where the Shop keeps that Ink. */
+export const RATE_ITEMS = [
+  { id: 2, cfg: "writer_ink" },
+  { id: 3, cfg: "pack_s_ink" },
+  { id: 4, cfg: "pack_m_ink" },
+  { id: 5, cfg: "pack_l_ink" },
+];
+
+/**
+ * Add a payment token: turn it on, then set its prices, in one transaction.
+ * `prices` maps item id to a price in whole tokens ("" = not for sale).
+ */
+export function planAddToken({ token, symbol, decimals, prices }) {
+  const plans = [planAsset({ token, enabled: true, decimals, symbol })];
+  const d = Number(decimals);
+  for (const item of SHOP_ITEMS) {
+    const v = prices && prices[item.id] != null ? String(prices[item.id]).trim() : "";
+    if (v === "") continue;
+    plans.push(planPrice(item.id, token, v, d, symbol));
+  }
+  if (plans.length === 1) fail("Give at least one price, or an Ink rate for the Writer month and packs.");
+  return plans;
 }
 
 // ---------------------------------------------------------------- moderation

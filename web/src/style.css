@@ -642,3 +642,4 @@ details.chapter[open] .chapter-number { color: var(--page-accent); }
 .stack-sm > * + * { margin-top: 8px; }
 .admin-page .notice p, .admin-page .notice pre { overflow-wrap: anywhere; }
 .admin-row > span { flex: 0 0 150px; }
+.pay-with { max-width: 280px; margin-top: 24px; }

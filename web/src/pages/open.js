@@ -8,10 +8,10 @@ import { checkStoryText, inkCost, normalizePasted } from "../lib/text.js";
 import { append, h, replace } from "../ui/dom.js";
 import { currentAddress, state } from "../app/state.js";
 import { num } from "../app/format.js";
-import { paymentBlock, tokenAmount } from "../app/payment.js";
+import { paymentBlock, tokenAmount, tokenPicker } from "../app/payment.js";
 import { minContribution, termsVersion } from "../app/story.js";
 import { aiToggle, citationField, connectButton, failure, field, loadingLine, notice, problemsNotice, rightsBox, setMeta, statusBox, walletNote } from "../app/ui.js";
-import { loadLibrary, newestOpenedStory, refreshAccount, reloadOverview } from "../app/data.js";
+import { loadLibrary, newestOpenedStory, refreshAccount, reloadOverview, switchPaymentToken } from "../app/data.js";
 import { send } from "../app/send.js";
 import { renderPage } from "../app/shell.js";
 
@@ -42,6 +42,8 @@ export function renderOpen(page) {
       onClick: () => { if (state.openKind !== key) { state.openKind = key; renderPage(); } },
     }, [h("b", {}, [info.name.charAt(0).toUpperCase() + info.name.slice(1)]), h("span", {}, [info.blurb])])));
   append(container, kindPicker);
+  const picker = tokenPicker(switchPaymentToken);
+  if (picker) append(container, picker);
   const body = h("div", { class: "split" });
   body.style.alignItems = "flex-start";
   body.style.marginTop = "40px";

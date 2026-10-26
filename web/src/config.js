@@ -81,6 +81,24 @@ export const contracts = {
 
 export const network = NETWORKS[ACTIVE];
 
+/**
+ * The payment token this page is set up for (the stablecoin). Other tokens
+ * the Shop accepts are read from the chain (shop.get_assets) and the buyer
+ * may pick one; selectPaymentToken() switches `contracts` to it.
+ */
+export const DEFAULT_PAYMENT = Object.freeze({
+  address: contracts.paymentToken,
+  symbol: contracts.paymentSymbol,
+  decimals: contracts.paymentDecimals,
+});
+
+export function selectPaymentToken(token) {
+  const t = token && isAddress(token.address) ? token : DEFAULT_PAYMENT;
+  contracts.paymentToken = t.address;
+  contracts.paymentSymbol = t.symbol;
+  contracts.paymentDecimals = Number(t.decimals);
+}
+
 // The mana payer for the selected network (see MANA_PAYER above).
 contracts.sponsor = (MANA_PAYER[ACTIVE] && MANA_PAYER[ACTIVE].address) || "";
 contracts.sponsorKind = (MANA_PAYER[ACTIVE] && MANA_PAYER[ACTIVE].kind) || "sponsor";

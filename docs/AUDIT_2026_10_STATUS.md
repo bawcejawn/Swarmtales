@@ -4,7 +4,7 @@ Audit: "SwarmTales Mainnet Audit — audit-2026-10 (16de9dc)". Fixes on branch `
 Status: **Fixed** (code changed and tested), **Doc** (documented, no code change needed),
 **Owner** (an action only the owner can take), **Live** (a check on a real network).
 
-Tests after the fixes: Ink 53, Shop 102, Stories 426, Sponsor 33, Multisig 23, website 179, copy checker 105, deploy tool 127; 0 failing.
+Tests after the fixes: Ink 53, Shop 104, Stories 426, Sponsor 33, Multisig 23, website 180, copy checker 105, deploy tool 133; 0 failing.
 Live checks were run on a throwaway testnet deploy of these exact builds (Ink `1E6NEt…`, Shop `14oJ1f…`, Stories `1EzAZT…`).
 
 ## Medium
@@ -111,3 +111,4 @@ Also closed from earlier rounds: AB-079 (removed with the legacy code) and AB-08
 | `multisig-create`, `multisig-signers`, `status --multisig` | Upload + setup in one transaction; signer changes only prepared for the quorum. | `deploy.multisig.test.js`; live on testnet: `1AQb8fmugoSPDmFTdq9ytPxrBjzLeXger2` (2 of 3), its own key refused by the chain |
 | Swappable mana payer | `MANA_PAYER` per network in `web/src/config.js`: `sponsor` (reads caps first) or `payer` (any paying contract, just asked). | `sponsor.test.js` |
 | Mainnet node | `https://koinos.armana.io` (community) in the site, the deploy tool and the checker; the chain id is checked before anything is signed. | config and checker tests |
+| Several payment tokens | Shop `get_assets` lists every token with a record (at most 10; `set_asset` refuses an 11th). The site reads them and lets the buyer pick ("Pay with"); every price, balance, approve and the sponsor check follow the pick. Admin page: "Add a payment token" reads the token's decimals and symbol from its contract and prices the Writer month and packs from "Ink for 1 token" (rounded up). Deploy tool: `set-price` (whole tokens, several items, `--rate`) and `set-ink-amounts` (keeps what isn't given). | Shop token-list tests; `admin.test.js`; `deploy.prices.test.js` |

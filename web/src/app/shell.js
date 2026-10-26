@@ -3,7 +3,7 @@
  * checks the chain and restores the wallet, renderPage() draws the route.
  */
 import { contracts, network, SITE } from "../config.js";
-import { loadOverview, verifyChain } from "../chain.js";
+import { loadOverview, loadPaymentTokens, verifyChain } from "../chain.js";
 import { explainFailure } from "../lib/errors.js";
 import { shortAddress } from "../lib/money.js";
 import { clearSavedSession, loadSavedSession } from "../wallet.js";
@@ -12,7 +12,7 @@ import { forgetTestWalletOnMainnet } from "../testWallet.js";
 import { isFramed } from "../lib/frame.js";
 import { append, h, icons, replace } from "../ui/dom.js";
 import { currentAddress, dialog, kondor, problems, state, testWallet, vault, walletName } from "./state.js";
-import { checkPayment } from "./payment.js";
+import { checkPayment, restorePaymentToken } from "./payment.js";
 import { notice } from "./ui.js";
 import { refreshAccount } from "./data.js";
 import { openWallet, renderDialog } from "./walletSheet.js";
@@ -184,6 +184,8 @@ async function start() {
   if (problems.length) return;
   try {
     await verifyChain();
+    state.payTokens = await loadPaymentTokens().catch(() => []);
+    restorePaymentToken();
     state.overview = await loadOverview();
     state.overviewAt = Date.now();
     checkPayment();

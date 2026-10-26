@@ -10,9 +10,9 @@ import { assessWriterBuy, isActiveWriter, writerMinInk } from "../lib/rules.js";
 import { append, h, icons, replace } from "../ui/dom.js";
 import { currentAddress, state } from "../app/state.js";
 import { num, plural } from "../app/format.js";
-import { paymentBlock, tokenAmount } from "../app/payment.js";
+import { paymentBlock, tokenAmount, tokenPicker } from "../app/payment.js";
 import { connectButton, failure, field, loadingLine, notice, problemsNotice, setMeta, statusBox, walletNote } from "../app/ui.js";
-import { refreshAccount } from "../app/data.js";
+import { refreshAccount, switchPaymentToken } from "../app/data.js";
 import { send } from "../app/send.js";
 import { renderPage } from "../app/shell.js";
 
@@ -25,6 +25,8 @@ export function renderMembership(page) {
     h("h1", { class: "title" }, ["Ink for writing"]),
     h("p", { class: "lede" }, ["Reading is always free. To write, you need Ink: from a promo link, a Writer membership, or an invited story whose opener pays from a writers' pool."])
   );
+  const picker = tokenPicker(switchPaymentToken);
+  if (picker) append(container, picker);
   const grid = h("div", { class: "card-grid" });
   grid.style.marginTop = "40px";
   append(container, grid);

@@ -54,6 +54,8 @@
 import { System, Storage, authority, Protobuf, SafeMath, Crypto, StringBytes, Arrays, token } from "@koinos/sdk-as";
 import { shop } from "./proto/shop";
 
+// Payment tokens the Shop keeps a record of (get_assets lists them all).
+const MAX_ASSETS: i32 = 10;
 const CONFIG_SPACE_ID: u32 = 0;
 const ASSETS_SPACE_ID: u32 = 1;
 const PRICES_SPACE_ID: u32 = 2;
@@ -220,6 +222,10 @@ export class Shop {
   get_asset(args: shop.get_asset_arguments): shop.asset {
     const found = args.token != null && args.token!.length == ADDRESS_LENGTH ? this.assets.get(args.token!) : null;
     return found != null ? found : new shop.asset(false, 0, "");
+  }
+
+  get_assets(args: shop.get_assets_arguments): shop.token_list {
+    return new shop.token_list(this.assets.getManyKeys(new Uint8Array(0), MAX_ASSETS));
   }
 
   get_price(args: shop.get_price_arguments): shop.uint64 {
@@ -526,6 +532,10 @@ export class Shop {
     // enabled token keeps its wait, and its decimals and symbol can't change
     // under buyers; turn it off first. Off is immediate.
     const found = this.assets.get(assetId);
+    // At most MAX_ASSETS tokens ever get a record, so get_assets lists them all.
+    if (found == null) {
+      System.require(this.assets.getManyKeys(new Uint8Array(0), MAX_ASSETS).length < MAX_ASSETS, "SHOP: at most 10 payment tokens");
+    }
     const wasOn = found != null && found.enabled;
     let usableFrom: u64 = 0;
     if (args.enabled) {

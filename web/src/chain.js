@@ -4,7 +4,7 @@
  */
 import { Contract, Provider, utils } from "koilib";
 import { abis } from "./generated/abis.js";
-import { assertExpectedChain, contracts, isAddress, network } from "./config.js";
+import { assertExpectedChain, contracts, DEFAULT_PAYMENT, isAddress, network } from "./config.js";
 import { headTimeSeconds } from "./lib/money.js";
 import { confirmTransaction } from "./lib/confirm.js";
 import { readAllSegments } from "./lib/segments.js";
@@ -145,6 +145,33 @@ export async function sponsorFunding(address, operations) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Every payment token the Shop has turned on: the page's own token first
+ * (with the symbol and decimals config.js expects, for the M-8 check), then
+ * the others from shop.get_assets, with the Shop's record. A token whose
+ * record can't be read is left out.
+ */
+export async function loadPaymentTokens() {
+  const addresses = [DEFAULT_PAYMENT.address];
+  try {
+    const r = await read("shop", "get_assets", {});
+    for (const t of (r && r.tokens) || []) if (isAddress(t) && !addresses.includes(t)) addresses.push(t);
+  } catch {
+    /* an older Shop without get_assets: only the page's own token */
+  }
+  const out = [];
+  for (const address of addresses) {
+    const asset = await read("shop", "get_asset", { token: address }).catch(() => null);
+    if (!asset || !asset.enabled) continue;
+    if (address === DEFAULT_PAYMENT.address) {
+      out.push({ ...DEFAULT_PAYMENT, usable_from: asset.usable_from || "0" });
+    } else if (asset.symbol && Number.isInteger(Number(asset.decimals))) {
+      out.push({ address, symbol: String(asset.symbol), decimals: Number(asset.decimals), usable_from: asset.usable_from || "0" });
+    }
+  }
+  return out;
 }
 
 export async function getMana(address) {

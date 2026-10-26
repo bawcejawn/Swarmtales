@@ -109,6 +109,15 @@
  *   node deploy/deploy.js clear-summary --actor <admin or moderator addr> --stories <addr> --story <id>
  *       (empties a story's "story so far", for copied or abusive text. Works while Stories is paused)
  *
+ * Prices and Ink amounts (admin; --prepare works for a multisig admin):
+ *   node deploy/deploy.js set-price --admin <addr> --shop <addr> [--token <addr>] [--reader 1] [--writer 2] [--pack-s 0.5]
+ *       [--pack-m 1] [--pack-l 2] [--book 1] [--short 0.5] [--poem 0.3] [--rate <Ink per 1 token>]
+ *       (prices in whole tokens, all in one transaction; 0 takes an item off sale. --rate prices the Writer month
+ *        and the packs from the Ink they bring, for a newly added token)
+ *   node deploy/deploy.js set-ink-amounts --admin <addr> --shop <addr> [--writer 15000] [--pack-s 5000] [--pack-m 15000]
+ *       [--pack-l 45000] [--starter-book 20000] [--starter-short 10000] [--starter-poem 2000]
+ *       (every amount you leave out stays as it is on chain)
+ *
  * Mana sponsor (pays users' mana for SwarmTales transactions only; sponsor/):
  *   node deploy/deploy.js upload sponsor --expect <sponsor wallet address>
  *       (uploads with ONLY the "decides when this account pays" flag on; calls and uploads stay with its key)
@@ -946,6 +955,41 @@ async function cmdSetAsset(args) {
   const after = await readOnly(provider, "shop", shop, "get_asset", { token });
   console.log(after.enabled ? "Enabled. Buyers can pay with it from " + lib.utcTime(after.usable_from || 0) + " (UTC). Set its prices before then."
     : "Turned off.");
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
+/**
+ * Prices in one payment token, several items in one transaction. Amounts in
+ * whole tokens (the tool reads the token's decimals from the Shop's record).
+ */
+async function cmdSetPrice(args) {
+  const f = args.flags;
+  const admin = lib.requireAddress(f.admin, "admin");
+  const shop = lib.requireAddress(f.shop, "shop");
+  const { net, provider } = await connect(f);
+  const token = lib.requireAddress(f.token || net.koin, "token");
+  const asset = await readOnly(provider, "shop", shop, "get_asset", { token });
+  if (!asset || !asset.symbol) lib.fail("The Shop has no record of token " + token + ". Turn it on first with set-asset. Nothing was sent.");
+  const cfg = await readOnly(provider, "shop", shop, "get_config", {});
+  const plan = lib.planPrices(f, Number(asset.decimals || 0), cfg);
+  const shopC = contractOf("shop", shop, provider);
+  const ops = [];
+  for (const p of plan) ops.push(await shopC.encodeOperation({ name: "set_price", args: { item: p.item, token, amount: p.amount } }));
+  const { utils } = koilib();
+  const summary = "prices in " + asset.symbol + ": " + plan.map((p) => p.name + " " + (p.amount === "0" ? "off sale" : utils.formatUnits(p.amount, Number(asset.decimals || 0)))).join(", ");
+  const txId = await dryRunThenSend(await getSigner(provider, admin, "the admin wallet"), provider, net, ops, summary);
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
+/** Ink each Writer month, pack and story opening brings. Flags not given keep the chain's value. */
+async function cmdSetInkAmounts(args) {
+  const f = args.flags;
+  const admin = lib.requireAddress(f.admin, "admin");
+  const shop = lib.requireAddress(f.shop, "shop");
+  const { net, provider } = await connect(f);
+  const plan = lib.planInkAmounts(f, await readOnly(provider, "shop", shop, "get_config", {}));
+  const op = await contractOf("shop", shop, provider).encodeOperation({ name: "set_ink_amounts", args: plan });
+  const txId = await dryRunThenSend(await getSigner(provider, admin, "the admin wallet"), provider, net, [op], "shop.set_ink_amounts: " + JSON.stringify(plan));
   console.log("Send back: the transaction id (" + txId + ").");
 }
 
@@ -1882,6 +1926,8 @@ const COMMANDS = {
   "unpause": { run: (a) => cmdPause(a, false), positionals: 1, prepare: true, flags: "contract admin" },
   "wire": { run: cmdWire, prepare: true, flags: "admin ink shop treasury founder " + lib.HASH_OVERRIDE_FLAG.slice(2) },
   "set-asset": { run: cmdSetAsset, prepare: true, flags: "admin shop token symbol decimals disable" },
+  "set-price": { run: cmdSetPrice, prepare: true, flags: "admin shop token reader writer pack-s pack-m pack-l book short poem rate" },
+  "set-ink-amounts": { run: cmdSetInkAmounts, prepare: true, flags: "admin shop writer pack-s pack-m pack-l starter-book starter-short starter-poem" },
   "test-asset": { run: cmdTestAsset, testnet: true, prepare: true, flags: "admin shop token symbol decimals" },
   "test-buy": { run: cmdTestBuy, testnet: true, flags: "user buyer shop tier token" },
   "test-promo": { run: cmdTestPromo, testnet: true, flags: "admin shop" },

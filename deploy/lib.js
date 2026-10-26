@@ -1068,6 +1068,73 @@ function formatMana(rc) {
   return whole.toString() + "." + frac;
 }
 
+// ---- Prices and Ink amounts (set-price, set-ink-amounts) ----
+// Item flags of set-price, in shop.proto numbers.
+const PRICE_FLAGS = { reader: 1, writer: 2, "pack-s": 3, "pack-m": 4, "pack-l": 5, book: 6, short: 7, poem: 10 };
+// Ink amount flags of set-ink-amounts: flag -> [set_ink_amounts field, shop config field].
+const INK_FLAGS = {
+  writer: ["writer_month", "writer_ink"], "pack-s": ["pack_s", "pack_s_ink"], "pack-m": ["pack_m", "pack_m_ink"], "pack-l": ["pack_l", "pack_l_ink"],
+  "starter-book": ["starter_book", "starter_book"], "starter-short": ["starter_short", "starter_short"], "starter-poem": ["starter_poem", "starter_poem"],
+};
+
+/** "1.5" of a token with `decimals` decimals in base units (a string). */
+function parseTokenAmount(value, decimals, label) {
+  const m = /^([0-9]{1,15})(?:\.([0-9]+))?$/.exec(String(value));
+  if (!m) fail(label + " must be an amount like 2 or 0.5.");
+  const frac = m[2] || "";
+  if (frac.length > decimals) fail(label + " has more than " + decimals + " decimals.");
+  return (BigInt(m[1]) * 10n ** BigInt(decimals) + BigInt((frac + "0".repeat(decimals)).slice(0, decimals) || "0")).toString();
+}
+
+/**
+ * set_price calls for one token. Each item flag (--reader, --writer, --pack-s,
+ * --pack-m, --pack-l, --book, --short, --poem) is a price in whole tokens, 0
+ * takes the item off sale. --rate N (Ink per 1 token) prices the Writer month
+ * and the three packs from the Ink they bring (rounded up), unless that item
+ * is given too.
+ */
+function planPrices(flags, decimals, cfg) {
+  const prices = {};
+  for (const [flag, item] of Object.entries(PRICE_FLAGS)) {
+    if (flags[flag] !== undefined) prices[item] = parseTokenAmount(flags[flag], decimals, "--" + flag);
+  }
+  if (flags.rate !== undefined) {
+    const m = /^([0-9]{1,12})(?:\.([0-9]{1,8}))?$/.exec(String(flags.rate));
+    if (!m) fail("--rate must be the Ink one token buys, like 100 or 2.5.");
+    const k = (m[2] || "").length;
+    const rateInt = BigInt(m[1] + (m[2] || ""));
+    if (rateInt === 0n) fail("--rate must be more than 0.");
+    const scale = 10n ** BigInt(decimals) * 10n ** BigInt(k);
+    for (const [flag, field] of [["writer", "writer_ink"], ["pack-s", "pack_s_ink"], ["pack-m", "pack_m_ink"], ["pack-l", "pack_l_ink"]]) {
+      if (prices[PRICE_FLAGS[flag]] !== undefined) continue;
+      const ink = BigInt((cfg && cfg[field]) || "0");
+      if (ink === 0n) fail("The Shop has no Ink amount for " + flag + " yet, so --rate can't price it. Set it with set-ink-amounts, or give --" + flag + ".");
+      prices[PRICE_FLAGS[flag]] = ((ink * scale + rateInt - 1n) / rateInt).toString();
+    }
+  }
+  const items = Object.keys(prices).map(Number).sort((a, b) => a - b);
+  if (!items.length) fail("Give at least one price: --reader --writer --pack-s --pack-m --pack-l --book --short --poem, or --rate.");
+  const names = Object.fromEntries(Object.entries(PRICE_FLAGS).map(([f, i]) => [i, f]));
+  return items.map((item) => ({ item, amount: prices[item], name: names[item] }));
+}
+
+/** set_ink_amounts arguments: each flag given, else what the chain has. */
+function planInkAmounts(flags, cfg) {
+  if (!cfg) fail("Could not read the Shop's settings. Nothing was sent.");
+  const args = {};
+  let changed = 0;
+  for (const [flag, [field, cfgField]] of Object.entries(INK_FLAGS)) {
+    if (flags[flag] !== undefined) {
+      args[field] = String(wholeInRange(flags[flag], "--" + flag, 0, 100000000));
+      changed++;
+    } else {
+      args[field] = String((cfg && cfg[cfgField]) || "0");
+    }
+  }
+  if (!changed) fail("Give at least one: --writer --pack-s --pack-m --pack-l --starter-book --starter-short --starter-poem.");
+  return args;
+}
+
 // ---- Multisig wallet (multisig/) ----
 const MULTISIG_MIN_SIGNERS = 2;
 const MULTISIG_MAX_SIGNERS = 10;
@@ -1410,6 +1477,9 @@ module.exports = {
   sha256Hex,
   checkWasmHash,
   planSponsorConfig,
+  planPrices,
+  planInkAmounts,
+  parseTokenAmount,
   planMultisigSigners,
   codeHashFromMeta,
   checkCodeHash,

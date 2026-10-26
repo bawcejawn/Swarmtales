@@ -985,6 +985,49 @@ describe("Shop: story fees", () => {
   });
 });
 
+describe("Shop: the payment token list", () => {
+  beforeEach(() => {
+    MockVM.reset();
+    MockVM.setContractId(SHOP);
+    setTime(START);
+    callAs(new Uint8Array(0));
+    resetLedger();
+    checkpoint();
+  });
+
+  it("lists every token with a record, on or off, once each", () => {
+    authorize(SHOP);
+    expect(new Shop().get_assets(new shop.get_assets_arguments()).tokens.length).toBe(0);
+    new Shop().set_asset(new shop.set_asset_arguments(USDT, true, 6, "USDT"));
+    new Shop().set_asset(new shop.set_asset_arguments(EIGHT, true, 8, "EIGHT"));
+    new Shop().set_asset(new shop.set_asset_arguments(EIGHT, false, 8, "EIGHT"));
+    const list = new Shop().get_assets(new shop.get_assets_arguments()).tokens;
+    expect(list.length).toBe(2);
+    let usdt = false;
+    let eight = false;
+    for (let i = 0; i < list.length; i++) {
+      if (same(list[i], USDT)) usdt = true;
+      if (same(list[i], EIGHT)) eight = true;
+    }
+    expect(usdt && eight).toBe(true);
+  });
+
+  it("keeps at most 10 tokens", () => {
+    authorize(SHOP);
+    for (let i = 0; i < 10; i++) {
+      const t = new Uint8Array(25);
+      t[1] = <u8>(i + 1);
+      new Shop().set_asset(new shop.set_asset_arguments(t, true, 6, "T" + i.toString()));
+    }
+    expect(new Shop().get_assets(new shop.get_assets_arguments()).tokens.length).toBe(10);
+    checkpoint();
+    expect(() => {
+      new Shop().set_asset(new shop.set_asset_arguments(USDT, true, 6, "USDT"));
+    }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: at most 10 payment tokens");
+  });
+});
+
 describe("Shop: pause", () => {
   beforeEach(() => {
     MockVM.reset();

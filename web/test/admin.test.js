@@ -142,3 +142,19 @@ test("admin: the nonce is encoded the way the chain and cosign read it", () => {
   }
   assert.equal(encodeNonce(5), "OAU=");
 });
+
+test("admin: a new payment token priced from an Ink rate, in one transaction", async () => {
+  const { planAddToken, ratePrice } = await import("../src/lib/admin.js");
+  // 5,000 Ink at 100 Ink per token = 50 tokens; 6 decimals.
+  assert.equal(ratePrice("5000", "100", 6), "50000000");
+  // Rounded up: 5,000 Ink at 3 Ink per token = 1666.666667 tokens.
+  assert.equal(ratePrice("5000", "3", 6), "1666666667");
+  assert.equal(ratePrice("15000", "2.5", 0), "6000");
+  throwsInput(() => ratePrice("5000", "0", 6), /more than 0/);
+  throwsInput(() => ratePrice("5000", "x", 6), /Ink one token buys/);
+  const plans = planAddToken({ token: B, symbol: "vUSDC", decimals: "6", prices: { 2: "150", 3: "50", 10: "", 1: "" } });
+  assert.deepEqual(plans.map((p) => p.method), ["set_asset", "set_price", "set_price"]);
+  assert.deepEqual(plans[0].args, { token: B, enabled: true, decimals: 6, symbol: "vUSDC" });
+  assert.deepEqual(plans[1].args, { item: 2, token: B, amount: "150000000" });
+  throwsInput(() => planAddToken({ token: B, symbol: "vUSDC", decimals: "6", prices: {} }), /at least one price/);
+});

@@ -2,12 +2,48 @@
  * The payment token: amounts in its units, and whether prices may be shown
  * and things bought (checked against the chain at startup, audit M-8).
  */
-import { contracts } from "../config.js";
+import { contracts, selectPaymentToken } from "../config.js";
 import { formatUnits, formatUtc } from "../lib/money.js";
 import { h } from "../ui/dom.js";
 import { checkPaymentToken } from "../lib/payment.js";
 import { state } from "./state.js";
 import { notice } from "./ui.js";
+
+const PICK_KEY = "swarmtales.payToken";
+
+/** The token saved last time in this browser, if the Shop still takes it. */
+export function restorePaymentToken() {
+  let saved = "";
+  try {
+    saved = localStorage.getItem(PICK_KEY) || "";
+  } catch {
+    saved = "";
+  }
+  const t = (state.payTokens || []).find((x) => x.address === saved);
+  if (t) selectPaymentToken(t);
+}
+
+/**
+ * "Pay with" when the Shop takes more than one token. Picking one switches
+ * every price, balance and payment on the page to it.
+ */
+export function tokenPicker(onChange) {
+  const list = state.payTokens || [];
+  if (list.length < 2) return null;
+  const select = h("select", { "aria-label": "Pay with" }, list.map((t) => h("option", { value: t.address }, [t.symbol])));
+  select.value = contracts.paymentToken;
+  select.addEventListener("change", async () => {
+    const t = list.find((x) => x.address === select.value);
+    selectPaymentToken(t);
+    try {
+      localStorage.setItem(PICK_KEY, t.address);
+    } catch {
+      /* not kept */
+    }
+    if (onChange) await onChange();
+  });
+  return h("label", { class: "field pay-with" }, [h("span", {}, ["Pay with"]), select]);
+}
 
 export function tokenAmount(base) {
   // Never print an amount with decimals the chain doesn't confirm (M-8).

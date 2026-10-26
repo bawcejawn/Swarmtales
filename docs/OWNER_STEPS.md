@@ -260,30 +260,32 @@ node deploy/deploy.js status --sponsor $SPONSOR
 **Expect** `call false, pay true, upload false` and `"enabled":true`. The site already points at
 this address (`MANA_PAYER.testnet` in `web/src/config.js`).
 
-### F4. Admin page: poem price and starter Ink
+### F4. Poem price and starter Ink (terminal, admin key)
 
-Run the site (`cd web; npm.cmd run build; npm.cmd run preview`) and open
-http://127.0.0.1:4173/#/admin (also linked as **Admin** at the bottom of every page).
+```powershell
+node deploy/deploy.js set-ink-amounts --admin $ADMIN --shop $SHOP --starter-poem 2000
+node deploy/deploy.js set-price --admin $ADMIN --shop $SHOP --token $TKOIN --poem 0.3
+```
+Each asks for the **admin** key, shows a dry run, then `SEND`. `set-ink-amounts` keeps every
+amount you don't give. `set-price` takes whole tokens and can set several items at once
+(`--reader --writer --pack-s --pack-m --pack-l --book --short --poem`).
 
-Kondor can't sign on this testnet (C1), so on testnet use the file route, which is also exactly how
-the multisig signs on mainnet:
-1. **How to sign** → *Prepare a file for the multisig signers*. **Paying address** → `18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6`.
-2. **Ink amounts** → *Starter Ink, poem* `2000` → **Save Ink amounts**. A `.json` file downloads.
-3. **Prices** → *Open a poem* `0.3` → **Save changed prices**. A second file downloads.
-4. For each file (in a second PowerShell window, in `C:\swarmtales`):
-   ```powershell
-   node deploy/deploy.js cosign "$HOME\Downloads\<file name>.json"
-   ```
-   Read the decoded operations, type `SIGN`, paste the **admin** key. Then:
-   ```powershell
-   node deploy/deploy.js submit "$HOME\Downloads\<file name>.json"
-   ```
-   `SEND`.
-5. On the site, **Open a story** now shows **Poem** with its price and starter Ink.
+On the site, **Open a story** now shows **Poem** with its price and starter Ink.
 
-Everything else on the admin page (promo links, prices, pause, hide, takedown and strikes, blocks,
-limits, Terms, categories, payment tokens, sponsor settings, admin handover, any other call) works
-the same way.
+The admin page (http://127.0.0.1:4173/#/admin) does the same without Kondor: choose *Prepare a
+file*, paying address `18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6`, press the action, then
+`node deploy/deploy.js cosign "$HOME\Downloads\<file>.json"` (admin key) and
+`node deploy/deploy.js submit "$HOME\Downloads\<file>.json"`.
+
+**Adding another payment token** (terminal): turn it on, then price it, for example at 100 Ink per
+token (the Writer month and packs are priced from the Ink they bring; add other items as needed):
+```powershell
+node deploy/deploy.js set-asset --admin $ADMIN --shop $SHOP --token <token address> --symbol <SYMBOL> --decimals <decimals>
+node deploy/deploy.js set-price --admin $ADMIN --shop $SHOP --token <token address> --rate 100 --book 200 --short 100 --poem 30
+```
+Or on the admin page: **Payment tokens** → *Add a payment token* → **Read the token** → *Ink for 1
+token* → **Add the token and its prices** (one confirmation). Buyers then see **Pay with** on the
+Membership and Open pages. After the Shop's first sale, a new token works 7 days after it is added.
 
 ### F5. Multisig rehearsal (testnet, with your three signer keys)
 
