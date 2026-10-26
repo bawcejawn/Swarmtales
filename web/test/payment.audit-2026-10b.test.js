@@ -81,3 +81,16 @@ test("I-2: no two tokens may share a display symbol (page and config)", () => {
   }
   assert.deepEqual(configProblems(), []);
 });
+
+test("I-18: a mainnet build refuses a github.io SITE.url and an empty copyright email", async () => {
+  const { mainnetSiteProblems, SITE } = await import("../src/config.js");
+  const both = mainnetSiteProblems({ url: "https://bawcejawn.github.io/Swarmtales/", copyrightEmail: "" });
+  assert.equal(both.length, 2);
+  assert.match(both.join(" "), /not a github\.io address/);
+  assert.match(both.join(" "), /copyrightEmail must be set/);
+  assert.deepEqual(mainnetSiteProblems({ url: "https://swarmtales.example/", copyrightEmail: "rights@swarmtales.example" }), []);
+  assert.equal(mainnetSiteProblems({ url: "https://GITHUB.IO/", copyrightEmail: "a@b.c" }).length, 1);
+  // The shipped testnet config is fine as it is (the check is for mainnet).
+  assert.equal(mainnetSiteProblems(SITE).length, 2, "today's SITE would not pass on mainnet");
+  assert.deepEqual(configProblems(), []);
+});

@@ -174,11 +174,34 @@ export function configProblems() {
     problems.push(error.message);
   }
   if (network.mainnet) {
+    problems.push(...mainnetSiteProblems(SITE));
     for (const key of Object.keys(TESTNET_ADDRESSES)) {
       if (TESTNET_ADDRESSES[key] && contracts[key] === TESTNET_ADDRESSES[key]) {
         problems.push(key + " is still the testnet address. Replace it before using mainnet.");
       }
     }
+  }
+  return problems;
+}
+
+/**
+ * What a mainnet build needs of SITE (audit I-18, M-7): its own domain, not
+ * the shared github.io origin (the Vault pairing secret, bookmarks and the
+ * Kondor permission live on the site's origin), and a copyright email.
+ */
+export function mainnetSiteProblems(site) {
+  const problems = [];
+  let host = "";
+  try {
+    host = new URL(String(site.url)).hostname.toLowerCase();
+  } catch {
+    host = "";
+  }
+  if (host === "github.io" || host.endsWith(".github.io")) {
+    problems.push("SITE.url must be the site's own domain on mainnet, not a github.io address (M-7).");
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(site.copyrightEmail || ""))) {
+    problems.push("SITE.copyrightEmail must be set on mainnet (where copyright notices go).");
   }
   return problems;
 }
