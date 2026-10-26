@@ -351,6 +351,13 @@ message set_asset_arguments {
   string symbol = 4;
 }
 
+// @description Delete a turned-off token's record and its prices, freeing one of the 10 token slots. Turn it off first.
+// @read-only false
+// @result empty_object
+message remove_asset_arguments {
+  bytes token = 1 [(koinos.btype) = ADDRESS];
+}
+
 // @description Set one item's price in one token. 0 removes it.
 // @read-only false
 // @result empty_object
@@ -504,6 +511,11 @@ message asset_event {
   uint32 decimals = 3;
   string symbol = 4;
   uint64 usable_from = 5 [jstype = JS_STRING];
+}
+
+// A turned-off token's record and prices were deleted (remove_asset).
+message asset_removed_event {
+  bytes token = 1 [(koinos.btype) = ADDRESS];
 }
 
 // Payment and partner addresses changed.

@@ -1,0 +1,3794 @@
+{
+  "methods": {
+    "get_config": {
+      "entry_point": 3159346644,
+      "argument": "stories.get_config_arguments",
+      "return": "stories.config",
+      "read_only": true,
+      "description": "Admin, pause flag, Ink and Shop addresses, limits and counters"
+    },
+    "get_story": {
+      "entry_point": 2223654069,
+      "argument": "stories.get_story_arguments",
+      "return": "stories.story",
+      "read_only": true,
+      "description": "One story. An unknown id returns an empty record (status 0)."
+    },
+    "get_segment": {
+      "entry_point": 192272869,
+      "argument": "stories.get_segment_arguments",
+      "return": "stories.segment",
+      "read_only": true,
+      "description": "One segment (story id + sequence number, starting at 1)"
+    },
+    "get_segments": {
+      "entry_point": 3543436779,
+      "argument": "stories.get_segments_arguments",
+      "return": "stories.segment_list",
+      "read_only": true,
+      "description": "Up to 10 segments starting at seq `start`, and fewer when their text passes about 64 KB (at least one). `next` says where to go on."
+    },
+    "get_contributor_total": {
+      "entry_point": 1509536167,
+      "argument": "stories.get_contributor_total_arguments",
+      "return": "stories.uint64",
+      "read_only": true,
+      "description": "Live Ink-backed characters of one author in one story",
+      "default_output": {
+        "value": "0"
+      }
+    },
+    "get_surviving_total": {
+      "entry_point": 1257416383,
+      "argument": "stories.get_surviving_total_arguments",
+      "return": "stories.uint64",
+      "read_only": true,
+      "description": "Surviving characters after the final edit (credits and Contributor Editions)",
+      "default_output": {
+        "value": "0"
+      }
+    },
+    "is_editor": {
+      "entry_point": 2760883190,
+      "argument": "stories.is_editor_arguments",
+      "return": "stories.boole",
+      "read_only": true,
+      "description": "Whether an account is an editor of a story",
+      "default_output": {
+        "value": false
+      }
+    },
+    "is_allowed": {
+      "entry_point": 3965107906,
+      "argument": "stories.is_allowed_arguments",
+      "return": "stories.boole",
+      "read_only": true,
+      "description": "Whether an account is on a story's allow-list",
+      "default_output": {
+        "value": false
+      }
+    },
+    "get_invite": {
+      "entry_point": 1356977988,
+      "argument": "stories.get_invite_arguments",
+      "return": "stories.invite",
+      "read_only": true,
+      "description": "One invite (only the public address of its link key is stored)"
+    },
+    "get_trial_used": {
+      "entry_point": 31983468,
+      "argument": "stories.get_trial_used_arguments",
+      "return": "stories.uint64",
+      "read_only": true,
+      "description": "Lifetime trial characters a wallet has written",
+      "default_output": {
+        "value": "0"
+      }
+    },
+    "get_open_count": {
+      "entry_point": 3593264922,
+      "argument": "stories.get_open_count_arguments",
+      "return": "stories.uint32",
+      "read_only": true,
+      "description": "Active projects (OPEN, LOCKED or EDITING) a wallet has opened",
+      "default_output": {
+        "value": 0
+      }
+    },
+    "get_category": {
+      "entry_point": 3244531887,
+      "argument": "stories.get_category_arguments",
+      "return": "stories.category",
+      "read_only": true,
+      "description": "One category"
+    },
+    "get_opener_stories": {
+      "entry_point": 2121261356,
+      "argument": "stories.get_opener_stories_arguments",
+      "return": "stories.id_list",
+      "read_only": true,
+      "description": "Story ids opened by an account (index from 0, up to 50)"
+    },
+    "get_category_stories": {
+      "entry_point": 432048760,
+      "argument": "stories.get_category_stories_arguments",
+      "return": "stories.id_list",
+      "read_only": true,
+      "description": "Story ids ever placed in a category (index from 0, up to 50). Check each story's current categories."
+    },
+    "get_author_segments": {
+      "entry_point": 1095458777,
+      "argument": "stories.get_author_segments_arguments",
+      "return": "stories.segment_ref_list",
+      "read_only": true,
+      "description": "Segments written by an account (index from 0, up to 50)"
+    },
+    "has_reported": {
+      "entry_point": 1049514445,
+      "argument": "stories.has_reported_arguments",
+      "return": "stories.boole",
+      "read_only": true,
+      "description": "Whether a wallet has already reported a part",
+      "default_output": {
+        "value": false
+      }
+    },
+    "get_account_status": {
+      "entry_point": 1451524551,
+      "argument": "stories.get_account_status_arguments",
+      "return": "stories.account_status",
+      "read_only": true,
+      "description": "Whether a wallet is blocked and how many takedowns it has"
+    },
+    "get_open_multiplier": {
+      "entry_point": 1274688998,
+      "argument": "stories.get_open_multiplier_arguments",
+      "return": "stories.uint32",
+      "read_only": true,
+      "description": "Price multiplier for this wallet's next story (1 = normal; doubles per open project beyond the normal-price number)",
+      "default_output": {
+        "value": 0
+      }
+    },
+    "get_terms_accepted": {
+      "entry_point": 918789405,
+      "argument": "stories.get_terms_accepted_arguments",
+      "return": "stories.uint32",
+      "read_only": true,
+      "description": "Latest Terms of Use version a wallet accepted (0 if never)",
+      "default_output": {
+        "value": 0
+      }
+    },
+    "quote_cost": {
+      "entry_point": 3152780057,
+      "argument": "stories.quote_cost_arguments",
+      "return": "stories.uint64",
+      "read_only": true,
+      "description": "Exact Ink the contract would charge for this text. Fails with the reason if the text is not allowed.",
+      "default_output": {
+        "value": "0"
+      }
+    },
+    "open_story": {
+      "entry_point": 2937681671,
+      "argument": "stories.open_story_arguments",
+      "return": "stories.uint64",
+      "read_only": false,
+      "description": "Open a Book, Short Story or Poem. Pays the open fee through Shop (which mints starter Ink), then burns Ink for the opening text.",
+      "default_output": {
+        "value": "0"
+      }
+    },
+    "update_story": {
+      "entry_point": 3912607388,
+      "argument": "stories.update_story_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Opener changes title, categories, visibility and free chapters (send all of them)"
+    },
+    "set_editor": {
+      "entry_point": 2122769416,
+      "argument": "stories.set_editor_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Opener adds or removes an editor (max 10)"
+    },
+    "set_allowed": {
+      "entry_point": 4056501870,
+      "argument": "stories.set_allowed_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Opener or editor adds or removes wallets on the allow-list (max 20 per call)"
+    },
+    "create_invite": {
+      "entry_point": 2188942846,
+      "argument": "stories.create_invite_arguments",
+      "return": "stories.uint64",
+      "read_only": false,
+      "description": "Opener creates an invite link: the PUBLIC address of a fresh link key, a use limit and an expiry",
+      "default_output": {
+        "value": "0"
+      }
+    },
+    "revoke_invite": {
+      "entry_point": 1955966707,
+      "argument": "stories.revoke_invite_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Opener revokes an invite"
+    },
+    "join_with_invite": {
+      "entry_point": 970200548,
+      "argument": "stories.join_with_invite_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "A wallet joins a story's allow-list with a signed invite link."
+    },
+    "contribute": {
+      "entry_point": 2326215862,
+      "argument": "stories.contribute_arguments",
+      "return": "stories.uint64",
+      "read_only": false,
+      "description": "Add text to an OPEN story. Burns exactly expected_ink from the author.",
+      "default_output": {
+        "value": "0"
+      }
+    },
+    "revise_part": {
+      "entry_point": 1386902456,
+      "argument": "stories.revise_part_arguments",
+      "return": "stories.uint32",
+      "read_only": false,
+      "description": "Change (or, with empty text, remove) someone else's part of an OPEN story. Price: the letters",
+      "default_output": {
+        "value": 0
+      }
+    },
+    "get_versions": {
+      "entry_point": 2738124628,
+      "argument": "stories.get_versions_arguments",
+      "return": "stories.version_list",
+      "read_only": true,
+      "description": "A part's kept versions, oldest first, at most 5 per call and only as many as fit about 64 KB of"
+    },
+    "get_changers": {
+      "entry_point": 2980251532,
+      "argument": "stories.get_changers_arguments",
+      "return": "stories.address_list",
+      "read_only": true,
+      "description": "Every wallet other than the writer that changed a part (a paid change, the final edit or a"
+    },
+    "set_story_summary": {
+      "entry_point": 126552859,
+      "argument": "stories.set_story_summary_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "The opener, an editor or a current writer of the story updates \"the story so far\" while it is"
+    },
+    "edit_segment": {
+      "entry_point": 449317411,
+      "argument": "stories.edit_segment_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "The part's own writer edits it in an OPEN story. Rewording is free; letters beyond the part's"
+    },
+    "remove_segment": {
+      "entry_point": 1035227084,
+      "argument": "stories.remove_segment_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "The part's writer removes it from an OPEN story for free. The opener or an editor may remove a part"
+    },
+    "top_up_fund": {
+      "entry_point": 1057888938,
+      "argument": "stories.top_up_fund_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Opener adds Ink to a private story's fund (burned from the opener now; unused Ink comes back at the end)"
+    },
+    "set_segment_hidden": {
+      "entry_point": 602608846,
+      "argument": "stories.set_segment_hidden_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Admin or the moderator hides or unhides a part. Works at any stage. Hidden parts"
+    },
+    "set_citation": {
+      "entry_point": 2211273059,
+      "argument": "stories.set_citation_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "The part's writer, the opener or an editor sets or changes the part's citation (what it quotes; the copy checker's source note is separate). A blocked writer, or one taken off a private story's list, may only clear it."
+    },
+    "set_reading_place": {
+      "entry_point": 361506209,
+      "argument": "stories.set_reading_place_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "A reader saves their place in a story (their bookmark), so it follows their wallet to any device. Not while paused."
+    },
+    "get_reading_place": {
+      "entry_point": 1987316119,
+      "argument": "stories.get_reading_place_arguments",
+      "return": "stories.reading_place",
+      "read_only": true,
+      "description": "A reader's saved place in one story (seq 0 if none)."
+    },
+    "get_reading_places": {
+      "entry_point": 1852408576,
+      "argument": "stories.get_reading_places_arguments",
+      "return": "stories.reading_place_list",
+      "read_only": true,
+      "description": "A reader's saved places, newest story first is NOT guaranteed; index from 0, up to 50."
+    },
+    "set_source_note": {
+      "entry_point": 3004878323,
+      "argument": "stories.set_source_note_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Admin or moderator (the copy checker) notes where parts of a text also appear, without hiding it."
+    },
+    "restore_segment": {
+      "entry_point": 3762068709,
+      "argument": "stories.restore_segment_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "The story's opener or an editor brings back a part that was hidden (not one taken down)."
+    },
+    "takedown_segment": {
+      "entry_point": 2509585279,
+      "argument": "stories.takedown_segment_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Admin removes a part's text for good, at any stage. No Ink refund."
+    },
+    "report_segment": {
+      "entry_point": 4254236461,
+      "argument": "stories.report_segment_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Any wallet reports a part of a story that is not finalized, once per part. Reports from wallets that"
+    },
+    "replace_pdf": {
+      "entry_point": 3571508868,
+      "argument": "stories.replace_pdf_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Admin publishes a new book link and text hash after a takedown in a finalized story (the contract does not"
+    },
+    "close_story": {
+      "entry_point": 432372514,
+      "argument": "stories.close_story_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Opener closes the story for free and starts the final edit: at the kind's minimum length, or within 100 characters of its own size (10 for a Poem)"
+    },
+    "request_admin_finalize": {
+      "entry_point": 2868368246,
+      "argument": "stories.request_admin_finalize_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Opener turns the \"admin, please finalize\" request on or off"
+    },
+    "advance_final_cursor": {
+      "entry_point": 63768367,
+      "argument": "stories.advance_final_cursor_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Anyone may fold up to 50 removed segments into the final edit's"
+    },
+    "admin_take_over": {
+      "entry_point": 2193626921,
+      "argument": "stories.admin_take_over_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Admin takes over the final edit (opener asked, or opener inactive for inactivity_days, not counting"
+    },
+    "submit_final_batch": {
+      "entry_point": 2168158412,
+      "argument": "stories.submit_final_batch_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Finalizer submits the next final-edit results, in order (max 20 items, 20,000 Ink units of text)"
+    },
+    "finalize": {
+      "entry_point": 3264789715,
+      "argument": "stories.finalize_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Finalizer stores the PDF link and hash once every segment is processed"
+    },
+    "archive_if_stale": {
+      "entry_point": 410719140,
+      "argument": "stories.archive_if_stale_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Anyone archives an OPEN story when neither its text nor its opener has been active for the archive"
+    },
+    "revive": {
+      "entry_point": 888490791,
+      "argument": "stories.revive_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Opener revives an archived story once, for free, while their next open project would still be at the"
+    },
+    "set_addresses": {
+      "entry_point": 4205484829,
+      "argument": "stories.set_addresses_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Set the Ink and Shop contract addresses. Each can be set once and never changed (AB-037, AB-050)."
+    },
+    "set_limits": {
+      "entry_point": 148863102,
+      "argument": "stories.set_limits_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Set the adjustable limits, each inside its hard-coded bounds"
+    },
+    "add_category": {
+      "entry_point": 3965109556,
+      "argument": "stories.add_category_arguments",
+      "return": "stories.uint32",
+      "read_only": false,
+      "description": "Add a category (1-32 characters). Returns its id.",
+      "default_output": {
+        "value": 0
+      }
+    },
+    "set_category_active": {
+      "entry_point": 3669964563,
+      "argument": "stories.set_category_active_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Turn a category on or off for new picks"
+    },
+    "set_paused": {
+      "entry_point": 905688855,
+      "argument": "stories.set_paused_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Pause or unpause Stories. While paused, every user write fails, and so do admin_take_over and archiving;"
+    },
+    "set_moderation": {
+      "entry_point": 4244059910,
+      "argument": "stories.set_moderation_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Set the moderator (empty turns it off) and how many writer reports hide a part (1 to 20)"
+    },
+    "set_blocked": {
+      "entry_point": 2251925913,
+      "argument": "stories.set_blocked_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Admin blocks or unblocks a wallet. A blocked wallet can't open, write, edit, change or report text, join with an invite, revive, restore a part, set a citation (it may clear one), rename its story, change editors, the allow-list or invites, or change text in a final edit; it may still remove its own parts"
+    },
+    "set_terms": {
+      "entry_point": 3341297933,
+      "argument": "stories.set_terms_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Publish a new Terms of Use version (must be higher than the current one)"
+    },
+    "set_admin": {
+      "entry_point": 826025396,
+      "argument": "stories.set_admin_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Propose a new admin. Nothing changes until that address calls accept_admin (two steps, so a typo cannot strand admin). Proposing the current admin cancels."
+    },
+    "accept_admin": {
+      "entry_point": 1751502329,
+      "argument": "stories.accept_admin_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "The proposed admin takes over. Must be signed by the proposed address and called directly."
+    },
+    "set_min_contribution": {
+      "entry_point": 921964952,
+      "argument": "stories.set_min_contribution_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Set the shortest allowed new text (1 to 200 Ink units). Starts at 20."
+    }
+  },
+  "koilib_types": {
+    "nested": {
+      "stories": {
+        "nested": {
+          "str": {
+            "fields": {
+              "value": {
+                "type": "string",
+                "id": 1
+              }
+            }
+          },
+          "uint32": {
+            "fields": {
+              "value": {
+                "type": "uint32",
+                "id": 1
+              }
+            }
+          },
+          "uint64": {
+            "fields": {
+              "value": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "boole": {
+            "fields": {
+              "value": {
+                "type": "bool",
+                "id": 1
+              }
+            }
+          },
+          "empty_object": {
+            "fields": {}
+          },
+          "id_list": {
+            "fields": {
+              "values": {
+                "rule": "repeated",
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "story_kind": {
+            "values": {
+              "KIND_UNSPECIFIED": 0,
+              "KIND_BOOK": 1,
+              "KIND_SHORT": 2,
+              "KIND_POEM": 3
+            }
+          },
+          "visibility": {
+            "values": {
+              "VISIBILITY_UNSPECIFIED": 0,
+              "VISIBILITY_PUBLIC": 1,
+              "VISIBILITY_UNLISTED": 2,
+              "VISIBILITY_PRIVATE": 3
+            }
+          },
+          "story_status": {
+            "values": {
+              "STATUS_NONE": 0,
+              "STATUS_OPEN": 1,
+              "STATUS_LOCKED": 2,
+              "STATUS_EDITING": 3,
+              "STATUS_FINALIZED": 4,
+              "STATUS_ARCHIVED": 5
+            }
+          },
+          "segment_status": {
+            "values": {
+              "SEGMENT_NONE": 0,
+              "SEGMENT_ACTIVE": 1,
+              "SEGMENT_REMOVED": 2
+            }
+          },
+          "moderation_reason": {
+            "values": {
+              "REASON_UNSPECIFIED": 0,
+              "REASON_COPYRIGHT": 1,
+              "REASON_DUPLICATE": 2,
+              "REASON_SPAM": 3,
+              "REASON_ILLEGAL": 4,
+              "REASON_OTHER": 5
+            }
+          },
+          "moderation_action": {
+            "values": {
+              "ACTION_NONE": 0,
+              "ACTION_HIDE": 1,
+              "ACTION_UNHIDE": 2,
+              "ACTION_TAKEDOWN": 3,
+              "ACTION_REPORT_HIDE": 4,
+              "ACTION_RESTORE": 5
+            }
+          },
+          "final_mode": {
+            "values": {
+              "FINAL_PENDING": 0,
+              "FINAL_UNCHANGED": 1,
+              "FINAL_EDITED": 2,
+              "FINAL_REMOVED": 3
+            }
+          },
+          "config": {
+            "fields": {
+              "admin": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "paused": {
+                "type": "bool",
+                "id": 2
+              },
+              "ink": {
+                "type": "bytes",
+                "id": 3,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "shop": {
+                "type": "bytes",
+                "id": 4,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "contribution_cap": {
+                "type": "uint32",
+                "id": 5
+              },
+              "trial_limit": {
+                "type": "uint32",
+                "id": 6
+              },
+              "open_limit": {
+                "type": "uint32",
+                "id": 7
+              },
+              "archive_days": {
+                "type": "uint32",
+                "id": 8
+              },
+              "inactivity_days": {
+                "type": "uint32",
+                "id": 9
+              },
+              "next_story_id": {
+                "type": "uint64",
+                "id": 10,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "next_category_id": {
+                "type": "uint32",
+                "id": 11
+              },
+              "min_contribution": {
+                "type": "uint32",
+                "id": 12
+              },
+              "moderator": {
+                "type": "bytes",
+                "id": 13,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "terms_version": {
+                "type": "uint32",
+                "id": 14
+              },
+              "terms_hash": {
+                "type": "bytes",
+                "id": 15
+              },
+              "terms_uri": {
+                "type": "string",
+                "id": 16
+              },
+              "report_threshold": {
+                "type": "uint32",
+                "id": 17
+              },
+              "strike_limit": {
+                "type": "uint32",
+                "id": 18
+              },
+              "full_price_projects": {
+                "type": "uint32",
+                "id": 19
+              },
+              "max_price_multiplier": {
+                "type": "uint32",
+                "id": 20
+              },
+              "pending_admin": {
+                "type": "bytes",
+                "id": 21,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "paused_at": {
+                "type": "uint64",
+                "id": 22,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "paused_seconds": {
+                "type": "uint64",
+                "id": 23,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "story": {
+            "fields": {
+              "kind": {
+                "type": "story_kind",
+                "id": 1
+              },
+              "opener": {
+                "type": "bytes",
+                "id": 2,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "title": {
+                "type": "string",
+                "id": 3
+              },
+              "category_1": {
+                "type": "uint32",
+                "id": 4
+              },
+              "category_2": {
+                "type": "uint32",
+                "id": 5
+              },
+              "visibility": {
+                "type": "visibility",
+                "id": 6
+              },
+              "status": {
+                "type": "story_status",
+                "id": 7
+              },
+              "max_chars": {
+                "type": "uint64",
+                "id": 8,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "used_chars": {
+                "type": "uint64",
+                "id": 9,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "total_burned": {
+                "type": "uint64",
+                "id": 10,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "total_refunded": {
+                "type": "uint64",
+                "id": 11,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "segment_count": {
+                "type": "uint64",
+                "id": 12,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "chapter_count": {
+                "type": "uint64",
+                "id": 13,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "contributor_count": {
+                "type": "uint64",
+                "id": 14,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "free_chapters": {
+                "type": "uint32",
+                "id": 15
+              },
+              "contributor_edition_min": {
+                "type": "uint64",
+                "id": 16,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "created_at": {
+                "type": "uint64",
+                "id": 17,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "last_activity_at": {
+                "type": "uint64",
+                "id": 18,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "opener_last_active": {
+                "type": "uint64",
+                "id": 19,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "locked_at": {
+                "type": "uint64",
+                "id": 20,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "admin_finalize_requested": {
+                "type": "bool",
+                "id": 21
+              },
+              "finalizer_is_admin": {
+                "type": "bool",
+                "id": 22
+              },
+              "final_cursor": {
+                "type": "uint64",
+                "id": 24,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "running_hash": {
+                "type": "bytes",
+                "id": 25
+              },
+              "revived": {
+                "type": "bool",
+                "id": 26
+              },
+              "pdf_uri": {
+                "type": "string",
+                "id": 27
+              },
+              "pdf_hash": {
+                "type": "bytes",
+                "id": 28
+              },
+              "editor_count": {
+                "type": "uint32",
+                "id": 29
+              },
+              "next_invite_id": {
+                "type": "uint64",
+                "id": 30,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "hidden_count": {
+                "type": "uint32",
+                "id": 31
+              },
+              "needs_new_pdf": {
+                "type": "bool",
+                "id": 32
+              },
+              "fund": {
+                "type": "uint64",
+                "id": 33,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "fund_added": {
+                "type": "uint64",
+                "id": 34,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "summary": {
+                "type": "string",
+                "id": 35
+              },
+              "summary_by": {
+                "type": "bytes",
+                "id": 36,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "summary_at": {
+                "type": "uint64",
+                "id": 37,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            },
+            "reserved": [
+              [
+                23,
+                23
+              ]
+            ]
+          },
+          "segment": {
+            "fields": {
+              "author": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "text": {
+                "type": "string",
+                "id": 2
+              },
+              "text_hash": {
+                "type": "bytes",
+                "id": 3
+              },
+              "original_cost": {
+                "type": "uint64",
+                "id": 4,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "charged": {
+                "type": "uint64",
+                "id": 5,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "current_cost": {
+                "type": "uint64",
+                "id": 6,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "status": {
+                "type": "segment_status",
+                "id": 7
+              },
+              "starts_chapter": {
+                "type": "bool",
+                "id": 8
+              },
+              "ai_assisted": {
+                "type": "bool",
+                "id": 9
+              },
+              "created_at": {
+                "type": "uint64",
+                "id": 10,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "last_edited_by": {
+                "type": "bytes",
+                "id": 11,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "last_edited_at": {
+                "type": "uint64",
+                "id": 12,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "final_mode": {
+                "type": "final_mode",
+                "id": 13
+              },
+              "surviving": {
+                "type": "uint64",
+                "id": 14,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "hidden": {
+                "type": "bool",
+                "id": 15
+              },
+              "taken_down": {
+                "type": "bool",
+                "id": 16
+              },
+              "moderation_reason": {
+                "type": "moderation_reason",
+                "id": 17
+              },
+              "report_count": {
+                "type": "uint32",
+                "id": 18
+              },
+              "rights_confirmed": {
+                "type": "bool",
+                "id": 19
+              },
+              "terms_version": {
+                "type": "uint32",
+                "id": 20
+              },
+              "insert_after": {
+                "type": "uint64",
+                "id": 21,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "fund_paid": {
+                "type": "bool",
+                "id": 22
+              },
+              "citation": {
+                "type": "string",
+                "id": 23
+              },
+              "source_note": {
+                "type": "string",
+                "id": 24
+              },
+              "restored": {
+                "type": "bool",
+                "id": 25
+              },
+              "version_count": {
+                "type": "uint32",
+                "id": 26
+              },
+              "edited_by_others": {
+                "type": "bool",
+                "id": 29
+              },
+              "paid_changes": {
+                "type": "uint32",
+                "id": 30
+              },
+              "own_paid": {
+                "type": "uint64",
+                "id": 31,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "hidden_by": {
+                "type": "uint32",
+                "id": 32
+              },
+              "refund_forfeited": {
+                "type": "bool",
+                "id": 34
+              }
+            },
+            "reserved": [
+              [
+                27,
+                27
+              ],
+              [
+                28,
+                28
+              ],
+              [
+                33,
+                33
+              ],
+              [
+                35,
+                35
+              ]
+            ]
+          },
+          "address_list": {
+            "fields": {
+              "values": {
+                "rule": "repeated",
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "segment_version": {
+            "fields": {
+              "version": {
+                "type": "uint32",
+                "id": 1
+              },
+              "author": {
+                "type": "bytes",
+                "id": 2,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "text": {
+                "type": "string",
+                "id": 3
+              },
+              "cost": {
+                "type": "uint64",
+                "id": 4,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "at": {
+                "type": "uint64",
+                "id": 5,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "kind": {
+                "type": "uint32",
+                "id": 6
+              },
+              "by": {
+                "type": "bytes",
+                "id": 7,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "citation": {
+                "type": "string",
+                "id": 8
+              },
+              "ai_assisted": {
+                "type": "bool",
+                "id": 9
+              }
+            }
+          },
+          "version_list": {
+            "fields": {
+              "values": {
+                "rule": "repeated",
+                "type": "segment_version",
+                "id": 1
+              },
+              "next": {
+                "type": "uint32",
+                "id": 2
+              }
+            }
+          },
+          "account_status": {
+            "fields": {
+              "blocked": {
+                "type": "bool",
+                "id": 1
+              },
+              "strikes": {
+                "type": "uint32",
+                "id": 2
+              }
+            }
+          },
+          "segment_list": {
+            "fields": {
+              "values": {
+                "rule": "repeated",
+                "type": "segment",
+                "id": 1
+              },
+              "next": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "segment_ref": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "segment_ref_list": {
+            "fields": {
+              "values": {
+                "rule": "repeated",
+                "type": "segment_ref",
+                "id": 1
+              }
+            }
+          },
+          "invite": {
+            "fields": {
+              "link_signer": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "max_uses": {
+                "type": "uint32",
+                "id": 2
+              },
+              "uses": {
+                "type": "uint32",
+                "id": 3
+              },
+              "expires_at": {
+                "type": "uint64",
+                "id": 4,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "revoked": {
+                "type": "bool",
+                "id": 5
+              }
+            }
+          },
+          "category": {
+            "fields": {
+              "name": {
+                "type": "string",
+                "id": 1
+              },
+              "active": {
+                "type": "bool",
+                "id": 2
+              }
+            }
+          },
+          "final_item": {
+            "fields": {
+              "seq": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "mode": {
+                "type": "final_mode",
+                "id": 2
+              },
+              "text": {
+                "type": "string",
+                "id": 3
+              },
+              "expected_cost": {
+                "type": "uint64",
+                "id": 4,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "ink_burn_call": {
+            "fields": {
+              "from": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "value": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "reason": {
+                "type": "uint32",
+                "id": 3
+              },
+              "memo": {
+                "type": "string",
+                "id": 4
+              }
+            }
+          },
+          "ink_mint_call": {
+            "fields": {
+              "to": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "value": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "reason": {
+                "type": "uint32",
+                "id": 3
+              },
+              "memo": {
+                "type": "string",
+                "id": 4
+              }
+            }
+          },
+          "shop_fee_call": {
+            "fields": {
+              "payer": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "kind": {
+                "type": "uint32",
+                "id": 2
+              },
+              "token": {
+                "type": "bytes",
+                "id": 3,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "price_multiplier": {
+                "type": "uint32",
+                "id": 4
+              },
+              "max_price": {
+                "type": "uint64",
+                "id": 5,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "min_ink": {
+                "type": "uint64",
+                "id": 6,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "shop_account_call": {
+            "fields": {
+              "account": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "shop_membership": {
+            "fields": {
+              "tier": {
+                "type": "uint32",
+                "id": 1
+              },
+              "paid_until": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "months_unclaimed": {
+                "type": "uint64",
+                "id": 3,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "next_claim_at": {
+                "type": "uint64",
+                "id": 4,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "ink_per_month": {
+                "type": "uint64",
+                "id": 5,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "get_config_arguments": {
+            "fields": {}
+          },
+          "get_story_arguments": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "get_segment_arguments": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "get_segments_arguments": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "start": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "limit": {
+                "type": "uint32",
+                "id": 3
+              }
+            }
+          },
+          "get_contributor_total_arguments": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "account": {
+                "type": "bytes",
+                "id": 2,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "get_surviving_total_arguments": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "account": {
+                "type": "bytes",
+                "id": 2,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "is_editor_arguments": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "account": {
+                "type": "bytes",
+                "id": 2,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "is_allowed_arguments": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "account": {
+                "type": "bytes",
+                "id": 2,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "get_invite_arguments": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "invite_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "get_trial_used_arguments": {
+            "fields": {
+              "account": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "get_open_count_arguments": {
+            "fields": {
+              "account": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "get_category_arguments": {
+            "fields": {
+              "category_id": {
+                "type": "uint32",
+                "id": 1
+              }
+            }
+          },
+          "get_opener_stories_arguments": {
+            "fields": {
+              "account": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "start": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "limit": {
+                "type": "uint32",
+                "id": 3
+              }
+            }
+          },
+          "get_category_stories_arguments": {
+            "fields": {
+              "category_id": {
+                "type": "uint32",
+                "id": 1
+              },
+              "start": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "limit": {
+                "type": "uint32",
+                "id": 3
+              }
+            }
+          },
+          "get_author_segments_arguments": {
+            "fields": {
+              "account": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "start": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "limit": {
+                "type": "uint32",
+                "id": 3
+              }
+            }
+          },
+          "has_reported_arguments": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "account": {
+                "type": "bytes",
+                "id": 3,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "get_account_status_arguments": {
+            "fields": {
+              "account": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "get_open_multiplier_arguments": {
+            "fields": {
+              "account": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "get_terms_accepted_arguments": {
+            "fields": {
+              "account": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "quote_cost_arguments": {
+            "fields": {
+              "text": {
+                "type": "string",
+                "id": 1
+              }
+            }
+          },
+          "open_story_arguments": {
+            "fields": {
+              "opener": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "kind": {
+                "type": "story_kind",
+                "id": 2
+              },
+              "title": {
+                "type": "string",
+                "id": 3
+              },
+              "max_chars": {
+                "type": "uint64",
+                "id": 4,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "category_1": {
+                "type": "uint32",
+                "id": 5
+              },
+              "category_2": {
+                "type": "uint32",
+                "id": 6
+              },
+              "visibility": {
+                "type": "visibility",
+                "id": 7
+              },
+              "free_chapters": {
+                "type": "uint32",
+                "id": 8
+              },
+              "contributor_edition_min": {
+                "type": "uint64",
+                "id": 9,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "opening_text": {
+                "type": "string",
+                "id": 10
+              },
+              "ai_assisted": {
+                "type": "bool",
+                "id": 11
+              },
+              "expected_ink": {
+                "type": "uint64",
+                "id": 12,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "token": {
+                "type": "bytes",
+                "id": 13,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "rights_confirmed": {
+                "type": "bool",
+                "id": 14
+              },
+              "terms_version": {
+                "type": "uint32",
+                "id": 15
+              },
+              "fund": {
+                "type": "uint64",
+                "id": 16,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "citation": {
+                "type": "string",
+                "id": 17
+              },
+              "max_price": {
+                "type": "uint64",
+                "id": 18,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "min_ink": {
+                "type": "uint64",
+                "id": 19,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "update_story_arguments": {
+            "fields": {
+              "opener": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "title": {
+                "type": "string",
+                "id": 3
+              },
+              "category_1": {
+                "type": "uint32",
+                "id": 4
+              },
+              "category_2": {
+                "type": "uint32",
+                "id": 5
+              },
+              "visibility": {
+                "type": "visibility",
+                "id": 6
+              },
+              "free_chapters": {
+                "type": "uint32",
+                "id": 7
+              }
+            }
+          },
+          "set_editor_arguments": {
+            "fields": {
+              "opener": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "account": {
+                "type": "bytes",
+                "id": 3,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "allowed": {
+                "type": "bool",
+                "id": 4
+              }
+            }
+          },
+          "set_allowed_arguments": {
+            "fields": {
+              "actor": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "accounts": {
+                "rule": "repeated",
+                "type": "bytes",
+                "id": 3,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "allowed": {
+                "type": "bool",
+                "id": 4
+              }
+            }
+          },
+          "create_invite_arguments": {
+            "fields": {
+              "opener": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "link_signer": {
+                "type": "bytes",
+                "id": 3,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "max_uses": {
+                "type": "uint32",
+                "id": 4
+              },
+              "expires_at": {
+                "type": "uint64",
+                "id": 5,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "revoke_invite_arguments": {
+            "fields": {
+              "opener": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "invite_id": {
+                "type": "uint64",
+                "id": 3,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "join_with_invite_arguments": {
+            "fields": {
+              "account": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "invite_id": {
+                "type": "uint64",
+                "id": 3,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "signature": {
+                "type": "bytes",
+                "id": 4
+              }
+            }
+          },
+          "contribute_arguments": {
+            "fields": {
+              "author": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "text": {
+                "type": "string",
+                "id": 3
+              },
+              "starts_chapter": {
+                "type": "bool",
+                "id": 4
+              },
+              "ai_assisted": {
+                "type": "bool",
+                "id": 5
+              },
+              "expected_ink": {
+                "type": "uint64",
+                "id": 6,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "rights_confirmed": {
+                "type": "bool",
+                "id": 7
+              },
+              "terms_version": {
+                "type": "uint32",
+                "id": 8
+              },
+              "insert_after": {
+                "type": "uint64",
+                "id": 9,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "after_my_last": {
+                "type": "bool",
+                "id": 10
+              },
+              "citation": {
+                "type": "string",
+                "id": 11
+              }
+            }
+          },
+          "revise_part_arguments": {
+            "fields": {
+              "writer": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 3,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "text": {
+                "type": "string",
+                "id": 4
+              },
+              "expected_ink": {
+                "type": "uint64",
+                "id": 5,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "rights_confirmed": {
+                "type": "bool",
+                "id": 6
+              },
+              "terms_version": {
+                "type": "uint32",
+                "id": 7
+              },
+              "citation": {
+                "type": "string",
+                "id": 8
+              },
+              "ai_assisted": {
+                "type": "bool",
+                "id": 9
+              }
+            }
+          },
+          "get_versions_arguments": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "from": {
+                "type": "uint32",
+                "id": 3
+              },
+              "count": {
+                "type": "uint32",
+                "id": 4
+              }
+            }
+          },
+          "get_changers_arguments": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "set_story_summary_arguments": {
+            "fields": {
+              "account": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "summary": {
+                "type": "string",
+                "id": 3
+              }
+            }
+          },
+          "edit_segment_arguments": {
+            "fields": {
+              "editor": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 3,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "new_text": {
+                "type": "string",
+                "id": 4
+              },
+              "expected_cost": {
+                "type": "uint64",
+                "id": 5,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "max_ink": {
+                "type": "uint64",
+                "id": 6,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "rights_confirmed": {
+                "type": "bool",
+                "id": 7
+              },
+              "terms_version": {
+                "type": "uint32",
+                "id": 8
+              }
+            }
+          },
+          "remove_segment_arguments": {
+            "fields": {
+              "editor": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 3,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "top_up_fund_arguments": {
+            "fields": {
+              "opener": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "amount": {
+                "type": "uint64",
+                "id": 3,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "set_segment_hidden_arguments": {
+            "fields": {
+              "actor": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 3,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "hidden": {
+                "type": "bool",
+                "id": 4
+              },
+              "reason": {
+                "type": "moderation_reason",
+                "id": 5
+              },
+              "note": {
+                "type": "string",
+                "id": 6
+              }
+            }
+          },
+          "set_citation_arguments": {
+            "fields": {
+              "account": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 3,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "citation": {
+                "type": "string",
+                "id": 4
+              }
+            }
+          },
+          "set_reading_place_arguments": {
+            "fields": {
+              "reader": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 3,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "chapter": {
+                "type": "uint32",
+                "id": 4
+              },
+              "percent": {
+                "type": "uint32",
+                "id": 5
+              }
+            }
+          },
+          "get_reading_place_arguments": {
+            "fields": {
+              "reader": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "get_reading_places_arguments": {
+            "fields": {
+              "reader": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "start": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "limit": {
+                "type": "uint32",
+                "id": 3
+              }
+            }
+          },
+          "reading_place": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "chapter": {
+                "type": "uint32",
+                "id": 3
+              },
+              "percent": {
+                "type": "uint32",
+                "id": 4
+              },
+              "at": {
+                "type": "uint64",
+                "id": 5,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "reading_place_list": {
+            "fields": {
+              "values": {
+                "rule": "repeated",
+                "type": "reading_place",
+                "id": 1
+              },
+              "total": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "set_source_note_arguments": {
+            "fields": {
+              "actor": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 3,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "note": {
+                "type": "string",
+                "id": 4
+              }
+            }
+          },
+          "restore_segment_arguments": {
+            "fields": {
+              "actor": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 3,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "note": {
+                "type": "string",
+                "id": 4
+              }
+            }
+          },
+          "takedown_segment_arguments": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "reason": {
+                "type": "moderation_reason",
+                "id": 3
+              },
+              "note": {
+                "type": "string",
+                "id": 4
+              },
+              "strike": {
+                "type": "bytes",
+                "id": 5,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "no_strike": {
+                "type": "bool",
+                "id": 6
+              },
+              "reviewed_hash": {
+                "type": "bytes",
+                "id": 7
+              },
+              "reviewed_versions": {
+                "type": "uint32",
+                "id": 8
+              }
+            }
+          },
+          "report_segment_arguments": {
+            "fields": {
+              "reporter": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 3,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "reason": {
+                "type": "moderation_reason",
+                "id": 4
+              },
+              "note": {
+                "type": "string",
+                "id": 5
+              }
+            }
+          },
+          "replace_pdf_arguments": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "pdf_uri": {
+                "type": "string",
+                "id": 2
+              },
+              "pdf_hash": {
+                "type": "bytes",
+                "id": 3
+              }
+            }
+          },
+          "close_story_arguments": {
+            "fields": {
+              "opener": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            },
+            "reserved": [
+              [
+                3,
+                3
+              ]
+            ]
+          },
+          "request_admin_finalize_arguments": {
+            "fields": {
+              "opener": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "requested": {
+                "type": "bool",
+                "id": 3
+              }
+            }
+          },
+          "advance_final_cursor_arguments": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "admin_take_over_arguments": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "submit_final_batch_arguments": {
+            "fields": {
+              "finalizer": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "items": {
+                "rule": "repeated",
+                "type": "final_item",
+                "id": 3
+              }
+            }
+          },
+          "finalize_arguments": {
+            "fields": {
+              "finalizer": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "pdf_uri": {
+                "type": "string",
+                "id": 3
+              },
+              "pdf_hash": {
+                "type": "bytes",
+                "id": 4
+              }
+            }
+          },
+          "archive_if_stale_arguments": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "revive_arguments": {
+            "fields": {
+              "opener": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "set_addresses_arguments": {
+            "fields": {
+              "ink": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "shop": {
+                "type": "bytes",
+                "id": 2,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "set_limits_arguments": {
+            "fields": {
+              "contribution_cap": {
+                "type": "uint32",
+                "id": 1
+              },
+              "trial_limit": {
+                "type": "uint32",
+                "id": 2
+              },
+              "open_limit": {
+                "type": "uint32",
+                "id": 3
+              },
+              "archive_days": {
+                "type": "uint32",
+                "id": 4
+              },
+              "inactivity_days": {
+                "type": "uint32",
+                "id": 5
+              },
+              "full_price_projects": {
+                "type": "uint32",
+                "id": 6
+              },
+              "max_price_multiplier": {
+                "type": "uint32",
+                "id": 7
+              }
+            }
+          },
+          "add_category_arguments": {
+            "fields": {
+              "name": {
+                "type": "string",
+                "id": 1
+              }
+            }
+          },
+          "set_category_active_arguments": {
+            "fields": {
+              "category_id": {
+                "type": "uint32",
+                "id": 1
+              },
+              "active": {
+                "type": "bool",
+                "id": 2
+              }
+            }
+          },
+          "set_paused_arguments": {
+            "fields": {
+              "paused": {
+                "type": "bool",
+                "id": 1
+              }
+            }
+          },
+          "set_moderation_arguments": {
+            "fields": {
+              "moderator": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "report_threshold": {
+                "type": "uint32",
+                "id": 2
+              },
+              "strike_limit": {
+                "type": "uint32",
+                "id": 3
+              }
+            }
+          },
+          "set_blocked_arguments": {
+            "fields": {
+              "account": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "blocked": {
+                "type": "bool",
+                "id": 2
+              },
+              "note": {
+                "type": "string",
+                "id": 3
+              }
+            }
+          },
+          "set_terms_arguments": {
+            "fields": {
+              "version": {
+                "type": "uint32",
+                "id": 1
+              },
+              "terms_hash": {
+                "type": "bytes",
+                "id": 2
+              },
+              "terms_uri": {
+                "type": "string",
+                "id": 3
+              }
+            }
+          },
+          "set_admin_arguments": {
+            "fields": {
+              "new_admin": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "accept_admin_arguments": {
+            "fields": {}
+          },
+          "story_opened_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "opener": {
+                "type": "bytes",
+                "id": 2,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "kind": {
+                "type": "story_kind",
+                "id": 3
+              },
+              "max_chars": {
+                "type": "uint64",
+                "id": 4,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "token": {
+                "type": "bytes",
+                "id": 5,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "story_updated_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "title": {
+                "type": "string",
+                "id": 2
+              },
+              "category_1": {
+                "type": "uint32",
+                "id": 3
+              },
+              "category_2": {
+                "type": "uint32",
+                "id": 4
+              },
+              "visibility": {
+                "type": "visibility",
+                "id": 5
+              },
+              "free_chapters": {
+                "type": "uint32",
+                "id": 6
+              }
+            }
+          },
+          "status_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "status": {
+                "type": "story_status",
+                "id": 2
+              },
+              "why": {
+                "type": "string",
+                "id": 3
+              },
+              "by": {
+                "type": "bytes",
+                "id": 4,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "revise_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "by": {
+                "type": "bytes",
+                "id": 3,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "kind": {
+                "type": "uint32",
+                "id": 4
+              },
+              "version": {
+                "type": "uint32",
+                "id": 5
+              },
+              "paid": {
+                "type": "uint64",
+                "id": 6,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "replaced_author": {
+                "type": "bytes",
+                "id": 7,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "refund": {
+                "type": "uint64",
+                "id": 8,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "summary_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "by": {
+                "type": "bytes",
+                "id": 2,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "summary": {
+                "type": "string",
+                "id": 3
+              }
+            }
+          },
+          "contribution_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "author": {
+                "type": "bytes",
+                "id": 3,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "cost": {
+                "type": "uint64",
+                "id": 4,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "starts_chapter": {
+                "type": "bool",
+                "id": 5
+              },
+              "ai_assisted": {
+                "type": "bool",
+                "id": 6
+              },
+              "text_hash": {
+                "type": "bytes",
+                "id": 7
+              },
+              "trial": {
+                "type": "bool",
+                "id": 8
+              },
+              "rights_confirmed": {
+                "type": "bool",
+                "id": 9
+              },
+              "terms_version": {
+                "type": "uint32",
+                "id": 10
+              },
+              "insert_after": {
+                "type": "uint64",
+                "id": 11,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "fund_paid": {
+                "type": "bool",
+                "id": 12
+              }
+            }
+          },
+          "segment_changed_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "by": {
+                "type": "bytes",
+                "id": 3,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "old_cost": {
+                "type": "uint64",
+                "id": 4,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "new_cost": {
+                "type": "uint64",
+                "id": 5,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "refund": {
+                "type": "uint64",
+                "id": 6,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "removed": {
+                "type": "bool",
+                "id": 7
+              },
+              "final_pass": {
+                "type": "bool",
+                "id": 8
+              }
+            }
+          },
+          "editor_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "account": {
+                "type": "bytes",
+                "id": 2,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "allowed": {
+                "type": "bool",
+                "id": 3
+              }
+            }
+          },
+          "allowed_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "account": {
+                "type": "bytes",
+                "id": 2,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "allowed": {
+                "type": "bool",
+                "id": 3
+              },
+              "invite_id": {
+                "type": "uint64",
+                "id": 4,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          },
+          "invite_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "invite_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "max_uses": {
+                "type": "uint32",
+                "id": 3
+              },
+              "expires_at": {
+                "type": "uint64",
+                "id": 4,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "revoked": {
+                "type": "bool",
+                "id": 5
+              }
+            }
+          },
+          "admin_finalize_request_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "requested": {
+                "type": "bool",
+                "id": 2
+              }
+            }
+          },
+          "final_batch_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "final_cursor": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "running_hash": {
+                "type": "bytes",
+                "id": 3
+              }
+            }
+          },
+          "story_finalized_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "pdf_uri": {
+                "type": "string",
+                "id": 2
+              },
+              "pdf_hash": {
+                "type": "bytes",
+                "id": 3
+              },
+              "running_hash": {
+                "type": "bytes",
+                "id": 4
+              }
+            }
+          },
+          "external_call_event": {
+            "fields": {
+              "contract_id": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "entry_point": {
+                "type": "uint32",
+                "id": 2
+              },
+              "payload": {
+                "type": "bytes",
+                "id": 3
+              }
+            }
+          },
+          "category_event": {
+            "fields": {
+              "category_id": {
+                "type": "uint32",
+                "id": 1
+              },
+              "name": {
+                "type": "string",
+                "id": 2
+              },
+              "active": {
+                "type": "bool",
+                "id": 3
+              }
+            }
+          },
+          "set_min_contribution_arguments": {
+            "fields": {
+              "min_contribution": {
+                "type": "uint32",
+                "id": 1
+              }
+            }
+          },
+          "min_contribution_event": {
+            "fields": {
+              "min_contribution": {
+                "type": "uint32",
+                "id": 1
+              }
+            }
+          },
+          "limits_event": {
+            "fields": {
+              "contribution_cap": {
+                "type": "uint32",
+                "id": 1
+              },
+              "trial_limit": {
+                "type": "uint32",
+                "id": 2
+              },
+              "open_limit": {
+                "type": "uint32",
+                "id": 3
+              },
+              "archive_days": {
+                "type": "uint32",
+                "id": 4
+              },
+              "inactivity_days": {
+                "type": "uint32",
+                "id": 5
+              },
+              "full_price_projects": {
+                "type": "uint32",
+                "id": 6
+              },
+              "max_price_multiplier": {
+                "type": "uint32",
+                "id": 7
+              }
+            }
+          },
+          "addresses_event": {
+            "fields": {
+              "ink": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "shop": {
+                "type": "bytes",
+                "id": 2,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "paused_event": {
+            "fields": {
+              "paused": {
+                "type": "bool",
+                "id": 1
+              }
+            }
+          },
+          "admin_changed_event": {
+            "fields": {
+              "old_admin": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "new_admin": {
+                "type": "bytes",
+                "id": 2,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "admin_proposed_event": {
+            "fields": {
+              "admin": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "proposed": {
+                "type": "bytes",
+                "id": 2,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "moderation_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "action": {
+                "type": "moderation_action",
+                "id": 3
+              },
+              "reason": {
+                "type": "moderation_reason",
+                "id": 4
+              },
+              "by": {
+                "type": "bytes",
+                "id": 5,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "author": {
+                "type": "bytes",
+                "id": 6,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "note": {
+                "type": "string",
+                "id": 7
+              },
+              "text_hash": {
+                "type": "bytes",
+                "id": 8
+              },
+              "struck": {
+                "type": "bytes",
+                "id": 9,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              }
+            }
+          },
+          "citation_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "by": {
+                "type": "bytes",
+                "id": 3,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "citation": {
+                "type": "string",
+                "id": 4
+              },
+              "source_note": {
+                "type": "bool",
+                "id": 5
+              }
+            }
+          },
+          "report_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "reporter": {
+                "type": "bytes",
+                "id": 3,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "reason": {
+                "type": "moderation_reason",
+                "id": 4
+              },
+              "note": {
+                "type": "string",
+                "id": 5
+              },
+              "counted": {
+                "type": "bool",
+                "id": 6
+              },
+              "report_count": {
+                "type": "uint32",
+                "id": 7
+              }
+            }
+          },
+          "terms_event": {
+            "fields": {
+              "version": {
+                "type": "uint32",
+                "id": 1
+              },
+              "terms_hash": {
+                "type": "bytes",
+                "id": 2
+              },
+              "terms_uri": {
+                "type": "string",
+                "id": 3
+              }
+            }
+          },
+          "terms_accepted_event": {
+            "fields": {
+              "account": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "version": {
+                "type": "uint32",
+                "id": 2
+              }
+            }
+          },
+          "moderation_settings_event": {
+            "fields": {
+              "moderator": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "report_threshold": {
+                "type": "uint32",
+                "id": 2
+              },
+              "strike_limit": {
+                "type": "uint32",
+                "id": 3
+              }
+            }
+          },
+          "account_blocked_event": {
+            "fields": {
+              "account": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "blocked": {
+                "type": "bool",
+                "id": 2
+              },
+              "strikes": {
+                "type": "uint32",
+                "id": 3
+              },
+              "by": {
+                "type": "bytes",
+                "id": 4,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "note": {
+                "type": "string",
+                "id": 5
+              }
+            }
+          },
+          "fund_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "by": {
+                "type": "bytes",
+                "id": 2,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "action": {
+                "type": "string",
+                "id": 3
+              },
+              "amount": {
+                "type": "uint64",
+                "id": 4,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "fund_after": {
+                "type": "uint64",
+                "id": 5,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -7,14 +7,14 @@
  */
 import { Contract, Signer, Transaction, utils } from "koilib";
 import { abis } from "../generated/abis.js";
-import { contracts, DEFAULT_PAYMENT, network, SITE } from "../config.js";
-import { encode, getProvider, read, verifyChain } from "../chain.js";
+import { contracts, DEFAULT_PAYMENT, network, pinnedToken, SITE } from "../config.js";
+import { codeHashOf, encode, getProvider, read, verifyChain } from "../chain.js";
 import {
-  AdminInputError, DEFAULT_PREPARED_RC, INK_AMOUNT_FIELDS, REASONS, SHOP_ITEMS, fromBaseUnits, planAcceptAdmin, planAny, planAsset,
+  AdminInputError, INK_AMOUNT_FIELDS, REASONS, SHOP_ITEMS, fromBaseUnits, numberMismatch, planAcceptAdmin, planAny, planAsset,
   planBlock, planCampaignEnabled, planCampaignLimits, planCategory, planCategoryActive, planClearSummary, planFee, planHide,
   planInkAmounts, planLimits, planMinContribution, planModeration, planPause, planPrice, planPromo, planPromoSwitch, planSetAdmin,
-  planSourceNote, planSponsor, planTakedown, planTakeOver, planTerms, preparedFile, promoLink, strikeChoices, toBaseUnits,
-  planAddToken, ratePrice, RATE_ITEMS,
+  planSourceNote, planTakedown, planTakeOver, planTerms, preparedFile, promoLink, SPONSOR_DEFAULT_CAPS, sponsorCommand, strikeChoices, toBaseUnits,
+  ADMIN_METHODS, canAdminister, planAddToken, preparedRcLimit, ratePrice, RATE_ITEMS, starterPoemWarning,
 } from "../lib/admin.js";
 import { canonicalBase } from "../lib/site.js";
 import { formatUtc } from "../lib/money.js";
@@ -69,7 +69,14 @@ async function loadAdminData() {
     const c = await safe(read("stories", "get_category", { category_id: id }));
     categories.push({ id, name: (c && c.name) || "Category " + id, active: !!(c && c.active) });
   }
-  return { inkCfg: inkCfg || {}, shopCfg: shopCfg || {}, storiesCfg: storiesCfg || {}, sponsorCfg, prices, priceToken, tokens, campaigns, categories };
+  // The signers of each admin that is a multisig, so its signers see the controls (L-21).
+  const adminAddrs = [...new Set([inkCfg, shopCfg, storiesCfg].map((c) => c && c.admin).filter(Boolean))];
+  const signers = [];
+  for (const a of adminAddrs) {
+    const cfg = await safe(new Contract({ id: a, abi: abis.multisig, provider: getProvider() }).functions.get_config({}).then((r) => r.result));
+    if (cfg && Array.isArray(cfg.signers)) signers.push(cfg.signers);
+  }
+  return { inkCfg: inkCfg || {}, shopCfg: shopCfg || {}, storiesCfg: storiesCfg || {}, sponsorCfg, prices, priceToken, tokens, campaigns, categories, signers };
 }
 
 function reload() {
@@ -100,7 +107,15 @@ async function run(plans, status, before) {
     }
     if (before && (await before()) === false) return false;
     const ops = [];
-    for (const p of plans) ops.push(await encode(p.contract, p.method, p.args));
+    for (const p of plans) {
+      const op = await encode(p.contract, p.method, p.args);
+      // What is signed must be what was shown: decode the bytes back and
+      // refuse any number that wrapped around or was cut to fit (audit M-C).
+      const back = await new Contract({ id: p.contract_id, abi: abis[p.contract] }).decodeOperation(op);
+      const bad = numberMismatch(p.args, back.args || {});
+      if (bad) throw new AdminInputError(bad.field + " = " + bad.sent + " does not fit the contract's number type (it would be signed as " + bad.got + "). Nothing was signed.");
+      ops.push(op);
+    }
     if (admin.mode === "prepare") return prepare(plans, ops, status);
     if (!state.wallet) throw new AdminInputError("Connect the admin wallet first, or switch to “Prepare a file for the multisig”.");
     const ok = await send(ops, status);
@@ -119,7 +134,7 @@ async function prepare(plans, ops, status) {
   if (!/^1[1-9A-HJ-NP-Za-km-z]{25,34}$/.test(payer)) throw new AdminInputError("Type the paying address (the multisig, or a wallet that will also cosign) above.");
   // The same nonce encoding every wallet uses (koilib), which the chain takes.
   const nonce = await getProvider().getNextNonce(payer);
-  const tx = { header: { chain_id: chainId, rc_limit: DEFAULT_PREPARED_RC, nonce, payer }, operations: ops };
+  const tx = { header: { chain_id: chainId, rc_limit: preparedRcLimit(ops.length), nonce, payer }, operations: ops };
   await Transaction.prepareTransaction(tx);
   let needs = null;
   try {
@@ -145,6 +160,11 @@ async function prepare(plans, ops, status) {
   ]));
   link.click();
   return true;
+}
+
+/** The Shop's other tokens, for the one-symbol-per-token check (audit I-2). */
+function otherTokens(address) {
+  return ((admin.data && admin.data.tokens) || []).filter((t) => t.address !== address).map((t) => ({ address: t.address, symbol: t.symbol }));
 }
 
 function actionButton(text, getPlans, opts = {}) {
@@ -246,6 +266,13 @@ export function renderAdmin(page) {
     payerRow,
     h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: () => { admin.data = null; reload(); } }, ["Reload settings"]),
   ]));
+  // The controls only for an admin, or a signer of the admin multisig (audit L-21).
+  if (!canAdminister(me, Object.values(admins), d.signers)) {
+    append(container, notice("info", h("p", {}, [
+      "The admin controls show once you connect an admin wallet, or a signer of the admin multisig. The contracts check every permission again either way.",
+    ])));
+    return;
+  }
 
   append(container,
     emergencySection(d),
@@ -361,9 +388,20 @@ function pricesSection(d) {
   });
   return section("Prices", "Prices of every item, per payment token. 0 takes an item off sale for that token. One confirmation saves every changed price.", [
     field("Token", pick),
+    poemNotice(d),
     h("table", { class: "admin-table" }, [h("tr", {}, ["Item", "Now", "New price (" + sym + ")"].map((x) => h("th", {}, [x]))), ...rows]),
     save,
   ]);
+}
+
+/** Warns when a Poem's starter Ink is worth more than a Poem costs, in the token shown (audit I-7). */
+function poemNotice(d) {
+  const c = d.shopCfg;
+  const w = starterPoemWarning({
+    starterPoem: c.starter_poem, poemPrice: d.prices[10],
+    packs: [{ price: d.prices[3], ink: c.pack_s_ink }, { price: d.prices[4], ink: c.pack_m_ink }, { price: d.prices[5], ink: c.pack_l_ink }],
+  });
+  return w ? notice("warn", h("p", {}, [d.priceToken.symbol + ": " + w])) : null;
 }
 
 function inkAmountsSection(d) {
@@ -379,6 +417,7 @@ function inkAmountsSection(d) {
   });
   const fee = input(String(d.shopCfg.fee_bps || 0));
   return section("Ink amounts and founder fee", "How much Ink a Writer month, each pack and each kind of story opening brings. Buyers are protected: if the Ink drops below what their page showed, their purchase fails and nothing is charged.", [
+    poemNotice(d),
     h("div", { class: "admin-grid" }, fields),
     save,
     row(field("Founder fee (basis points, 100 = 1%, at most 500)", fee)),
@@ -522,8 +561,9 @@ function tokensSection(d) {
       h("td", {}, [String(t.decimals)]),
       h("td", {}, [t.enabled ? (Number(t.usable_from) * 1000 > Date.now() ? "on from " + formatUtc(Number(t.usable_from)) : "on") : "off"]),
       h("td", {}, [t.enabled
-        ? actionButton("Turn off", () => planAsset({ token: t.address, enabled: false }), { danger: true })
-        : actionButton("Turn on", () => planAsset({ token: t.address, enabled: true, decimals: t.decimals, symbol: t.symbol }))]),
+        ? actionButton("Turn off", () => planAsset({ token: t.address, enabled: false, decimals: t.decimals, symbol: t.symbol }), { danger: true })
+        : actionButton("Turn on", async () => planAsset({ token: t.address, enabled: true, decimals: t.decimals, symbol: t.symbol,
+          pin: pinnedToken(t.address), codeHash: await codeHashOf(t.address), others: otherTokens(t.address) }))]),
     ])),
   ]);
 
@@ -569,10 +609,12 @@ function tokensSection(d) {
     }
   }
   rate.addEventListener("input", fillFromRate);
-  const add = actionButton("Add the token and its prices", () => {
+  const add = actionButton("Add the token and its prices", async () => {
     const p = {};
     for (const item of SHOP_ITEMS) p[item.id] = prices[item.id].value;
-    return planAddToken({ token: addr.value, symbol: symbol.value, decimals: decimals.value, prices: p });
+    const token = addr.value.trim();
+    return planAddToken({ token, symbol: symbol.value, decimals: decimals.value, prices: p,
+      pin: pinnedToken(token), codeHash: await codeHashOf(token), others: otherTokens(token) });
   });
   return section("Payment tokens", "Tokens buyers can pay with. Buyers pick one on the Membership and Open pages. After the Shop's first sale, a newly added token can be used only 7 days later (everyone can see it coming). Turning one off works at once.", [
     list,
@@ -598,18 +640,33 @@ function sponsorSection(d) {
   const mana = (v, dflt) => (v ? fromBaseUnits(v, 8) : dflt);
   const enabled = checkbox(s.enabled);
   const tokens = input((s.tokens || [contracts.paymentToken]).join(","));
-  const perTx = input(mana(s.max_mana_per_tx, "4"));
-  const perAccount = input(mana(s.max_mana_per_account_day, "20"));
-  const perDay = input(mana(s.max_mana_per_day, "300"));
-  return section("Mana sponsor", "Pays users' mana for SwarmTales transactions only. These settings must be signed by the SPONSOR wallet (" + contracts.sponsor + "), not the admin: connect it in Kondor first.", [
-    h("p", {}, ["Now: ", h("b", {}, [s.enabled ? "ON" : d.sponsorCfg ? "OFF" : "not set up yet"])]),
+  const perTx = input(mana(s.max_mana_per_tx, SPONSOR_DEFAULT_CAPS.perTx));
+  const perAccount = input(mana(s.max_mana_per_account_day, SPONSOR_DEFAULT_CAPS.perAccount));
+  const perDay = input(mana(s.max_mana_per_day, SPONSOR_DEFAULT_CAPS.perDay));
+  const out = h("div", {}, []);
+  const make = h("button", { type: "button", class: "btn btn-secondary btn-small" }, ["Show the command"]);
+  make.addEventListener("click", () => {
+    try {
+      const c = sponsorCommand({
+        sponsor: contracts.sponsor, enabled: enabled.checked, ink: contracts.ink, shop: contracts.shop, stories: contracts.stories,
+        tokens: tokens.value, perTx: perTx.value, perAccount: perAccount.value, perDay: perDay.value, mainnet: network.mainnet,
+      });
+      replace(out, notice("ok", [h("p", {}, [c.summary + ". Run this on the computer that holds the sponsor key:"]), h("pre", { class: "mono small" }, [c.command])]));
+    } catch (error) {
+      replace(out, notice("warn", h("p", {}, [error.message])));
+    }
+  });
+  // The sponsor key stays offline (audit L-17): this page only reads the
+  // settings and shows the deploy-tool command that changes them.
+  return section("Mana sponsor", "Pays users' mana for the SwarmTales actions new users need, and nothing else. Its settings are changed only with the deploy tool's sponsor-config, on the computer that holds the SPONSOR wallet's key (" + contracts.sponsor + "); this page never asks for that key.", [
+    h("p", {}, ["Now: ", h("b", {}, [s.enabled ? "ON" : d.sponsorCfg ? "OFF" : "not set up yet"]),
+      d.sponsorCfg ? " · " + mana(s.max_mana_per_tx, "0") + " / " + mana(s.max_mana_per_account_day, "0") + " / " + mana(s.max_mana_per_day, "0") +
+        " mana (per transaction / per wallet per day / everyone per day) · " + ((s.calls && s.calls.length) || 0) + " sponsored calls" : ""]),
     h("label", { class: "check" }, [enabled, " Switched on"]),
     field("Payment tokens (comma separated)", tokens),
     row(field("Mana per transaction", perTx), field("Per wallet per day", perAccount), field("Everyone per day", perDay)),
-    actionButton("Save sponsor settings", () => planSponsor({
-      enabled: enabled.checked, ink: contracts.ink, shop: contracts.shop, stories: contracts.stories,
-      tokens: tokens.value, perTx: perTx.value, perAccount: perAccount.value, perDay: perDay.value,
-    })),
+    make,
+    out,
   ]);
 }
 
@@ -625,9 +682,10 @@ function handoverSection(admins) {
 
 function anySection() {
   const writeMethods = [];
-  for (const c of ["ink", "shop", "stories", "sponsor"]) {
+  // Only the admin-gated methods (audit L-21).
+  for (const c of Object.keys(ADMIN_METHODS)) {
     if (!ids()[c]) continue;
-    for (const [m, def] of Object.entries(abis[c].methods)) if (!def.read_only) writeMethods.push({ value: c + "." + m, label: c + "." + m });
+    for (const m of ADMIN_METHODS[c]) if (abis[c].methods[m]) writeMethods.push({ value: c + "." + m, label: c + "." + m });
   }
   const method = select(writeMethods, "stories.set_paused");
   const json = h("textarea", { rows: "4", placeholder: '{"paused": true}' });

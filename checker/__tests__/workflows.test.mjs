@@ -76,8 +76,16 @@ for (const file of files) {
   });
 }
 
-test("both workflows are checked", () => {
-  assert.deepEqual(files.sort(), ["copy-checker.yml", "pages.yml"]);
+test("every workflow is checked", () => {
+  assert.deepEqual(files.sort(), ["copy-checker.yml", "pages.yml", "sponsor-alert.yml"]);
+});
+
+test("sponsor-alert.yml holds no secret, installs nothing and only reads", () => {
+  const text = fs.readFileSync(new URL("sponsor-alert.yml", dir), "utf8");
+  assert.doesNotMatch(text, /secrets\./);
+  assert.doesNotMatch(text.split(/\r?\n/).map(code).join("\n"), /\bnpm\b|yarn/);
+  assert.match(text, /^permissions:\s*\n\s+contents: read\s*$/m);
+  assert.match(text, /run: node scripts\/sponsor-alert\.mjs/);
 });
 
 // ---------- audit 2026-10: O1-09 (plan without the key), M-10 (state key), M-13 (time budget) ----------
@@ -107,4 +115,13 @@ test("copy-checker.yml: the time budget is well under each job's time limit", ()
     const limit = Number((/timeout-minutes:\s*(\d+)/.exec(jobs(lines)[n].join("\n")) || [])[1]);
     assert.ok(limit - budget >= 5, n + ": " + budget + " minutes of work in a " + limit + "-minute job");
   }
+});
+
+test("M-B: the apply job restores its own last sealed progress before it runs", () => {
+  const lines = fs.readFileSync(new URL("copy-checker.yml", dir), "utf8").split(/\r?\n/);
+  const apply = jobs(lines).apply.join("\n");
+  const restore = apply.indexOf("actions/cache/restore@");
+  assert.ok(restore > 0, "the apply job restores the sealed progress");
+  assert.ok(restore < apply.indexOf("node checker/apply.mjs"), "before apply.mjs runs");
+  assert.match(apply, /path: checker-state\.sealed\.json/);
 });

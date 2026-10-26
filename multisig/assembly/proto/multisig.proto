@@ -11,18 +11,22 @@ syntax = "proto3";
 //
 // It is made to be the admin of the Ink, Shop and Stories contracts: their
 // admin checks ask this account to authorize, and this contract answers
-// "yes" only for a transaction with enough signer signatures.
+// "yes" only for a transaction with enough signer signatures, and, for a
+// call, only when the contract asking was called straight from the
+// transaction (not by other contract code running inside it).
 //
 //   setup        once, in the same transaction as the upload, signed by
 //                the account's own key. Sets the first signers.
 //   set_signers  changes the signers or the threshold. Needs the quorum
 //                of the CURRENT signers (this is how a lost signer is
-//                replaced by the other two).
+//                replaced by the other two) and the signature of every
+//                signer being added. Only straight from the transaction.
 //   authorize    called by the chain only. Counts distinct current signers
 //                among the transaction's signatures.
 //
-// Limits: 2 to 10 signers, threshold at least 2 and at most the number of
-// signers, no duplicates, the multisig itself can't be a signer.
+// Limits: 3 to 10 signers, threshold at least 2 and less than the number of
+// signers (one lost key never locks the wallet), no duplicates, the
+// multisig itself can't be a signer.
 // =====================================================================
 
 package multisig;
@@ -51,7 +55,7 @@ message setup_arguments {
   uint32 threshold = 2;
 }
 
-// @description Replace the signers and threshold. Needs the current quorum.
+// @description Replace the signers and threshold. Needs the current quorum and every new signer's signature.
 // @read-only false
 // @result empty_object
 message set_signers_arguments {

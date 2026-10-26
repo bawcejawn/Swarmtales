@@ -2317,3 +2317,42 @@ describe("Shop: the Stories address is set once (audit C1-07)", () => {
     expect(MockVM.getErrorMessage()).toBe("SHOP: call SwarmTales directly from your wallet, not through another contract");
   });
 });
+
+// ---- Re-audit of main 98230a7 (docs/AUDIT_2026_10B_PLAN.md) ----
+
+describe("Shop: turning a token off always works (audit M-D)", () => {
+  beforeEach(() => {
+    MockVM.reset();
+    MockVM.setContractId(SHOP);
+    setTime(START);
+    callAs(new Uint8Array(0));
+    resetLedger();
+    checkpoint();
+    configure();
+  });
+
+  it("turns off with blank decimals and symbol (the admin page's old arguments) and keeps the record's", () => {
+    authorize(SHOP);
+    new Shop().set_asset(new shop.set_asset_arguments(USDT, false, 0, ""));
+    checkpoint();
+    const a = new Shop().get_asset(new shop.get_asset_arguments(USDT));
+    expect(a.enabled).toBe(false);
+    expect(a.decimals).toBe(6);
+    expect(a.symbol).toBe("USDT");
+  });
+
+  it("turns off with the stored values (what the page and the tool send now)", () => {
+    authorize(SHOP);
+    new Shop().set_asset(new shop.set_asset_arguments(EIGHT, false, 8, "EIGHT"));
+    checkpoint();
+    expect(new Shop().get_asset(new shop.get_asset_arguments(EIGHT)).enabled).toBe(false);
+  });
+
+  it("still checks the symbol when turning a token on", () => {
+    authorize(SHOP);
+    new Shop().set_asset(new shop.set_asset_arguments(USDT, false, 0, ""));
+    checkpoint();
+    expect(() => { new Shop().set_asset(new shop.set_asset_arguments(USDT, true, 6, "")); }).toThrow();
+    expect(MockVM.getErrorMessage()).toBe("SHOP: symbol must be 1 to 16 characters");
+  });
+});

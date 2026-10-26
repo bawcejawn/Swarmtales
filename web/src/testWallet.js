@@ -12,8 +12,8 @@
  *   - It is play money: only send it test KOIN.
  */
 import { Signer, Transaction, utils } from "koilib";
-import { freeMana, getProvider, sponsorFunding, verifiedChain } from "./chain.js";
-import { isSponsorRefusal } from "./lib/sponsor.js";
+import { freeMana, getProvider, lookupTransaction, sponsorFunding, verifiedChain } from "./chain.js";
+import { afterSponsorRefusal, isSponsorRefusal } from "./lib/sponsor.js";
 
 /**
  * The most mana one test-wallet transaction may use: 30 mana, as for Kondor.
@@ -86,7 +86,7 @@ export function createTestWallet(network) {
       const hex = loadKey();
       address = hex ? signerFor(hex).getAddress() : null;
     },
-    signAndSend: async (operations) => {
+    signAndSend: async (operations, options = {}) => {
       const hex = loadKey();
       if (!hex || !address) throw new Error("Create the test wallet first.");
       const chainId = verifiedChain();
@@ -102,6 +102,11 @@ export function createTestWallet(network) {
           return await testWalletSend(signer, chainId, operations, funding);
         } catch (error) {
           if (!isSponsorRefusal(error)) throw error;
+          // It may have gone through after all (audit L-20): then wait for it.
+          if ((await afterSponsorRefusal(error.transactionId, lookupTransaction)) === "landed") {
+            return { transactionId: error.transactionId, receipt: null, sponsored: true };
+          }
+          if (options.onProgress) options.onProgress({ phase: "sponsor-refused" });
         }
       }
       const mana = await freeMana(address);
@@ -132,10 +137,17 @@ async function testWalletSend(signer, chainId, operations, funding) {
   await tx.prepare();
   await tx.sign();
   const signed = JSON.parse(JSON.stringify(tx.transaction));
-  const { receipt: trial } = await provider.sendTransaction(signed, false);
-  if (trial && trial.reverted) return { transactionId: "", receipt: trial };
-  const receipt = await tx.send();
-  return { transactionId: tx.transaction.id, receipt: receipt || null, sponsored: !!funding.payee };
+  try {
+    const { receipt: trial } = await provider.sendTransaction(signed, false);
+    if (trial && trial.reverted) return { transactionId: "", receipt: trial };
+    const receipt = await tx.send();
+    return { transactionId: tx.transaction.id, receipt: receipt || null, sponsored: !!funding.payee };
+  } catch (error) {
+    // Kept so a sponsor refusal can be checked against the node (audit L-20).
+    const e = error instanceof Error ? error : new Error(String((error && error.message) || error));
+    e.transactionId = tx.transaction.id;
+    throw e;
+  }
 }
 
 /**

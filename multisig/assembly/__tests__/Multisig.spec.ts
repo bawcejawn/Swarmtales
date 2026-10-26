@@ -6,7 +6,7 @@
 // ids, with test-only keys (never funded).
 // =====================================================================
 
-import { Arrays, Base58, MockVM, authority, protocol } from "@koinos/sdk-as";
+import { Arrays, Base58, MockVM, authority, chain, protocol } from "@koinos/sdk-as";
 import { Multisig } from "../Multisig";
 import { multisig } from "../proto/multisig";
 import { F } from "./fixtures";
@@ -79,8 +79,19 @@ function errorIs(message: string): void {
   MockVM.rollbackTransaction();
 }
 
+/**
+ * What the chain passes: for a call, which contract asks (Stories here) and
+ * who called it (nobody: the operation called Stories straight from the
+ * transaction).
+ */
 function auth(type: authority.authorization_type): bool {
-  return new Multisig().authorize(new authority.authorize_arguments(type)).value;
+  const call = type == authority.authorization_type.contract_call ? new authority.call_data(OUTSIDER) : null;
+  return new Multisig().authorize(new authority.authorize_arguments(type, call)).value;
+}
+
+/** Contract code (OUTSIDER) is now running: the next calls come from it. */
+function calledByContract(): void {
+  MockVM.setCaller(new chain.caller_data(OUTSIDER, chain.privilege.user_mode));
 }
 
 function setUp2of3(): void {
@@ -93,6 +104,8 @@ describe("multisig", () => {
   beforeEach(() => {
     MockVM.reset();
     MockVM.setContractId(SELF);
+    // Called straight from the transaction: no calling contract.
+    MockVM.setCaller(new chain.caller_data(new Uint8Array(0), chain.privilege.user_mode));
     MockVM.commitTransaction(); // so a rollback after an error keeps the contract id
   });
 
@@ -140,26 +153,32 @@ describe("multisig", () => {
   it("needs 2 to 10 signers", () => {
     signedBy(1, ["SELF"]);
     expect(() => { new Multisig().setup(new multisig.setup_arguments([A], 1)); }).toThrow();
-    errorIs("MULTISIG: use 2 to 10 signers");
+    errorIs("MULTISIG: use 3 to 10 signers");
+  });
+
+  it("refuses 2 signers (2 of 2 would lock with one lost key)", () => {
+    signedBy(1, ["SELF"]);
+    expect(() => { new Multisig().setup(new multisig.setup_arguments([A, B], 2)); }).toThrow();
+    errorIs("MULTISIG: use 3 to 10 signers");
   });
 
   it("refuses 11 signers", () => {
     signedBy(1, ["SELF"]);
     LIST = [A, B, C, D, OUTSIDER, A, B, C, D, OUTSIDER, A];
     expect(() => { new Multisig().setup(new multisig.setup_arguments(LIST, 2)); }).toThrow();
-    errorIs("MULTISIG: use 2 to 10 signers");
+    errorIs("MULTISIG: use 3 to 10 signers");
   });
 
   it("refuses a threshold of 1", () => {
     signedBy(1, ["SELF"]);
     expect(() => { new Multisig().setup(new multisig.setup_arguments([A, B, C], 1)); }).toThrow();
-    errorIs("MULTISIG: threshold must be at least 2 and at most the number of signers");
+    errorIs("MULTISIG: threshold must be at least 2 and less than the number of signers");
   });
 
   it("refuses a threshold above the number of signers", () => {
     signedBy(1, ["SELF"]);
     expect(() => { new Multisig().setup(new multisig.setup_arguments([A, B, C], 4)); }).toThrow();
-    errorIs("MULTISIG: threshold must be at least 2 and at most the number of signers");
+    errorIs("MULTISIG: threshold must be at least 2 and less than the number of signers");
   });
 
   it("refuses a duplicate signer", () => {
@@ -241,9 +260,9 @@ describe("multisig", () => {
     expect(auth(authority.authorization_type.contract_call)).toBe(false);
   });
 
-  it("replaces a lost signer with two of the others", () => {
+  it("replaces a lost signer with two of the others and the new signer", () => {
     setUp2of3();
-    signedBy(2, ["A", "B"]);
+    signedBy(2, ["A", "B", "D"]);
     new Multisig().set_signers(new multisig.set_signers_arguments([A, B, D], 2));
     MockVM.commitTransaction();
     signedBy(3, ["A", "C"]);
@@ -281,18 +300,90 @@ describe("multisig", () => {
     expect(() => {
       new Multisig().set_signers(new multisig.set_signers_arguments([A, B, C], 1));
     }).toThrow();
-    errorIs("MULTISIG: threshold must be at least 2 and at most the number of signers");
+    errorIs("MULTISIG: threshold must be at least 2 and less than the number of signers");
     expect(new Multisig().get_config(new multisig.get_config_arguments()).threshold).toBe(2);
   });
 
-  it("can raise the threshold to 3 of 3", () => {
+  it("refuses a threshold equal to the number of signers (3 of 3)", () => {
     setUp2of3();
     signedBy(2, ["A", "B"]);
-    new Multisig().set_signers(new multisig.set_signers_arguments([A, B, C], 3));
+    expect(() => {
+      new Multisig().set_signers(new multisig.set_signers_arguments([A, B, C], 3));
+    }).toThrow();
+    errorIs("MULTISIG: threshold must be at least 2 and less than the number of signers");
+    expect(new Multisig().get_config(new multisig.get_config_arguments()).threshold).toBe(2);
+  });
+
+  it("can raise the threshold to 3 of 4, with the new signer signing", () => {
+    setUp2of3();
+    signedBy(2, ["A", "B", "D"]);
+    new Multisig().set_signers(new multisig.set_signers_arguments([A, B, C, D], 3));
     MockVM.commitTransaction();
     signedBy(3, ["A", "B"]);
     expect(auth(authority.authorization_type.contract_call)).toBe(false);
     signedBy(3, ["A", "B", "C"]);
     expect(auth(authority.authorization_type.contract_call)).toBe(true);
+  });
+
+  // ---- audit L-16: a new signer proves they hold the key ----
+
+  it("refuses set_signers when a new signer has not signed", () => {
+    setUp2of3();
+    signedBy(2, ["A", "B", "C"]);
+    expect(() => {
+      new Multisig().set_signers(new multisig.set_signers_arguments([A, B, D], 2));
+    }).toThrow();
+    errorIs("MULTISIG: every new signer must sign");
+    expect(Arrays.equal(new Multisig().get_config(new multisig.get_config_arguments()).signers[2], C)).toBe(true);
+  });
+
+  it("does not need the removed signer to sign", () => {
+    setUp2of3();
+    signedBy(2, ["A", "D", "B"]);
+    LIST = [A, D, B];
+    new Multisig().set_signers(new multisig.set_signers_arguments(LIST, 2));
+    expect(new Multisig().get_config(new multisig.get_config_arguments()).signers.length).toBe(3);
+  });
+
+  // ---- audit H-1: only a request straight from the transaction counts ----
+
+  it("refuses a call request from a contract that another contract called", () => {
+    setUp2of3();
+    signedBy(2, ["A", "B", "C"]);
+    const call = new authority.call_data(OUTSIDER, 0, D);
+    const args = new authority.authorize_arguments(authority.authorization_type.contract_call, call);
+    expect(new Multisig().authorize(args).value).toBe(false);
+    // The same request from a contract called by the transaction itself is fine.
+    const direct = new authority.authorize_arguments(authority.authorization_type.contract_call, new authority.call_data(OUTSIDER));
+    expect(new Multisig().authorize(direct).value).toBe(true);
+  });
+
+  it("refuses a call request that says nothing about the call", () => {
+    setUp2of3();
+    signedBy(2, ["A", "B", "C"]);
+    const args = new authority.authorize_arguments(authority.authorization_type.contract_call);
+    expect(new Multisig().authorize(args).value).toBe(false);
+  });
+
+  it("refuses set_signers called by another contract, even with every signature", () => {
+    setUp2of3();
+    signedBy(2, ["A", "B", "C", "OUTSIDER"]);
+    calledByContract();
+    LIST = [A, B, OUTSIDER];
+    expect(() => {
+      new Multisig().set_signers(new multisig.set_signers_arguments(LIST, 2));
+    }).toThrow();
+    errorIs("MULTISIG: call the multisig directly from the transaction, not through another contract");
+    expect(Arrays.equal(new Multisig().get_config(new multisig.get_config_arguments()).signers[2], C)).toBe(true);
+  });
+
+  it("refuses setup called by another contract", () => {
+    signedBy(1, ["SELF"]);
+    calledByContract();
+    expect(() => {
+      new Multisig().setup(new multisig.setup_arguments([A, B, C], 2));
+    }).toThrow();
+    errorIs("MULTISIG: call the multisig directly from the transaction, not through another contract");
+    expect(new Multisig().get_config(new multisig.get_config_arguments()).threshold).toBe(0);
   });
 });

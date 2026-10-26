@@ -66,7 +66,7 @@ import {
   isDuplicate, isPartialDuplicate, logLine, mdCell, mdFence, normalizeResults, pickPhrases, provablyOlder, publishedEnd,
   readParts, resultMatches, textAt, textKey, worthAsking,
 } from "./lib.mjs";
-import { activityNow, connect, timeBudgetMs } from "./chain.mjs";
+import { FETCH_TIMEOUT_MS, activityNow, connect, timeBudgetMs } from "./chain.mjs";
 import { writeAtomic } from "./state.mjs";
 import { readAllVersions } from "../web/src/lib/versions.js";
 
@@ -124,7 +124,7 @@ const SERVICES = [
     key: () => env.GOOGLE_BOOKS_KEY,
     monthly: BOOKS_MONTHLY,
     ask: (phrase) => fetch("https://www.googleapis.com/books/v1/volumes?maxResults=5&q=" + encodeURIComponent('"' + phrase + '"') +
-      "&key=" + encodeURIComponent(env.GOOGLE_BOOKS_KEY.trim()), { headers: { Accept: "application/json" } }),
+      "&key=" + encodeURIComponent(env.GOOGLE_BOOKS_KEY.trim()), { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }),
   },
   {
     name: "tavily",
@@ -135,6 +135,7 @@ const SERVICES = [
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.TAVILY_API_KEY.trim() },
       body: JSON.stringify({ query: '"' + phrase + '"', search_depth: "basic", max_results: 5 }),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     }),
   },
   {
@@ -144,7 +145,7 @@ const SERVICES = [
     monthly: MONTHLY,
     async ask(phrase) {
       const url = "https://api.search.brave.com/res/v1/web/search?count=5&q=" + encodeURIComponent('"' + phrase + '"');
-      const res = await fetch(url, { headers: { Accept: "application/json", "X-Subscription-Token": env.BRAVE_API_KEY.trim() } });
+      const res = await fetch(url, { headers: { Accept: "application/json", "X-Subscription-Token": env.BRAVE_API_KEY.trim() }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       await pause(1100); // Brave allows 1 request a second
       return res;
     },
@@ -203,7 +204,7 @@ async function searchOnce(service, phrase) {
  * book text is the main risk), then the web. Returns null (nothing worth
  * noting), "defer" (a phrase that mattered went unanswered: no free searches
  * left this run, or every service failed; try next run, AB-083), or
- * { action: "hide" | "note", found, same, of, label, source, kind, published, cited }.
+ * { action: "hide" | "note", found, same, of, label, source, kind, published, books, host, cited }.
  * `kind` is "book" only when every hit of the main source was a book; then
  * `published` is the latest publishedDate among them (the safe side, M-11).
  */
@@ -240,7 +241,8 @@ async function webCheck(text, spendable, citation) {
     let host = "";
     try { host = new URL(hit.url).host; } catch { host = "a website"; }
     const key = hit.source ? (hit.source.title + "|" + hit.source.author).toLowerCase() : host.toLowerCase();
-    const s = sources.get(key) || { label: hit.label || cleanNote(host, "a website", 100), source: hit.source || host, kind: "book", published: "" };
+    const s = sources.get(key) || { label: hit.label || cleanNote(host, "a website", 100), source: hit.source || host, kind: "book", published: "", books: [], host };
+    if (hit.volume && !s.books.includes(hit.volume) && s.books.length < 5) s.books.push(hit.volume);
     // The latest date among the source's hits counts; one unknown date makes it unknown.
     const end = publishedEnd(hit.published);
     if (hit.kind !== "book") s.kind = "web";
@@ -251,7 +253,7 @@ async function webCheck(text, spendable, citation) {
   }
   const d = decide(found);
   if (d.action === "none") return null;
-  const where = sources.get(d.source) || { label: "", source: null, kind: "web", published: "" };
+  const where = sources.get(d.source) || { label: "", source: null, kind: "web", published: "", books: [], host: "" };
   const cited = !!where.source && citationCovers(citation || "", where.source);
   return { action: d.action, found: d.found, same: d.same, of: phrases.length, ...where, cited };
 }
@@ -352,20 +354,29 @@ async function main() {
     note("  " + action.kind.toUpperCase() + " story " + action.story + " part " + action.seq + ": " + action.note);
   }
 
-  /** Plans a hide; the apply step re-checks the evidence on the chain before signing. */
-  function hide(storyId, seq, seg, seen, afterRestore) {
+  /**
+   * Plans a hide. The apply step re-checks the evidence on the chain, looks
+   * the book's date up itself, writes the note itself and works out the
+   * restored-part protection itself (audit M-B): the plan only names what to
+   * check (copyOf, or the book volumes).
+   */
+  function hide(storyId, seq, seg, seen) {
     plan({
       kind: "hide", story: Number(storyId), seq: Number(seq), t: textKey(seg.text), reason: seen.reason,
-      note: cleanNote(seen.why, "copied text"), src: seen.src || null, label: seen.label || "",
-      copyOf: seen.copyOf || undefined, sourceKind: seen.sourceKind || undefined, published: seen.published || undefined,
-      afterRestore: afterRestore || undefined,
+      note: cleanNote(seen.why, "copied text"), copyOf: seen.copyOf || undefined, books: seen.books || undefined,
     });
   }
 
-  /** A public note under the part. Nothing is hidden. Never over a note it already has. */
-  function sourceNote(storyId, seq, seg, text) {
+  /**
+   * A public note under the part. Nothing is hidden. Never over a note it
+   * already has. "of" says what the note is about, in fields the apply step
+   * can check and turn into the note's text itself (audit M-B): { about:
+   * "story:seq", tie } for another part, { books: [volume ids] } for a book,
+   * { web: host } for a website. "text" is only for this step's log.
+   */
+  function sourceNote(storyId, seq, seg, text, of) {
     if (seg.source_note && seg.source_note.length) return;
-    plan({ kind: "note", story: Number(storyId), seq: Number(seq), t: textKey(seg.text), note: cleanNote(text, "Parts of this text also appear elsewhere.") });
+    plan({ kind: "note", story: Number(storyId), seq: Number(seq), t: textKey(seg.text), note: cleanNote(text, "Parts of this text also appear elsewhere."), ...of });
   }
 
   /**
@@ -424,7 +435,7 @@ async function main() {
    * Compares one part's text with SwarmTales and, with alsoWeb, the web.
    * Plans a source note for a partial match. Returns "defer" (search budget
    * used up: try next run) or a verdict: { v: "clean" }, { v: "note" },
-   * { v: "copy", reason, why, note, src, label, copyOf | sourceKind+published }
+   * { v: "copy", reason, why, note, noteOf, src, label, copyOf | books }
    * (a clear copy, to be hidden) or { v: "cited", ... } (a clear copy of a
    * source the writer cited: left alone while the citation names it).
    */
@@ -441,9 +452,9 @@ async function main() {
       const noteText = "About " + pct + "% of this text also appears in story " + srcStory + ", part " + srcSeq + ".";
       if (isDuplicate(hashes, match)) {
         return { v: "copy", reason: REASON.DUPLICATE, why: pct + "% of this part matches story " + srcStory + ", part " + srcSeq + ", by another writer",
-          note: noteText, copyOf: match.key };
+          note: noteText, noteOf: { about: match.key }, copyOf: match.key };
       }
-      sourceNote(storyId, seq, seg, noteText);
+      sourceNote(storyId, seq, seg, noteText, { about: match.key });
       return { v: "note" };
     }
     // Written at the same time as a matching part: nobody can tell which is
@@ -452,13 +463,15 @@ async function main() {
     if (tie && (isDuplicate(hashes, tie) || isPartialDuplicate(hashes, tie))) {
       const [tieStory, tieSeq] = tie.key.split(":");
       const pct = Math.round(tie.ratio * 100);
-      sourceNote(storyId, seq, seg, "About " + pct + "% of this text also appears in story " + tieStory + ", part " + tieSeq + ", written at the same time.");
+      sourceNote(storyId, seq, seg, "About " + pct + "% of this text also appears in story " + tieStory + ", part " + tieSeq + ", written at the same time.",
+        { about: tie.key, tie: true });
       // Read the other part first: it may be gone by now, or already carry a
       // note (from the web check, say) that must not be overwritten (AB-030).
       try {
         const partner = await read("get_segment", { story_id: tieStory, seq: tieSeq });
         if (Number(partner.status) === 1 && partner.text) {
-          sourceNote(tieStory, tieSeq, partner, "Much of this text also appears in story " + storyId + ", part " + seq + ", written at the same time.");
+          sourceNote(tieStory, tieSeq, partner, "Much of this text also appears in story " + storyId + ", part " + seq + ", written at the same time.",
+            { about: storyId + ":" + seq, tie: true });
         }
       } catch (error) {
         note("  could not read story " + tieStory + " part " + tieSeq + ": " + errText(error));
@@ -472,17 +485,18 @@ async function main() {
       if (web === "defer") return "defer";
       if (web) {
         const noteText = "Parts of this text also appear in " + web.label + ".";
+        const noteOf = web.kind === "book" ? { books: web.books } : { web: web.host };
         // Hidden only when the source is a book provably older than the part
         // (M-11). A website, or a book that may be newer (it may have copied
         // the part), gets a note and the part stays visible.
         if (web.action === "hide" && web.kind === "book" && provablyOlder(web.published, seg.created_at)) {
           const found = { reason: REASON.COPYRIGHT, why: "copied text: " + web.found + " of " + web.of + " phrases found, " + web.same + " of them in " +
-            web.label + " (published " + web.published + ")", note: noteText, src: web.source, label: web.label, sourceKind: "book", published: web.published };
+            web.label + " (published " + web.published + ")", note: noteText, noteOf, src: web.source, label: web.label, books: web.books };
           // The writer named this source: left alone, but only while the citation names it (AB-067).
           return { v: web.cited ? "cited" : "copy", ...found };
         }
         if (web.cited) return { v: "clean" }; // the writer named this source
-        sourceNote(storyId, seq, seg, noteText);
+        sourceNote(storyId, seq, seg, noteText, noteOf);
         return { v: "note" };
       }
     }
@@ -519,7 +533,7 @@ async function main() {
       if (!entry || entry.skip) {
         indexText(key, seg, entry || { hashes: fingerprint(seg.text), at: textAt(seg) }, false, seen.copyOf);
       }
-      if (seen.note) sourceNote(storyId, seq, seg, seen.note);
+      if (seen.note) sourceNote(storyId, seq, seg, seen.note, seen.noteOf);
       return;
     }
     if (seen.v !== "copy") return;
@@ -543,7 +557,7 @@ async function main() {
       await enforce(storyId, seq, seg, seen);
       return;
     }
-    hide(storyId, seq, seg, seen, seg.restored && seg.refund_forfeited);
+    hide(storyId, seq, seg, seen);
   }
 
   /**

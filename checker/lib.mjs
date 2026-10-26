@@ -351,6 +351,8 @@ export function normalizeResults(service, body) {
         label: "\u201c" + shortTitle + "\u201d" + (shortBy ? " by " + shortBy : ""),
         source: { title, author: by },
         published: String(info.publishedDate || ""),
+        // The volume, so the apply job can look its date up itself (audit M-B).
+        volume: String(item.id || ""),
       };
     });
   }

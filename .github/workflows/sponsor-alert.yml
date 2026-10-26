@@ -1,0 +1,29 @@
+name: Sponsor alert
+
+# Audit M-A / L-14: every hour, read the mana sponsor the website uses
+# (web/src/config.js) and fail when today's sponsored mana reaches 80% of the
+# daily cap, or the sponsor's own mana falls below 5 times that cap. GitHub
+# emails the repository owner when a scheduled run fails. Read-only: no key,
+# no secret, no installed packages (Node built-ins only).
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - name: Read the sponsor's usage and mana
+        run: node scripts/sponsor-alert.mjs

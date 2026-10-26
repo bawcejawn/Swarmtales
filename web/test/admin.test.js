@@ -8,7 +8,7 @@ import { Contract, Signer, Transaction } from "koilib";
 import { abis } from "../src/generated/abis.js";
 import {
   AdminInputError, DEFAULT_PREPARED_RC, SHOP_ITEMS, planAny, planAsset, planBlock, planFee, planHide, planInkAmounts, planLimits,
-  planModeration, planPause, planPrice, planPromo, planSponsor, planTakedown, planTerms, preparedFile, promoLink, strikeChoices, toBaseUnits,
+  planModeration, planPause, planPrice, planPromo, planTakedown, planTerms, preparedFile, promoLink, sponsorCommand, strikeChoices, toBaseUnits,
 } from "../src/lib/admin.js";
 import { NETWORKS } from "../src/config.js";
 
@@ -61,7 +61,9 @@ test("admin: prices, the poem item, Ink amounts, fee and tokens", () => {
   throwsInput(() => planInkAmounts({ writer_month: "x" }), /whole number/);
   assert.deepEqual(planFee("100").args, { fee_bps: 100 });
   throwsInput(() => planFee("501"), /at most 500/);
-  assert.deepEqual(planAsset({ token: TOKEN, enabled: true, decimals: "8", symbol: "tKOIN" }).args, { token: TOKEN, enabled: true, decimals: 8, symbol: "tKOIN" });
+  const pin = { address: TOKEN, symbol: "tKOIN", decimals: 8, codeHash: "ab".repeat(32) };
+  assert.deepEqual(planAsset({ token: TOKEN, enabled: true, decimals: "8", symbol: "tKOIN", pin, codeHash: pin.codeHash }).args,
+    { token: TOKEN, enabled: true, decimals: 8, symbol: "tKOIN" });
   assert.equal(planAsset({ token: TOKEN, enabled: false }).args.enabled, false);
   throwsInput(() => planAsset({ token: TOKEN, enabled: true, decimals: "8", symbol: "t KOIN" }), /symbol/);
 });
@@ -96,12 +98,12 @@ test("admin: a takedown is bound to the text read, and strikes only the writer o
 });
 
 test("admin: sponsor settings use mana units and the contract's cap rules", () => {
-  const s = planSponsor({ enabled: true, ink: A, shop: B, stories: C, tokens: TOKEN, perTx: "4", perAccount: "20", perDay: "300" });
-  assert.equal(s.contract, "sponsor");
-  assert.deepEqual(s.args.config.tokens, [TOKEN]);
-  assert.equal(s.args.config.max_mana_per_tx, "400000000");
-  throwsInput(() => planSponsor({ enabled: true, ink: A, shop: B, stories: C, tokens: "", perTx: "30", perAccount: "20", perDay: "300" }), /Caps must be/);
-  throwsInput(() => planSponsor({ enabled: true, ink: A, shop: B, stories: C, tokens: "", perTx: "1", perAccount: "2", perDay: "1001" }), /1,000 mana/);
+  const S = "1De7ea6SyHRT7SsHNnwLzTBuqf5ixZ1ZyZ";
+  const s = sponsorCommand({ sponsor: S, enabled: true, ink: A, shop: B, stories: C, tokens: TOKEN, perTx: "1", perAccount: "20", perDay: "300" });
+  assert.equal(s.command, "node deploy/deploy.js sponsor-config --sponsor " + S + " --ink " + A + " --shop " + B + " --stories " + C +
+    " --tokens " + TOKEN + " --per-tx 1 --per-account 20 --per-day 300");
+  throwsInput(() => sponsorCommand({ sponsor: S, enabled: true, ink: A, shop: B, stories: C, tokens: "", perTx: "30", perAccount: "20", perDay: "300" }), /Caps must be/);
+  throwsInput(() => sponsorCommand({ sponsor: S, enabled: true, ink: A, shop: B, stories: C, tokens: "", perTx: "1", perAccount: "2", perDay: "1001" }), /1,000 mana/);
 });
 
 test("admin: any other write method, with JSON arguments", () => {
@@ -144,7 +146,8 @@ test("admin: cosign reads the nonce koilib (every wallet, and this page) writes"
     assert.equal(deployLib.nonceNumber(await p.getNextNonce("1")), String(n), "nonce " + n);
   }
   assert.equal(deployLib.nonceNumber("KAI="), "2"); // as read live from testnet, 25 Oct 2026
-  assert.equal(deployLib.nonceNumber("OAU="), "5");
+  // Tag 0x38 is sint64 (zigzag), not koilib's encoding: refused (audit L-7).
+  assert.throws(() => deployLib.nonceNumber("OAU="), /nonce is not in the expected format/);
   assert.throws(() => deployLib.nonceNumber("CAI="), /nonce is not in the expected format/);
 });
 
@@ -157,11 +160,13 @@ test("admin: a new payment token priced from an Ink rate, in one transaction", a
   assert.equal(ratePrice("15000", "2.5", 0), "6000");
   throwsInput(() => ratePrice("5000", "0", 6), /more than 0/);
   throwsInput(() => ratePrice("5000", "x", 6), /Ink one token buys/);
-  const plans = planAddToken({ token: B, symbol: "vUSDC", decimals: "6", prices: { 2: "150", 3: "50", 10: "", 1: "" } });
+  // Only a pinned token whose code is the pinned code (audit H-3).
+  const pin = { address: B, symbol: "vUSDC", decimals: 6, codeHash: "ef".repeat(32) };
+  const plans = planAddToken({ token: B, symbol: "vUSDC", decimals: "6", prices: { 2: "150", 3: "50", 10: "", 1: "" }, pin, codeHash: pin.codeHash });
   assert.deepEqual(plans.map((p) => p.method), ["set_asset", "set_price", "set_price"]);
   assert.deepEqual(plans[0].args, { token: B, enabled: true, decimals: 6, symbol: "vUSDC" });
   assert.deepEqual(plans[1].args, { item: 2, token: B, amount: "150000000" });
-  throwsInput(() => planAddToken({ token: B, symbol: "vUSDC", decimals: "6", prices: {} }), /at least one price/);
+  throwsInput(() => planAddToken({ token: B, symbol: "vUSDC", decimals: "6", prices: {}, pin, codeHash: pin.codeHash }), /at least one price/);
 });
 
 test("admin: a page-made file can carry the multisig's signer list, which cosign reads", async () => {
@@ -176,5 +181,6 @@ test("admin: a page-made file can carry the multisig's signer list, which cosign
   const checked = await deployLib.verifyPrepared(JSON.parse(JSON.stringify(file)), deployLib.resolveNetwork({}), {
     koilib: { Transaction, Contract }, abiFor: (name) => abis[name], flags: {},
   });
-  assert.deepEqual(checked.needs, needs);
+  // A pause adds no signer, so no new signer has to sign (audit L-16).
+  assert.deepEqual(checked.needs, { ...needs, newSigners: [] });
 });

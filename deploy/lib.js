@@ -8,21 +8,43 @@ const crypto = require("crypto");
 
 // ---- MAINNET ADDRESSES (audit M-6) ----
 // Fill in each address once that contract is uploaded to mainnet (one line
-// each), and the payment stablecoin's address before set-asset. Until then
-// "" means "not pinned yet". On mainnet every command refuses any other
-// address unless PIN_OVERRIDE_FLAG is given; only `upload` may name an
-// address that is not pinned yet (that is how it gets one).
+// each). Until then "" means "not pinned yet". Payment tokens are a list,
+// pinned with their code in TOKEN_PINS.mainnet below (audit L-8, H-3). On
+// mainnet every command refuses any other address unless PIN_OVERRIDE_FLAG
+// names that role (for example --i-understand-this-address-is-not-pinned=shop);
+// only `upload` may name an address that is not pinned yet (that is how it
+// gets one). --admin must be the pinned multisig, or before the handover the
+// pinned contract wallet itself.
 const MAINNET_PINNED = {
   ink: "",
   shop: "",
   stories: "",
-  token: "",
   sponsor: "",
   multisig: "",
 };
 const PINNED_ROLES = ["ink", "shop", "stories", "token", "sponsor", "multisig"];
+// Roles the override flag may name: the pinned roles, and --admin.
+const OVERRIDE_ROLES = PINNED_ROLES.concat(["admin"]);
 const CONTRACT_ROLES = ["ink", "shop", "stories", "sponsor", "multisig"];
 const PIN_OVERRIDE_FLAG = "--i-understand-this-address-is-not-pinned";
+
+// ---- PAYMENT TOKENS (audit H-3) ----
+// Every token the Shop may accept, pinned with its code: address, symbol,
+// decimals and the sha256 of its code (hex, from get_contract_metadata, as
+// `status` prints it after 0x1220). The Shop's 7-day wait protects its record
+// of a token, not the token's code, and a token's code runs inside every
+// buyer's purchase, so set-asset refuses an address with no contract, a
+// token whose code is not the pinned code, and on mainnet any token that is
+// not pinned. Keep this list in step with web/src/config.js PAYMENT_TOKENS.
+// An issuer's upgrade changes the hash: review the new code, then update the
+// pin in a reviewed change. Launch with one token.
+const TOKEN_PINS = {
+  testnet: [
+    // The Foundation testnet's KOIN (tKOIN), read 25 Oct 2026.
+    { address: "1FaSvLjQJsCJKq5ybmGsMMQs8RQYyVv8ju", symbol: "tKOIN", decimals: 8, codeHash: "4251a6e9d9c9a37f3bbf67e171f63a7dcad62309e4be7d9da85a74f68520edf7" },
+  ],
+  mainnet: [],
+};
 const HASH_OVERRIDE_FLAG = "--i-understand-the-code-hash-is-not-verified";
 
 // ---- Signed invite/promo links (fixes H2 and H3) ----
@@ -59,6 +81,7 @@ const NETWORKS = {
     chainId: "EiAIKVvm6-V2qmsmUvPJy09vCCLbtn9lHFpwrJbcTIEWRQ==",
     koin: "1FaSvLjQJsCJKq5ybmGsMMQs8RQYyVv8ju",
     mainnet: false,
+    tokens: TOKEN_PINS.testnet,
   },
   mainnet: {
     name: "Koinos MAINNET (real KOIN)",
@@ -70,6 +93,7 @@ const NETWORKS = {
     koin: "15DJN4a8SgrbGhhGksSBASiSYjGnMU8dGL",
     mainnet: true,
     pinned: MAINNET_PINNED,
+    tokens: TOKEN_PINS.mainnet,
   },
 };
 
@@ -132,20 +156,63 @@ function measurementText(units, emoji) {
   return out;
 }
 
-/** A non-negative whole number from a flag or a chain read. Never accepts blanks or decimals. */
+// The largest uint64, the widest number type the contracts take. A larger
+// value would be encoded wrapped around, so it would sign a different amount
+// from the one shown (audit M-C).
+const U64_MAX = 18446744073709551615n;
+
+/** `n` (a BigInt) if it fits a uint64, else a clear refusal. */
+function requireUint64(n, label) {
+  if (n > U64_MAX) fail(label + " is too large: the contracts take at most " + U64_MAX + " (in base units). Nothing was sent.");
+  return n;
+}
+
+/** A non-negative whole number from a flag or a chain read, at most a uint64. Never accepts blanks or decimals. */
 function asWhole(value, label) {
   if (typeof value === "bigint") {
     if (value < 0n) fail(label + " must be a whole number of 0 or more.");
-    return value;
+    return requireUint64(value, label);
   }
   if (typeof value === "number") {
     if (!Number.isInteger(value) || value < 0) fail(label + " must be a whole number of 0 or more.");
-    return BigInt(value);
+    return requireUint64(BigInt(value), label);
   }
   if (typeof value !== "string") fail(label + " must be a whole number of 0 or more.");
   const s = value.trim();
   if (!/^(0|[1-9][0-9]*)$/.test(s)) fail(label + " must be a whole number of 0 or more.");
-  return BigInt(s);
+  return requireUint64(BigInt(s), label);
+}
+
+/**
+ * The first number in `sent` (an operation's arguments) that the encoded
+ * operation, decoded back as `decoded`, does not carry exactly: a value that
+ * wrapped around or was cut to fit its field (audit M-C). null when all match.
+ */
+function numberMismatch(sent, decoded, at) {
+  const here = at || "arguments";
+  if (Array.isArray(sent)) {
+    for (let i = 0; i < sent.length; i++) {
+      const m = numberMismatch(sent[i], Array.isArray(decoded) ? decoded[i] : undefined, here + "[" + i + "]");
+      if (m) return m;
+    }
+    return null;
+  }
+  if (sent && typeof sent === "object") {
+    for (const k of Object.keys(sent)) {
+      const m = numberMismatch(sent[k], decoded && typeof decoded === "object" ? decoded[k] : undefined, at ? here + "." + k : k);
+      if (m) return m;
+    }
+    return null;
+  }
+  const isNum = typeof sent === "bigint" || typeof sent === "number" || (typeof sent === "string" && /^-?[0-9]+$/.test(sent));
+  if (!isNum) return null;
+  let got;
+  try {
+    got = BigInt(decoded === undefined || decoded === null ? 0 : decoded);
+  } catch (e) {
+    return { field: here, sent: String(sent), got: String(decoded) };
+  }
+  return BigInt(sent) === got ? null : { field: here, sent: String(sent), got: got.toString() };
 }
 
 /** A whole number from a flag, from `min` to `max`. */
@@ -681,7 +748,7 @@ function versionHistory(versions, seg) {
 // Switches: present or absent, never followed by a value (O1-10).
 const BOOLEAN_FLAGS = [
   "i-understand-this-is-mainnet", "i-understand-this-replaces-mainnet-code",
-  PIN_OVERRIDE_FLAG.slice(2), HASH_OVERRIDE_FLAG.slice(2),
+  HASH_OVERRIDE_FLAG.slice(2),
   "upgrade", "disable", "private", "emoji", "not-opener", "unhide", "no-strike", "unblock",
 ];
 const SECRET_FLAGS = ["key", "wif", "private-key", "privatekey", "secret", "seed", "mnemonic", "password", "link-key"];
@@ -753,7 +820,8 @@ function checkCommandArgs(args, allowed, positionals) {
  */
 function resolveNetwork(flags) {
   const name = flags.network === undefined ? "testnet" : String(flags.network);
-  const net = NETWORKS[name];
+  // Own keys only: "__proto__" or "constructor" are not networks (audit I-11).
+  const net = Object.prototype.hasOwnProperty.call(NETWORKS, name) ? NETWORKS[name] : undefined;
   if (!net) fail("Unknown network '" + name + "'. Use testnet (default) or mainnet.");
   if (net.mainnet && flags[MAINNET_FLAG.slice(2)] !== true) {
     fail(
@@ -784,7 +852,7 @@ function checkChainId(net, actual) {
 // ---------- pinned mainnet addresses and release hashes (M-6, O1-13) ----------
 
 function checkPinnedTable(pinned) {
-  for (const role of PINNED_ROLES) {
+  for (const role of PINNED_ROLES.filter((r) => r !== "token")) {
     if (typeof pinned[role] !== "string" || (pinned[role] !== "" && !isAddress(pinned[role]))) {
       fail("deploy/lib.js MAINNET_PINNED." + role + " must be \"\" or a Koinos address.");
     }
@@ -792,33 +860,138 @@ function checkPinnedTable(pinned) {
 }
 checkPinnedTable(MAINNET_PINNED);
 
+function checkTokenPins(pins) {
+  for (const list of Object.values(pins)) {
+    const seen = new Set();
+    for (const t of list) {
+      if (!t || !isAddress(t.address) || !/^[\x21-\x7e]{1,16}$/.test(String(t.symbol)) || !Number.isInteger(t.decimals) || t.decimals < 0 ||
+        t.decimals > 18 || !/^[0-9a-f]{64}$/.test(String(t.codeHash))) {
+        fail("deploy/lib.js TOKEN_PINS: each token needs an address, a symbol, decimals (0 to 18) and a 64-character lowercase hex code hash.");
+      }
+      const sym = t.symbol.toLowerCase();
+      if (seen.has(t.address) || seen.has(sym)) fail("deploy/lib.js TOKEN_PINS lists " + t.address + " or the symbol " + t.symbol + " twice.");
+      seen.add(t.address);
+      seen.add(sym);
+    }
+  }
+}
+checkTokenPins(TOKEN_PINS);
+
+/** --decimals and --symbol must be the token's own (audit L-9). */
+function checkTokenInfo(token, wanted, onChain) {
+  if (!Number.isInteger(onChain.decimals) || Number(wanted.decimals) !== onChain.decimals) {
+    fail("Token " + token + " says it has " + onChain.decimals + " decimals, not " + wanted.decimals + ". Prices are in its base units, so " +
+      "this must match. Nothing was sent.");
+  }
+  if (String(wanted.symbol) !== onChain.symbol) {
+    fail("Token " + token + " calls itself " + JSON.stringify(onChain.symbol) + ", not " + JSON.stringify(String(wanted.symbol)) +
+      ". Use its own symbol. Nothing was sent.");
+  }
+}
+
 /**
- * On mainnet, `address` must be the pinned address for `role`. `uploading`
+ * Before a token is enabled (audit H-3): `hashHex` is its code hash from the
+ * chain (codeHashFromMeta), null when there is no contract (or the node did
+ * not say). Refuses no contract, code that is not the pinned code, a symbol
+ * or decimals that differ from the pin, and on mainnet a token that is not
+ * pinned. Returns a warning line for an unpinned testnet token, else null.
+ */
+function checkTokenCode(net, token, hashHex, wanted) {
+  if (!hashHex) {
+    fail("There is no token contract at " + token + " (or the node would not give its code hash). A payment token must be a deployed " +
+      "token contract whose code is pinned. Nothing was sent.");
+  }
+  const pin = (net.tokens || []).find((t) => t.address === token);
+  if (!pin) {
+    if (net.mainnet) {
+      fail("Token " + token + " is not pinned in deploy/lib.js TOKEN_PINS.mainnet. Review its code, add { address, symbol, decimals, " +
+        "codeHash: \"" + hashHex + "\" } there (and in web/src/config.js PAYMENT_TOKENS) and have that change reviewed. Nothing was sent.");
+    }
+    return "WARNING: token " + token + " is not pinned in deploy/lib.js TOKEN_PINS." + (net.mainnet ? "mainnet" : "testnet") + " (code hash " + hashHex + "). The website won't show it.";
+  }
+  if (pin.codeHash !== hashHex) {
+    fail("The code at token " + token + " (" + pin.symbol + ") is not the pinned code: the chain has " + hashHex + ", the pin says " +
+      pin.codeHash + ". Its issuer changed it. Review the new code and update TOKEN_PINS before enabling it. Nothing was sent.");
+  }
+  if (wanted && (String(wanted.symbol) !== pin.symbol || Number(wanted.decimals) !== pin.decimals)) {
+    fail("Token " + token + " is pinned as " + pin.symbol + " with " + pin.decimals + " decimals, not " + wanted.symbol + " with " +
+      wanted.decimals + ". Nothing was sent.");
+  }
+  return null;
+}
+/** The addresses pinned for `role` on this network: the token list, or one address. */
+function pinnedAddresses(net, role) {
+  if (role === "token") return (net.tokens || []).map((t) => t.address);
+  return net.pinned && net.pinned[role] ? [net.pinned[role]] : [];
+}
+
+/**
+ * The roles PIN_OVERRIDE_FLAG names (audit L-8: one switch used to unpin
+ * every role at once). The flag takes a value: one role, or several
+ * separated by commas.
+ */
+function overrideRoles(flags) {
+  const v = flags[PIN_OVERRIDE_FLAG.slice(2)];
+  if (v === undefined) return [];
+  const roles = String(v).split(",").map((r) => r.trim()).filter(Boolean);
+  if (v === true || !roles.length || roles.some((r) => !OVERRIDE_ROLES.includes(r))) {
+    fail(PIN_OVERRIDE_FLAG + " must name the role it lets through, one of " + OVERRIDE_ROLES.join(", ") +
+      " (for example " + PIN_OVERRIDE_FLAG + "=shop). Nothing was done.");
+  }
+  return roles;
+}
+
+/**
+ * On mainnet, `address` must be a pinned address for `role`. `uploading`
  * lets `upload` name a contract address that is not pinned yet. Returns a
- * warning line when the override flag let an unpinned address through.
+ * warning line when the override flag, naming this role, let an unpinned
+ * address through.
  */
 function checkPinned(net, role, address, flags, uploading) {
   if (!net.mainnet || address === undefined) return null;
-  const pinned = net.pinned[role];
-  if (pinned === address || (!pinned && uploading)) return null;
-  const what = pinned ? "the pinned mainnet " + role + " address is " + pinned : "no mainnet " + role + " address is pinned in deploy/lib.js yet";
-  if (flags[PIN_OVERRIDE_FLAG.slice(2)] === true) {
-    return "WARNING: " + address + " is used as " + role + " although " + what + " (" + PIN_OVERRIDE_FLAG + ").";
+  const pinned = pinnedAddresses(net, role);
+  if (pinned.includes(address) || (!pinned.length && uploading)) return null;
+  const where = role === "token" ? "TOKEN_PINS.mainnet" : "MAINNET_PINNED";
+  const what = pinned.length ? "the pinned mainnet " + role + " address" + (pinned.length > 1 ? "es are " : " is ") + pinned.join(", ")
+    : "no mainnet " + role + " address is pinned in deploy/lib.js yet";
+  if (overrideRoles(flags).includes(role)) {
+    return "WARNING: " + address + " is used as " + role + " although " + what + " (" + PIN_OVERRIDE_FLAG + "=" + role + ").";
   }
   fail("On mainnet, " + role + " must be the pinned address, but " + what + " and you gave " + address + ".\n" +
-    "Nothing was done. If the address in deploy/lib.js (MAINNET_PINNED) is wrong or missing, fix it there (one line) and have it reviewed. " +
-    "Only if you checked the address yourself, add " + PIN_OVERRIDE_FLAG + ".");
+    "Nothing was done. If the address in deploy/lib.js (" + where + ") is wrong or missing, fix it there (one line) and have it reviewed. " +
+    "Only if you checked the address yourself, add " + PIN_OVERRIDE_FLAG + "=" + role + ".");
+}
+
+/**
+ * On mainnet, --admin must be the pinned multisig, or before the handover a
+ * pinned contract wallet itself (its own admin until set-admin): audit L-8.
+ */
+function checkPinnedAdmin(net, admin, flags) {
+  if (!net.mainnet || admin === undefined) return null;
+  const ok = ["multisig", "ink", "shop", "stories"].map((r) => net.pinned[r]).filter(Boolean);
+  if (ok.includes(admin)) return null;
+  if (overrideRoles(flags).includes("admin")) {
+    return "WARNING: " + admin + " is used as admin although it is not the pinned multisig or a pinned contract (" + PIN_OVERRIDE_FLAG + "=admin).";
+  }
+  fail("On mainnet, --admin must be the pinned multisig (" + (net.pinned.multisig || "not pinned yet") + ") or, before the handover, " +
+    "a pinned contract wallet itself, but you gave " + admin + ".\nNothing was done. Pin it in deploy/lib.js (MAINNET_PINNED) in a reviewed " +
+    "change, or, only if you checked it yourself, add " + PIN_OVERRIDE_FLAG + "=admin.");
 }
 
 /** Every contract address the flags name, checked against the pinned table. `target` names the role of --contract/--expect. */
 function checkPinnedFlags(net, flags, target) {
   const warnings = [];
   for (const role of PINNED_ROLES) warnings.push(checkPinned(net, role, flags[role], flags, false));
+  // sponsor-config --tokens: each must be a pinned token (audit L-8).
+  if (typeof flags.tokens === "string") {
+    for (const t of flags.tokens.split(",").map((x) => x.trim()).filter(Boolean)) warnings.push(checkPinned(net, "token", t, flags, false));
+  }
   for (const name of ["contract", "expect"]) {
     if (flags[name] === undefined || !net.mainnet) continue;
     if (!CONTRACT_ROLES.includes(target)) fail("Say which contract --" + name + " is: ink, shop, stories, sponsor or multisig.");
     warnings.push(checkPinned(net, target, flags[name], flags, name === "expect"));
   }
+  warnings.push(checkPinnedAdmin(net, flags.admin, flags));
   return warnings.filter(Boolean);
 }
 
@@ -826,7 +999,7 @@ function checkPinnedFlags(net, flags, target) {
 function refuseCrossNetworkKey(net, address) {
   if (net.mainnet) return;
   for (const role of PINNED_ROLES) {
-    if (NETWORKS.mainnet.pinned[role] && NETWORKS.mainnet.pinned[role] === address) {
+    if (pinnedAddresses(NETWORKS.mainnet, role).includes(address)) {
       fail(address + " is the pinned MAINNET " + role + " address. Never use a mainnet contract key on testnet " +
         "(or a testnet key on mainnet): make a new wallet for each contract on each network. Nothing was signed.");
     }
@@ -975,7 +1148,7 @@ function utcTime(sec) {
  * Re-enabling an enabled token is refused, so the wait is never restarted
  * by mistake. Returns { args, summary }.
  */
-function planAsset(current, wanted, nowSec, sold = true) {
+function planAsset(current, wanted, nowSec, sold = true, others = []) {
   const cur = current || {};
   const token = requireAddress(wanted.token, "token");
   if (!wanted.enabled) {
@@ -988,6 +1161,9 @@ function planAsset(current, wanted, nowSec, sold = true) {
   const decimals = wholeInRange(wanted.decimals, "--decimals", 0, 18);
   const symbol = String(wanted.symbol || "");
   if (!/^[\x21-\x7e]{1,16}$/.test(symbol)) fail("--symbol must be 1 to 16 plain characters.");
+  // Two tokens with one display symbol would let a buyer pay with the wrong one (audit I-2).
+  const clash = others.find((o) => o.token !== token && String(o.symbol || "").toLowerCase() === symbol.toLowerCase());
+  if (clash) fail("The Shop already has a token called " + clash.symbol + " (" + clash.token + "). Use another symbol. Nothing was sent.");
   if (cur.enabled) {
     if (Number(cur.decimals) !== decimals || cur.symbol !== symbol) {
       fail("That token is enabled as " + cur.symbol + " with " + cur.decimals + " decimals; an enabled token's decimals and symbol " +
@@ -1083,7 +1259,7 @@ function parseTokenAmount(value, decimals, label) {
   if (!m) fail(label + " must be an amount like 2 or 0.5.");
   const frac = m[2] || "";
   if (frac.length > decimals) fail(label + " has more than " + decimals + " decimals.");
-  return (BigInt(m[1]) * 10n ** BigInt(decimals) + BigInt((frac + "0".repeat(decimals)).slice(0, decimals) || "0")).toString();
+  return requireUint64(BigInt(m[1]) * 10n ** BigInt(decimals) + BigInt((frac + "0".repeat(decimals)).slice(0, decimals) || "0"), label).toString();
 }
 
 /**
@@ -1109,13 +1285,36 @@ function planPrices(flags, decimals, cfg) {
       if (prices[PRICE_FLAGS[flag]] !== undefined) continue;
       const ink = BigInt((cfg && cfg[field]) || "0");
       if (ink === 0n) fail("The Shop has no Ink amount for " + flag + " yet, so --rate can't price it. Set it with set-ink-amounts, or give --" + flag + ".");
-      prices[PRICE_FLAGS[flag]] = ((ink * scale + rateInt - 1n) / rateInt).toString();
+      prices[PRICE_FLAGS[flag]] = requireUint64((ink * scale + rateInt - 1n) / rateInt, "The --" + flag + " price from --rate").toString();
     }
   }
   const items = Object.keys(prices).map(Number).sort((a, b) => a - b);
   if (!items.length) fail("Give at least one price: --reader --writer --pack-s --pack-m --pack-l --book --short --poem, or --rate.");
   const names = Object.fromEntries(Object.entries(PRICE_FLAGS).map(([f, i]) => [i, f]));
   return items.map((item) => ({ item, amount: prices[item], name: names[item] }));
+}
+
+/**
+ * A warning when a Poem's starter Ink is worth more than opening a Poem costs
+ * (audit I-7): then opening Poems is a cheaper way to get Ink than buying it.
+ * Worth is counted at the cheapest pack (price per Ink), so the warning only
+ * fires when it is clear. All amounts in base units (Ink has no decimals).
+ * packs: [{ price, ink }]. Returns a sentence, or null.
+ */
+function starterPoemWarning({ starterPoem, poemPrice, packs }) {
+  const starter = BigInt(starterPoem || 0);
+  const price = BigInt(poemPrice || 0);
+  if (starter === 0n || price === 0n) return null;
+  let best = null;
+  for (const p of packs || []) {
+    const pp = BigInt(p.price || 0);
+    const ink = BigInt(p.ink || 0);
+    if (pp === 0n || ink === 0n) continue;
+    if (!best || pp * best.ink < best.price * ink) best = { price: pp, ink };
+  }
+  if (!best || starter * best.price <= price * best.ink) return null;
+  return "A Poem's starter Ink (" + starter + ") is worth more than opening a Poem costs, at the cheapest pack's price: " +
+    "opening Poems would be a cheaper way to get Ink. Lower starter_poem or raise the Poem price.";
 }
 
 /** set_ink_amounts arguments: each flag given, else what the chain has. */
@@ -1136,21 +1335,24 @@ function planInkAmounts(flags, cfg) {
 }
 
 // ---- Multisig wallet (multisig/) ----
-const MULTISIG_MIN_SIGNERS = 2;
+const MULTISIG_MIN_SIGNERS = 3;
 const MULTISIG_MAX_SIGNERS = 10;
 
 /**
  * The signers and threshold for multisig setup / set_signers, checked the way
- * the contract checks them: 2 to 10 different addresses, none of them the
- * multisig itself, threshold 2 to the number of signers.
+ * the contract checks them: 3 to 10 different addresses, none of them the
+ * multisig itself, threshold from 2 to one less than the number of signers
+ * (so one lost key never locks the wallet; audit L-16).
  */
 function planMultisigSigners(signersFlag, thresholdFlag, multisigAddress) {
   const signers = String(signersFlag || "").split(",").map((s) => s.trim()).filter(Boolean).map((s) => requireAddress(s, "signers"));
-  if (signers.length < MULTISIG_MIN_SIGNERS || signers.length > MULTISIG_MAX_SIGNERS) fail("--signers takes 2 to 10 addresses, separated by commas.");
+  if (signers.length < MULTISIG_MIN_SIGNERS || signers.length > MULTISIG_MAX_SIGNERS) fail("--signers takes 3 to 10 addresses, separated by commas.");
   if (new Set(signers).size !== signers.length) fail("--signers lists the same address twice.");
   if (signers.includes(multisigAddress)) fail("The multisig can't be one of its own signers.");
   const threshold = thresholdFlag === undefined ? 2 : Number(thresholdFlag);
-  if (!Number.isInteger(threshold) || threshold < 2 || threshold > signers.length) fail("--threshold must be a whole number from 2 to the number of signers.");
+  if (!Number.isInteger(threshold) || threshold < 2 || threshold >= signers.length) {
+    fail("--threshold must be a whole number from 2 to one less than the number of signers (so one lost key never locks the wallet).");
+  }
   return {
     args: { signers, threshold },
     summary: threshold + " of " + signers.length + ": " + signers.join(", "),
@@ -1160,6 +1362,23 @@ function planMultisigSigners(signersFlag, thresholdFlag, multisigAddress) {
 // ---- Mana sponsor (sponsor/) ----
 const SPONSOR_MAX_TOKENS = 4;
 const SPONSOR_CAP_LIMIT = 100000000000n; // 1,000 mana, the contract's own limit
+// Default caps, in mana (audit M-A): about 1 mana a transaction, close to real
+// use (a bookmark or purchase uses under 0.2; a long part up to about 1.8,
+// which is then paid with the user's own mana).
+const SPONSOR_DEFAULT_CAPS = { "per-tx": "1", "per-account": "20", "per-day": "300" };
+// The only Ink, Shop and Stories methods the sponsor pays for (audit M-A):
+// what a new user without KOIN needs. Anything else (admin calls, story
+// management, reports, archive and cursor calls anyone may make) is paid with
+// the user's own mana. Changing this list is a reviewed change.
+const SPONSORED_CALLS = {
+  shop: ["buy_membership", "buy_pack", "claim_writer_ink", "claim_promo"],
+  stories: ["open_story", "contribute", "edit_segment", "remove_segment", "join_with_invite", "set_reading_place"],
+};
+
+/** A contract method's entry point: the first 4 bytes of sha256(name), as the contract build and web/scripts/build-abi.mjs make it. */
+function entryPoint(name) {
+  return crypto.createHash("sha256").update(name).digest().readUInt32BE(0);
+}
 
 /**
  * The set_config arguments for the sponsor, checked the same way the
@@ -1178,20 +1397,28 @@ function planSponsorConfig(f, sponsorAddress) {
     if ([ink, shop, stories, sponsorAddress].includes(t)) fail("--tokens can't include a SwarmTales contract or the sponsor.");
   }
   const enabled = f.disable !== true;
-  const perTx = parseMana(f["per-tx"], "--per-tx");
-  const perAccount = parseMana(f["per-account"], "--per-account");
-  const perDay = parseMana(f["per-day"], "--per-day");
+  const cap = (name) => parseMana(f[name] === undefined ? SPONSOR_DEFAULT_CAPS[name] : f[name], "--" + name);
+  const perTx = cap("per-tx");
+  const perAccount = cap("per-account");
+  const perDay = cap("per-day");
   if (BigInt(perTx) > BigInt(perAccount) || BigInt(perAccount) > BigInt(perDay)) {
     fail("Caps must be --per-tx <= --per-account <= --per-day.");
   }
   if (BigInt(perDay) > SPONSOR_CAP_LIMIT) fail("--per-day can't be above 1000 mana (the contract's limit).");
+  const byRole = { shop, stories };
+  const calls = [];
+  for (const [role, names] of Object.entries(SPONSORED_CALLS)) {
+    for (const name of names) calls.push({ contract: byRole[role], entry_point: entryPoint(name) });
+  }
   const config = {
     enabled, ink, shop, stories, tokens,
     max_mana_per_tx: perTx,
     max_mana_per_account_day: perAccount,
     max_mana_per_day: perDay,
+    calls,
   };
-  const summary = "sponsor " + (enabled ? "ON" : "OFF") + ": pays for Ink " + ink + ", Shop " + shop + ", Stories " + stories +
+  const listed = Object.entries(SPONSORED_CALLS).map(([role, names]) => names.map((n) => role + "." + n).join(", ")).join(", ");
+  const summary = "sponsor " + (enabled ? "ON" : "OFF") + ": pays only for " + listed + " (Ink " + ink + ", Shop " + shop + ", Stories " + stories + ")" +
     (tokens.length ? " and approve(spender = Shop) on " + tokens.join(", ") : "") +
     "; caps " + formatMana(perTx) + " mana per transaction, " + formatMana(perAccount) + " per account per day, " +
     formatMana(perDay) + " for everyone per day";
@@ -1286,18 +1513,51 @@ function isConfirmation(answer, word) {
 const PREPARED_FORMAT = "swarmtales-prepared-transaction/1";
 const PREPARED_HEADER_KEYS = ["chain_id", "rc_limit", "nonce", "operation_merkle_root", "payer", "payee"];
 const PREPARED_MAX_OPS = 64;
-// Mana limit for a prepared transaction unless --rc-limit is given (never above what the payer has).
-// Mana limit of a prepared transaction unless --rc-limit is given: 1 mana. Admin
+// The commands that write a prepared file: deploy.js's --prepare commands and
+// the admin page. cosign and submit refuse any other name (audit H-2).
+const PREPARED_COMMANDS = [
+  "multisig-signers", "set-admin", "accept-admin", "pause", "unpause", "wire", "set-asset", "set-price", "set-ink-amounts",
+  "test-asset", "promo-new", "promo-on", "promo-off", "promo-end", "wire-stories", "stories-limits", "set-terms",
+  "set-moderation", "hide", "takedown", "replace-pdf", "block", "clear-summary", "admin-page",
+];
+// prepared_at as new Date().toISOString() writes it.
+const PREPARED_AT_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/;
+
+/**
+ * Text safe to print in a terminal (audit H-2): every control character
+ * (C0, DEL, C1, which includes the 8-bit CSI) and every bidirectional
+ * override is shown as a visible \u{..} escape instead of being sent to the
+ * terminal, so nothing in a prepared file can hide or redraw lines.
+ */
+function terminalSafe(text) {
+  return String(text).replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,
+    (c) => "\\u{" + c.charCodeAt(0).toString(16) + "}");
+}
+
+/** Undo any colour, hidden-text or cursor state left in the terminal, before the operations are shown. */
+const TERMINAL_RESET = "\u001b[0m\u001b[?25h";
+// Mana limit of a prepared transaction unless --rc-limit is given (never above
+// what the payer has): 1 mana per operation (preparedRcLimit below). Admin
 // calls use under 0.1 (measured on testnet, 25 Oct 2026: accept_admin 0.09, a
 // pause 0.06), and the node holds the whole limit of a waiting transaction.
 const DEFAULT_PREPARED_RC = "100000000";
+// A multi-operation file (wire, set-price, a final-edit batch) needs more:
+// 1 mana per operation, at most 10 (audit I-21). --rc-limit still overrides.
+const PREPARED_RC_CAP_OPS = 10;
 
-/** A nonce as the chain encodes it (koinos.chain.value_type, uint64_value = field 7), base64url. */
-// A nonce is a koinos.chain.value_type holding one varint. koilib (and so
-// every wallet) writes it as field 5 (tag 0x28); field 7 (tag 0x38) is
-// accepted too. Found live on testnet, 25 Oct 2026: the earlier check took
-// only 0x38 and refused every real nonce.
-const NONCE_TAGS = [0x28, 0x38];
+/** The default mana limit of a prepared transaction with `count` operations. */
+function preparedRcLimit(count) {
+  const n = Math.max(1, Math.min(PREPARED_RC_CAP_OPS, Number(count) || 1));
+  return (BigInt(DEFAULT_PREPARED_RC) * BigInt(n)).toString();
+}
+
+/** A nonce as the chain encodes it (koinos.chain.value_type, uint64_value = field 5), base64url. */
+// A nonce is a koinos.chain.value_type holding one varint: uint64_value,
+// field 5 (tag 0x28), as koilib and so every wallet writes it (found live on
+// testnet, 25 Oct 2026). Only that tag is accepted: field 7 (tag 0x38) is
+// sint64_value, zigzag-encoded, so reading it as a plain varint showed twice
+// the real nonce, and the chain never includes such a transaction (audit L-7).
+const NONCE_TAGS = [0x28];
 
 function nonceNumber(nonceB64) {
   const b = Buffer.from(String(nonceB64 || ""), "base64url");
@@ -1357,15 +1617,22 @@ function checkNeeds(needs) {
  * the signer's own ABIs and pinned addresses (never the file's word):
  * the network and chain id, that the id is the hash of the header and the
  * header commits to exactly these operations, that every operation is a
- * call to Ink, Shop or Stories (pinned on mainnet) whose entry point and
- * argument bytes are exactly the described method and arguments. Returns
- * { tx, ops: [{ contract, contractId, method, description, args }] } with
- * the arguments decoded from the bytes, for the summary.
+ * call to Ink, Shop, Stories, the sponsor or the multisig (pinned on mainnet)
+ * whose entry point and argument bytes are exactly the described method and
+ * arguments, and that the free-text fields are what this tool writes.
+ * Returns { tx, ops: [{ contract, contractId, method, description, args }],
+ * warnings, needs } with the arguments decoded from the bytes, for the
+ * summary.
  * `deps` is { koilib, abiFor(contract), flags }.
  */
 async function verifyPrepared(file, net, deps) {
   const { Transaction, Contract } = deps.koilib;
   if (!file || file.format !== PREPARED_FORMAT) fail("That is not a SwarmTales prepared transaction file.");
+  // The two free-text fields the summary prints (audit H-2).
+  if (!PREPARED_COMMANDS.includes(file.command)) fail("The file names an unknown command. It was changed or is not from this tool. Nothing was signed.");
+  if (typeof file.prepared_at !== "string" || !PREPARED_AT_RE.test(file.prepared_at) || Number.isNaN(Date.parse(file.prepared_at))) {
+    fail("The file's preparation time is not in the expected format. It was changed or is not from this tool. Nothing was signed.");
+  }
   if (file.network !== net.key) {
     fail("That file is for " + file.network + ", but this run is on " + net.key + ". Use --network " + file.network +
       (file.network === "mainnet" ? " " + MAINNET_FLAG : "") + ". Nothing was signed.");
@@ -1399,7 +1666,7 @@ async function verifyPrepared(file, net, deps) {
     const op = ops[i];
     const d = described[i] || {};
     const call = op && op.call_contract;
-    if (!call || Object.keys(op).length !== 1) fail("Operation " + (i + 1) + " is not a contract call. This tool only signs calls to Ink, Shop and Stories.");
+    if (!call || Object.keys(op).length !== 1) fail("Operation " + (i + 1) + " is not a contract call. This tool only signs calls to Ink, Shop, Stories, the sponsor and the multisig.");
     if (!CONTRACT_ROLES.includes(d.contract)) fail("Operation " + (i + 1) + " is not a call to Ink, Shop, Stories, the sponsor or the multisig.");
     if (call.contract_id !== d.contract_id) fail("Operation " + (i + 1) + " calls " + call.contract_id + " but says " + d.contract_id + ". Nothing was signed.");
     const warn = checkPinned(net, d.contract, call.contract_id, deps.flags || {}, false);
@@ -1415,7 +1682,75 @@ async function verifyPrepared(file, net, deps) {
     if (decoded.name !== d.method) fail("Operation " + (i + 1) + " decodes as " + decoded.name + ", not " + d.method + ". Nothing was signed.");
     out.push({ contract: d.contract, contractId: call.contract_id, method: d.method, description: method.description || "", args: decoded.args || {} });
   }
-  return { tx, ops: out, warnings, needs: checkNeeds(file.needs) };
+  const needs = checkNeeds(file.needs);
+  if (needs) needs.newSigners = newMultisigSigners(out, needs);
+  return { tx, ops: out, warnings, needs };
+}
+
+/**
+ * The signers a multisig.set_signers in these (decoded) operations adds to
+ * the multisig in `needs`: each must sign too, or the contract refuses
+ * (audit L-16). Taken from the operation bytes, never from the file's word.
+ */
+function newMultisigSigners(ops, needs) {
+  const added = [];
+  for (const o of ops) {
+    if (o.contract !== "multisig" || o.method !== "set_signers" || o.contractId !== needs.account) continue;
+    for (const s of o.args.signers || []) if (!needs.signers.includes(s) && !added.includes(s)) added.push(s);
+  }
+  return added;
+}
+
+/**
+ * Before a takedown (audit L-3): a part that is not hidden can still be
+ * edited by its writer, and any edit makes a takedown that names the
+ * reviewed text fail. With a slow (multisig) admin, hide it first with the
+ * moderator key: hidden parts can't be edited. Returns the note, or null
+ * when the part is already hidden.
+ */
+function takedownHideFirst(seg, storiesAddr, storyId, seq) {
+  if (seg && seg.hidden) return null;
+  return "NOTE: this part is not hidden, so its writer can still edit it, and an edit before this takedown lands makes it fail\n" +
+    "(it names the text reviewed above). With a multisig admin, hide it first with the moderator key; hidden parts can't be edited:\n" +
+    "  node deploy/deploy.js hide --actor <moderator> --stories " + storiesAddr + " --story " + storyId + " --seq " + seq + " --reason <1-5>\n" +
+    "Then review it again and prepare the takedown.";
+}
+
+// Setters that replace a whole group of settings at once (audit L-10): each
+// argument and the get_config field it replaces. A file prepared earlier
+// silently undoes any change made between prepare and submit, so submit
+// shows "now -> after" for each field before SEND.
+const CONFIG_SETTERS = {
+  "shop.set_ink_amounts": {
+    writer_month: "writer_ink", pack_s: "pack_s_ink", pack_m: "pack_m_ink", pack_l: "pack_l_ink",
+    starter_book: "starter_book", starter_short: "starter_short", starter_poem: "starter_poem",
+  },
+  "stories.set_moderation": { moderator: "moderator", report_threshold: "report_threshold", strike_limit: "strike_limit" },
+  "stories.set_limits": {
+    contribution_cap: "contribution_cap", trial_limit: "trial_limit", open_limit: "open_limit", archive_days: "archive_days",
+    inactivity_days: "inactivity_days", full_price_projects: "full_price_projects", max_price_multiplier: "max_price_multiplier",
+  },
+};
+
+/** True when `o` (a checked operation) replaces a group of settings. */
+function replacesSettings(o) {
+  return Object.prototype.hasOwnProperty.call(CONFIG_SETTERS, o.contract + "." + o.method);
+}
+
+/**
+ * "now -> after" lines for a settings setter, from the contract's current
+ * get_config `cfg`: each field, marked when the operation changes it.
+ */
+function settingsChanges(o, cfg) {
+  const fields = CONFIG_SETTERS[o.contract + "." + o.method];
+  const show = (v) => (v === undefined || v === null || v === "" ? "0" : String(v));
+  const lines = [];
+  for (const [arg, field] of Object.entries(fields)) {
+    const now = show(cfg && cfg[field]);
+    const after = show(o.args[arg]);
+    lines.push("  " + arg + ": " + now + (now === after ? " (unchanged)" : " -> " + after + "   CHANGES"));
+  }
+  return lines;
 }
 
 /** The human summary every signer reads before signing, and `submit` shows before sending. */
@@ -1423,7 +1758,7 @@ function preparedSummary(net, file, checked, signedBy) {
   const h = checked.tx.header;
   const lines = [
     "Network:   " + net.name + " (chain id checked)",
-    "Prepared:  " + (file.prepared_at || "?") + " by the '" + (file.command || "?") + "' command",
+    "Prepared:  " + file.prepared_at + " by the '" + file.command + "' command",
     "Payer:     " + h.payer + "  (pays the mana)" + (h.payee ? "\nPayee:     " + h.payee + "  (its nonce is used)" : ""),
     "Nonce:     " + nonceNumber(h.nonce) + "  (of " + (h.payee || h.payer) + "; only one transaction can use it)",
     "Mana limit:" + " " + formatMana(h.rc_limit),
@@ -1438,9 +1773,22 @@ function preparedSummary(net, file, checked, signedBy) {
     const n = checked.needs;
     lines.push("Needs:     " + n.threshold + " of these " + n.signers.length + " signers of the multisig " + n.account + ":");
     n.signers.forEach((s, i) => lines.push("             " + (i + 1) + ". " + s + (signedBy.includes(s) ? "  (signed)" : "")));
+    if (h.payer !== n.account) {
+      lines.push("WARNING:   the payer is not the multisig. Sign only if " + h.payer + " is a normal wallet that signs too: a contract " +
+        "wallet's code would run inside this transaction with your signature (submit refuses one).");
+    }
+    if (n.newSigners && n.newSigners.length) {
+      lines.push("And:       each new signer it adds, to prove they hold the key:");
+      n.newSigners.forEach((s) => lines.push("             - " + s + (signedBy.includes(s) ? "  (signed)" : "")));
+    }
   }
   lines.push("Signatures so far: " + (signedBy.length ? signedBy.join(", ") : "none"));
-  return lines;
+  return lines.map(terminalSafe);
+}
+
+/** What the SIGN prompt repeats: each operation's contract, address and method (audit H-2). */
+function preparedTargets(checked) {
+  return checked.ops.map((o, i) => terminalSafe((i + 1) + ". " + o.contract + " " + o.contractId + " ." + o.method));
 }
 
 module.exports = {
@@ -1504,14 +1852,23 @@ module.exports = {
   resolveNetwork,
   checkChainId,
   checkPinned,
+  TOKEN_PINS,
+  checkTokenCode,
+  checkTokenInfo,
   checkPinnedFlags,
+  checkPinnedAdmin,
+  pinnedAddresses,
   refuseCrossNetworkKey,
   parseReleaseHashes,
   sha256Hex,
   checkWasmHash,
   planSponsorConfig,
+  SPONSORED_CALLS,
+  SPONSOR_DEFAULT_CAPS,
+  entryPoint,
   planPrices,
   planInkAmounts,
+  starterPoemWarning,
   parseTokenAmount,
   planMultisigSigners,
   codeHashFromMeta,
@@ -1535,7 +1892,17 @@ module.exports = {
   newLinkKeyHex,
   toKoilibAbi,
   PREPARED_FORMAT,
+  U64_MAX,
+  numberMismatch,
+  PREPARED_COMMANDS,
+  TERMINAL_RESET,
+  terminalSafe,
+  preparedTargets,
+  replacesSettings,
+  takedownHideFirst,
+  settingsChanges,
   DEFAULT_PREPARED_RC,
+  preparedRcLimit,
   nonceNumber,
   preparedFile,
   verifyPrepared,

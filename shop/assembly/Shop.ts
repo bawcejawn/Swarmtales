@@ -33,7 +33,12 @@
 //   for each token before enabling it; see docs/KEY_CUSTODY.md).
 //   Shop does not trust the token's reply. It reads the treasury's and
 //   the founder's balances before and after, and refuses the purchase
-//   unless each one went up by exactly its share.
+//   unless each one went up by exactly its share. That check is only as
+//   good as the token: the balances come from the same token, and the
+//   token's code runs inside the buyer's signed purchase. A token's issuer
+//   (whoever holds its upload key) is therefore a trust assumption, and
+//   the site and deploy tool use only tokens pinned with their code hash
+//   (audit H-3, L-6; docs/ADMIN_POWERS.md).
 //
 // WHO MAY CALL (security fix H1)
 //   Koinos' signature check only asks "did this wallet sign the
@@ -103,6 +108,20 @@ const MINT_PURCHASE: u32 = 1;
 const MINT_MEMBERSHIP: u32 = 2;
 const MINT_STARTER: u32 = 3;
 const MINT_PROMO: u32 = 4;
+
+/**
+ * The founder's share of a price: floor(price * feeBps / FEE_DENOMINATOR),
+ * computed as (p/D)*f + (p%D)*f/D so that price * fee_bps can't overflow for
+ * a high-decimal token (audit L-4). Exact, and each product stays far below
+ * 2^64 for fee_bps <= MAX_FEE_BPS. Exported for the tests.
+ */
+export function founderShare(price: u64, feeBps: u32): u64 {
+  const fee = <u64>feeBps;
+  return SafeMath.add(
+    SafeMath.mul(price / FEE_DENOMINATOR, fee),
+    SafeMath.mul(price % FEE_DENOMINATOR, fee) / FEE_DENOMINATOR
+  );
+}
 
 export class Shop {
   contractId: Uint8Array;
@@ -523,15 +542,22 @@ export class Shop {
     this.enter();
     this.requireAdmin();
     const assetId = this.requireAddress(args.token, "SHOP: invalid token address");
-    System.require(args.decimals <= MAX_DECIMALS, "SHOP: decimals must be from 0 to 18");
-    const symbol = this.text(args.symbol);
-    System.require(symbol.length > 0 && symbol.length <= MAX_SYMBOL_LENGTH, "SHOP: symbol must be 1 to 16 characters");
     // Turning a token on starts a public 7-day wait before anyone can pay
     // with it (C1-01), once the Shop has made its first sale: before that no
     // buyer is exposed, so the tokens set up for launch work at once. An
     // enabled token keeps its wait, and its decimals and symbol can't change
-    // under buyers; turn it off first. Off is immediate.
+    // under buyers; turn it off first. Off is immediate, and keeps the
+    // recorded decimals and symbol whatever the call says (audit M-D: the
+    // off switch must work in an incident even with blank fields).
     const found = this.assets.get(assetId);
+    let decimals = args.decimals;
+    let symbol = this.text(args.symbol);
+    if (!args.enabled && found != null) {
+      decimals = found!.decimals;
+      symbol = this.text(found!.symbol);
+    }
+    System.require(decimals <= MAX_DECIMALS, "SHOP: decimals must be from 0 to 18");
+    System.require(symbol.length > 0 && symbol.length <= MAX_SYMBOL_LENGTH, "SHOP: symbol must be 1 to 16 characters");
     // At most MAX_ASSETS tokens ever get a record, so get_assets lists them all.
     if (found == null) {
       System.require(this.assets.getManyKeys(new Uint8Array(0), MAX_ASSETS).length < MAX_ASSETS, "SHOP: at most 10 payment tokens");
@@ -540,7 +566,7 @@ export class Shop {
     let usableFrom: u64 = 0;
     if (args.enabled) {
       if (wasOn) {
-        System.require(found!.decimals == args.decimals && found!.symbol == symbol,
+        System.require(found!.decimals == decimals && found!.symbol == symbol,
           "SHOP: turn the token off before changing its decimals or symbol");
         usableFrom = found!.usable_from;
       } else {
@@ -548,10 +574,31 @@ export class Shop {
         usableFrom = cfg.sold ? SafeMath.add(this.now(), ASSET_WAIT) : this.now();
       }
     }
-    const row = new shop.asset(args.enabled, args.decimals, symbol, usableFrom);
+    const row = new shop.asset(args.enabled, decimals, symbol, usableFrom);
     this.assets.put(assetId, row);
     const ev = new shop.asset_event(assetId, row.enabled, row.decimals, row.symbol, row.usable_from);
     System.event("shop.asset_event", Protobuf.encode(ev, shop.asset_event.encode), []);
+    this.leave();
+    return new shop.empty_object();
+  }
+
+  // Frees one of the MAX_ASSETS record slots (audit L-5). Only a token that
+  // is turned off, so nobody is paying with it; its prices go too, so a later
+  // record for the same address (perhaps with other decimals) starts from no
+  // prices, and turning it on again starts a new 7-day wait.
+  remove_asset(args: shop.remove_asset_arguments): shop.empty_object {
+    this.enter();
+    this.requireAdmin();
+    const assetId = this.requireAddress(args.token, "SHOP: invalid token address");
+    const found = this.assets.get(assetId);
+    System.require(found != null, "SHOP: that token has no record");
+    System.require(!found!.enabled, "SHOP: turn the token off before removing it");
+    this.assets.remove(assetId);
+    for (let item: u32 = <u32>shop.item.ITEM_READER_MONTH; item <= <u32>shop.item.ITEM_OPEN_POEM; item++) {
+      if (this.isItem(item)) this.prices.remove(this.priceKey(item, assetId));
+    }
+    const ev = new shop.asset_removed_event(assetId);
+    System.event("shop.asset_removed_event", Protobuf.encode(ev, shop.asset_removed_event.encode), []);
     this.leave();
     return new shop.empty_object();
   }
@@ -822,10 +869,7 @@ export class Shop {
     const founder = this.requireAddress(cfg.founder, "SHOP: founder is not set");
     System.require(cfg.fee_bps <= MAX_FEE_BPS, "SHOP: fee is above the cap");
 
-    const founderAmount = SafeMath.div(
-      SafeMath.mul(price, <u64>cfg.fee_bps),
-      FEE_DENOMINATOR
-    );
+    const founderAmount = founderShare(price, cfg.fee_bps);
     const treasuryAmount = SafeMath.sub(price, founderAmount);
     System.require(treasuryAmount > 0, "SHOP: treasury amount is zero");
 

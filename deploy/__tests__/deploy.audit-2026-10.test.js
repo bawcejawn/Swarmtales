@@ -127,7 +127,8 @@ async function protoAbi(target) {
 // ---------------------------------------------------------------- M-6
 
 test("M-6: wire-stories with a wrong address on the mainnet profile is refused before the node is contacted", async () => {
-  await withPins({ ink: INK, shop: SHOP, stories: STORIES, token: TOKEN }, async () => {
+  // Tokens are pinned in TOKEN_PINS now (L-8); BOB stands for the pinned multisig admin.
+  await withPins({ ink: INK, shop: SHOP, stories: STORIES, multisig: BOB }, async () => {
     const node = fakeNode(lib.NETWORKS.mainnet);
     const base = ["wire-stories", ...MAINNET_FLAGS, "--admin", BOB, "--treasury", BOB, "--founder", BOB];
     for (const [flag, good] of [["--stories", STORIES], ["--shop", SHOP], ["--ink", INK]]) {
@@ -150,14 +151,15 @@ test("M-6: with nothing pinned yet, mainnet refuses every contract address excep
   assert.strictEqual(lib.checkPinned(net, "stories", STORIES, {}, true), null, "upload may name a new address");
   withPins({ stories: STORIES }, () => {
     assert.throws(() => lib.checkPinned(net, "stories", OTHER, {}, true), /pinned mainnet stories address is/);
-    assert.match(lib.checkPinned(net, "stories", OTHER, { "i-understand-this-address-is-not-pinned": true }, false), /^WARNING/);
+    assert.match(lib.checkPinned(net, "stories", OTHER, { "i-understand-this-address-is-not-pinned": "stories" }, false), /^WARNING/);
   });
   // --contract on mainnet needs to know which contract it is.
   assert.throws(() => lib.checkPinnedFlags(net, { contract: STORIES }, undefined), /Say which contract/);
   // Testnet never checks pins.
   assert.deepStrictEqual(lib.checkPinnedFlags(lib.resolveNetwork({}), { stories: OTHER, contract: OTHER }, "ink"), []);
   // The table itself only takes "" or an address.
-  assert.ok(Object.keys(lib.MAINNET_PINNED).sort().join() === "ink,multisig,shop,sponsor,stories,token");
+  // (Payment tokens are a list in TOKEN_PINS, audit L-8.)
+  assert.ok(Object.keys(lib.MAINNET_PINNED).sort().join() === "ink,multisig,shop,sponsor,stories");
 });
 
 test("M-6: wire-stories checks each contract's code hash against the release hashes on mainnet", async () => {
@@ -165,7 +167,8 @@ test("M-6: wire-stories checks each contract's code hash against the release has
   const BAD = crypto.createHash("sha256").update("not the release").digest("hex");
   const release = { ink: H, shop: H, stories: H };
   const argv = ["wire-stories", ...MAINNET_FLAGS, "--admin", BOB, "--ink", INK, "--shop", SHOP, "--stories", STORIES, "--treasury", BOB, "--founder", BOB];
-  await withPins({ ink: INK, shop: SHOP, stories: STORIES }, async () => {
+  // BOB stands for the pinned multisig admin (audit L-8 checks --admin on mainnet).
+  await withPins({ ink: INK, shop: SHOP, stories: STORIES, multisig: BOB }, async () => {
     // Stories runs other code: refused, before any setting is read or key asked.
     let node = fakeNode(lib.NETWORKS.mainnet, { codeHash: (id) => (id === STORIES ? BAD : H) });
     let r = await run(argv, { node, release });
@@ -304,7 +307,7 @@ test("M-12: on mainnet, cosign only signs calls to the pinned contracts", async 
   const net = lib.resolveNetwork({ network: "mainnet", "i-understand-this-is-mainnet": true });
   const c = deploy.contractOf("stories", STORIES, null);
   const op = await c.encodeOperation({ name: "set_paused", args: { paused: true } });
-  const tx = { header: { chain_id: net.chainId, rc_limit: "100000000", nonce: "OAE=", payer: MULTISIG }, operations: [op] };
+  const tx = { header: { chain_id: net.chainId, rc_limit: "100000000", nonce: "KAE=", payer: MULTISIG }, operations: [op] };
   await koilib.Transaction.prepareTransaction(tx);
   const file = lib.preparedFile(net, tx, [{ contract: "stories", contract_id: STORIES, method: "set_paused", args: { paused: true } }], "pause");
   const deps = (flags) => ({ koilib, abiFor: ABI, flags });
@@ -315,7 +318,7 @@ test("M-12: on mainnet, cosign only signs calls to the pinned contracts", async 
     assert.deepStrictEqual(ok.ops.map((o) => [o.contract, o.method, o.args]), [["stories", "set_paused", { paused: true }]]);
     assert.deepStrictEqual(ok.warnings, []);
   });
-  const warned = await lib.verifyPrepared(file, net, deps({ "i-understand-this-address-is-not-pinned": true }));
+  const warned = await lib.verifyPrepared(file, net, deps({ "i-understand-this-address-is-not-pinned": "stories" }));
   assert.match(warned.warnings[0], /^WARNING/);
 });
 
@@ -464,7 +467,7 @@ function findWebBookText(dir) {
       const found = findWebBookText(full);
       if (found) return found;
     } else if (entry.name.endsWith(".js")) {
-      const src = fs.readFileSync(full, "utf8");
+      const src = fs.readFileSync(full, "utf8").replace(/\r\n/g, "\n"); // a Windows checkout has CRLF
       const start = src.indexOf("function bookText(story, segments) {");
       if (start >= 0) return src.slice(start, src.indexOf("\n}\n", start) + 2);
     }

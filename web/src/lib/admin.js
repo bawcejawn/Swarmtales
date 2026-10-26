@@ -12,6 +12,12 @@ export const PREPARED_FORMAT = "swarmtales-prepared-transaction/1";
 /** Mana limit of a prepared transaction (1 mana, as the deploy tool; admin calls use under 0.1). */
 export const DEFAULT_PREPARED_RC = "100000000";
 
+/** The mana limit of a prepared file with `count` operations: 1 mana each, at most 10 (audit I-21, as the deploy tool). */
+export function preparedRcLimit(count) {
+  const n = Math.max(1, Math.min(10, Number(count) || 1));
+  return (BigInt(DEFAULT_PREPARED_RC) * BigInt(n)).toString();
+}
+
 /** Shop items, by their shop.proto numbers (8 and 9 are retired). */
 export const SHOP_ITEMS = [
   { id: 1, name: "Reader month" },
@@ -41,6 +47,50 @@ function fail(message) {
   throw new AdminInputError(message);
 }
 
+/**
+ * The largest uint64, the widest number type the contracts take. A larger
+ * value would be encoded wrapped around, so the wallet would sign a different
+ * amount from the one shown (audit M-C).
+ */
+export const U64_MAX = 18446744073709551615n;
+
+function requireUint64(n, label) {
+  if (n > U64_MAX) fail(label + " is too large: the contracts take at most " + U64_MAX + " (in base units).");
+  return n;
+}
+
+/**
+ * The first number in `sent` (an operation's arguments) that the encoded
+ * operation, decoded back as `decoded`, does not carry exactly: a value that
+ * wrapped around or was cut to fit its field (audit M-C). null when all match.
+ */
+export function numberMismatch(sent, decoded, at) {
+  const here = at || "arguments";
+  if (Array.isArray(sent)) {
+    for (let i = 0; i < sent.length; i++) {
+      const m = numberMismatch(sent[i], Array.isArray(decoded) ? decoded[i] : undefined, here + "[" + i + "]");
+      if (m) return m;
+    }
+    return null;
+  }
+  if (sent && typeof sent === "object") {
+    for (const k of Object.keys(sent)) {
+      const m = numberMismatch(sent[k], decoded && typeof decoded === "object" ? decoded[k] : undefined, at ? here + "." + k : k);
+      if (m) return m;
+    }
+    return null;
+  }
+  const isNum = typeof sent === "bigint" || typeof sent === "number" || (typeof sent === "string" && /^-?[0-9]+$/.test(sent));
+  if (!isNum) return null;
+  let got;
+  try {
+    got = BigInt(decoded === undefined || decoded === null ? 0 : decoded);
+  } catch {
+    return { field: here, sent: String(sent), got: String(decoded) };
+  }
+  return BigInt(sent) === got ? null : { field: here, sent: String(sent), got: got.toString() };
+}
+
 export function requireAddress(value, label) {
   const v = String(value || "").trim();
   if (!ADDRESS_RE.test(v)) fail(label + " must be a Koinos address (starts with 1).");
@@ -56,7 +106,7 @@ function whole(value, label, min, max) {
   }
   if (min != null && n < BigInt(min)) fail(label + " must be at least " + min + ".");
   if (max != null && n > BigInt(max)) fail(label + " must be at most " + max + ".");
-  return n;
+  return requireUint64(n, label);
 }
 
 function note(text, label) {
@@ -72,7 +122,8 @@ export function toBaseUnits(text, decimals, label) {
   if (!m) fail((label || "The amount") + " must be a number like 2 or 0.5.");
   const frac = m[2] || "";
   if (frac.length > decimals) fail((label || "The amount") + " has more than " + decimals + " decimals.");
-  return (BigInt(m[1]) * 10n ** BigInt(decimals) + BigInt((frac + "0".repeat(decimals)).slice(0, decimals) || "0")).toString();
+  const n = BigInt(m[1]) * 10n ** BigInt(decimals) + BigInt((frac + "0".repeat(decimals)).slice(0, decimals) || "0");
+  return requireUint64(n, label || "The amount").toString();
 }
 
 export function fromBaseUnits(base, decimals) {
@@ -168,6 +219,29 @@ export const INK_AMOUNT_FIELDS = [
   { key: "starter_poem", cfg: "starter_poem", name: "Starter Ink, poem" },
 ];
 
+/**
+ * A warning when a Poem's starter Ink is worth more than opening a Poem costs
+ * (audit I-7): then opening Poems is a cheaper way to get Ink than buying it.
+ * Worth is counted at the cheapest pack (price per Ink), so the warning only
+ * fires when it is clear. All amounts in base units (Ink has no decimals).
+ * packs: [{ price, ink }]. Returns a sentence, or null.
+ */
+export function starterPoemWarning({ starterPoem, poemPrice, packs }) {
+  const starter = BigInt(starterPoem || 0);
+  const price = BigInt(poemPrice || 0);
+  if (starter === 0n || price === 0n) return null;
+  let best = null;
+  for (const p of packs || []) {
+    const pp = BigInt(p.price || 0);
+    const ink = BigInt(p.ink || 0);
+    if (pp === 0n || ink === 0n) continue;
+    if (!best || pp * best.ink < best.price * ink) best = { price: pp, ink };
+  }
+  if (!best || starter * best.price <= price * best.ink) return null;
+  return "A Poem's starter Ink (" + starter + ") is worth more than opening a Poem costs, at the cheapest pack's price: " +
+    "opening Poems would be a cheaper way to get Ink. Lower starter_poem or raise the Poem price.";
+}
+
 export function planInkAmounts(values) {
   const args = {};
   for (const f of INK_AMOUNT_FIELDS) args[f.key] = whole(values[f.key], f.name, 0, 100000000).toString();
@@ -179,12 +253,29 @@ export function planFee(bps) {
   return call("shop", "set_fee_bps", { fee_bps: Number(n) }, "Founder fee: " + (Number(n) / 100) + "%");
 }
 
-export function planAsset({ token, enabled, decimals, symbol }) {
+/**
+ * Turn a payment token on or off. Turning one on needs its pin from config.js
+ * PAYMENT_TOKENS (`pin`) and its code hash read from the chain (`codeHash`):
+ * the code must be the pinned code, and the symbol and decimals the pinned
+ * ones (audit H-3). `others` are the Shop's other tokens, { address, symbol }:
+ * no two may share a symbol (audit I-2).
+ */
+export function planAsset({ token, enabled, decimals, symbol, pin, codeHash, others }) {
   const t = requireAddress(token, "Token");
-  if (!enabled) return call("shop", "set_asset", { token: t, enabled: false, decimals: 0, symbol: "" }, "Turn OFF payment token " + t);
+  // Off sends the recorded decimals and symbol, as the deploy tool does (the Shop keeps its own either way; audit M-D).
+  if (!enabled) {
+    return call("shop", "set_asset", { token: t, enabled: false, decimals: Number(decimals || 0), symbol: String(symbol || "") },
+      "Turn OFF payment token " + (symbol ? symbol + " (" + t + ")" : t));
+  }
   const d = whole(decimals, "Decimals", 0, 18);
   const s = String(symbol || "").trim();
   if (!/^[A-Za-z0-9]{1,16}$/.test(s)) fail("The symbol must be 1 to 16 letters or digits.");
+  if (!pin) fail("This token is not pinned in web/src/config.js PAYMENT_TOKENS (and deploy/lib.js TOKEN_PINS). Review its code and pin it, with its code hash, first.");
+  if (!codeHash) fail("There is no token contract at " + t + ", or the node would not give its code hash.");
+  if (codeHash !== pin.codeHash) fail("The code at " + t + " is not the pinned code (its issuer changed it). Review the new code and update the pin first.");
+  if (s !== pin.symbol || Number(d) !== pin.decimals) fail("This token is pinned as " + pin.symbol + " with " + pin.decimals + " decimals.");
+  const clash = (others || []).find((o) => o.address !== t && String(o.symbol || "").toLowerCase() === s.toLowerCase());
+  if (clash) fail("The Shop already has a token called " + clash.symbol + " (" + clash.address + "). Use another symbol.");
   return call("shop", "set_asset", { token: t, enabled: true, decimals: Number(d), symbol: s },
     "Turn ON payment token " + s + " (" + t + ", " + d + " decimals). After the Shop's first sale, a newly enabled token waits 7 days.");
 }
@@ -202,7 +293,7 @@ export function ratePrice(ink, rate, decimals) {
   if (r === 0n) fail("The rate must be more than 0.");
   const scale = 10n ** BigInt(decimals) * 10n ** BigInt(k);
   const n = BigInt(ink || 0);
-  return ((n * scale + r - 1n) / r).toString();
+  return requireUint64((n * scale + r - 1n) / r, "The price from this rate").toString();
 }
 
 /** The items priced from the Ink they bring, and where the Shop keeps that Ink. */
@@ -217,8 +308,8 @@ export const RATE_ITEMS = [
  * Add a payment token: turn it on, then set its prices, in one transaction.
  * `prices` maps item id to a price in whole tokens ("" = not for sale).
  */
-export function planAddToken({ token, symbol, decimals, prices }) {
-  const plans = [planAsset({ token, enabled: true, decimals, symbol })];
+export function planAddToken({ token, symbol, decimals, prices, pin, codeHash, others }) {
+  const plans = [planAsset({ token, enabled: true, decimals, symbol, pin, codeHash, others })];
   const d = Number(decimals);
   for (const item of SHOP_ITEMS) {
     const v = prices && prices[item.id] != null ? String(prices[item.id]).trim() : "";
@@ -379,7 +470,18 @@ export function planAcceptAdmin(contract) {
 
 // ---------------------------------------------------------------- sponsor
 
-export function planSponsor({ enabled, ink, shop, stories, tokens, perTx, perAccount, perDay }) {
+/** Default sponsor caps in mana (audit M-A): about 1 mana a transaction. */
+export const SPONSOR_DEFAULT_CAPS = { perTx: "1", perAccount: "20", perDay: "300" };
+
+/**
+ * The deploy-tool command that changes the sponsor's settings (audit L-17).
+ * The sponsor key stays offline: the page never asks a wallet to sign
+ * set_config, it only shows this command, checked the way the contract
+ * checks the settings. The tool adds the list of sponsored calls itself.
+ * Returns { command, summary }.
+ */
+export function sponsorCommand({ sponsor, enabled, ink, shop, stories, tokens, perTx, perAccount, perDay, mainnet }) {
+  const s = requireAddress(sponsor, "Sponsor");
   const ids = [requireAddress(ink, "Ink"), requireAddress(shop, "Shop"), requireAddress(stories, "Stories")];
   const list = String(tokens || "").split(",").map((t) => t.trim()).filter(Boolean).map((t) => requireAddress(t, "Token"));
   if (list.length > 4) fail("At most 4 payment tokens.");
@@ -390,19 +492,47 @@ export function planSponsor({ enabled, ink, shop, stories, tokens, perTx, perAcc
   if (BigInt(a) > BigInt(b) || BigInt(b) > BigInt(c)) fail("Caps must be per transaction <= per wallet per day <= everyone per day.");
   if (BigInt(c) > 100000000000n) fail("The daily cap can be at most 1,000 mana.");
   if (enabled && BigInt(a) === 0n) fail("Switched on needs a per-transaction cap above 0.");
-  return call("sponsor", "set_config", {
-    config: { enabled: !!enabled, ink: ids[0], shop: ids[1], stories: ids[2], tokens: list, max_mana_per_tx: a, max_mana_per_account_day: b, max_mana_per_day: c },
-  }, "Mana sponsor " + (enabled ? "ON" : "OFF") + ": " + fromBaseUnits(a, 8) + " / " + fromBaseUnits(b, 8) + " / " + fromBaseUnits(c, 8) + " mana (per transaction / per wallet per day / everyone per day)");
+  const command = ["node deploy/deploy.js sponsor-config", "--sponsor " + s, "--ink " + ids[0], "--shop " + ids[1], "--stories " + ids[2],
+    list.length ? "--tokens " + list.join(",") : "", "--per-tx " + fromBaseUnits(a, 8), "--per-account " + fromBaseUnits(b, 8),
+    "--per-day " + fromBaseUnits(c, 8), enabled ? "" : "--disable", mainnet ? "--network mainnet --i-understand-this-is-mainnet" : ""].filter(Boolean).join(" ");
+  return { command, summary: "Mana sponsor " + (enabled ? "ON" : "OFF") + ": " + fromBaseUnits(a, 8) + " / " + fromBaseUnits(b, 8) + " / " +
+    fromBaseUnits(c, 8) + " mana (per transaction / per wallet per day / everyone per day)" };
 }
 
 // ---------------------------------------------------------------- any method
 
-/** Any write method, with its arguments as JSON (for anything without its own form). */
+/**
+ * The methods only an admin may call (audit L-21: the "any other admin call"
+ * form used to offer every write method, user ones too). The sponsor's
+ * set_config is changed only with the deploy tool (L-17).
+ */
+export const ADMIN_METHODS = {
+  ink: ["set_minter", "set_burner", "set_paused", "set_admin", "accept_admin"],
+  shop: ["set_promo_enabled", "create_campaign", "set_campaign_enabled", "set_campaign_limits", "add_single_use_signers", "set_asset",
+    "remove_asset", "set_price", "set_addresses", "set_ink_amounts", "set_fee_bps", "set_paused", "set_admin", "accept_admin"],
+  stories: ["set_segment_hidden", "set_source_note", "takedown_segment", "replace_pdf", "admin_take_over", "set_addresses", "set_limits",
+    "add_category", "set_category_active", "set_paused", "set_moderation", "set_blocked", "set_terms", "set_admin", "accept_admin",
+    "set_min_contribution"],
+};
+
+/**
+ * Whether the connected wallet may see the admin controls (audit L-21): it is
+ * an admin, or a signer of an admin multisig. admins is the list of admin
+ * addresses, signers the signer lists of those that are multisigs.
+ */
+export function canAdminister(me, admins, signers) {
+  if (!me) return false;
+  if ((admins || []).includes(me)) return true;
+  return (signers || []).some((list) => Array.isArray(list) && list.includes(me));
+}
+
+/** Any admin method, with its arguments as JSON (for anything without its own form). */
 export function planAny(abis, contract, method, json) {
   const abi = abis[contract];
   if (!abi) fail("Unknown contract.");
   const m = abi.methods[method];
   if (!m || m.read_only) fail(contract + " has no write method " + method + ".");
+  if (!(ADMIN_METHODS[contract] || []).includes(method)) fail(contract + "." + method + " is not an admin method.");
   let args;
   try {
     args = json && String(json).trim() ? JSON.parse(json) : {};
@@ -410,7 +540,26 @@ export function planAny(abis, contract, method, json) {
     fail("The arguments are not valid JSON.");
   }
   if (!args || typeof args !== "object" || Array.isArray(args)) fail("The arguments must be a JSON object.");
+  checkJsonNumbers(args, "arguments");
   return call(contract, method, args, contract + "." + method + " " + JSON.stringify(args));
+}
+
+/**
+ * Numbers typed as JSON (audit M-C): a JSON number beyond 2^53 has already
+ * lost digits when it is parsed, so big ones must be written as strings, and
+ * no number may be above a uint64.
+ */
+function checkJsonNumbers(value, at) {
+  if (Array.isArray(value)) {
+    value.forEach((v, i) => checkJsonNumbers(v, at + "[" + i + "]"));
+  } else if (value && typeof value === "object") {
+    for (const k of Object.keys(value)) checkJsonNumbers(value[k], at + "." + k);
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) fail(at + " is not a whole number JavaScript can hold exactly: write large numbers in quotes, like \"20000000000000000000\".");
+    if (value < 0) fail(at + " must be 0 or more.");
+  } else if (typeof value === "string" && /^[0-9]+$/.test(value)) {
+    requireUint64(BigInt(value), at);
+  }
 }
 
 // ---------------------------------------------------------------- multisig files

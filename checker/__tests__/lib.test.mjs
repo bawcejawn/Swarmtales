@@ -353,3 +353,52 @@ test("recordSent: only a sent hide becomes the checker's own; a sent unhide is k
   recordSent(state, { kind: "note", story: 2, seq: 1, t: "t2" });
   assert.equal(state.hiddenByChecker["2:1"], undefined);
 });
+
+test("I-14: the mainnet community node koinos.armana.io maps to the mainnet chain id, as on the website and in the deploy tool", async () => {
+  const MAINNET = "EiBZK_GGVP0H_fXVAM3j6EAuz3-B-l3ejxRSewi7qIBfSA==";
+  assert.equal(expectedChainId("https://koinos.armana.io", ""), MAINNET);
+  assert.equal(expectedChainId("https://koinos.armana.io/", undefined), MAINNET);
+  assert.equal(expectedChainId("https://api.koinos.io", ""), MAINNET);
+  assert.equal(deployNetworks.mainnet.rpc, "https://koinos.armana.io");
+  assert.equal(deployNetworks.mainnet.chainId, MAINNET);
+  const { NETWORKS } = await import("../../web/src/config.js");
+  assert.equal(NETWORKS.mainnet.rpc, "https://koinos.armana.io");
+  assert.equal(NETWORKS.mainnet.chainId, MAINNET);
+});
+
+test("L-12: the checker's Stories ABI is the committed, hash-checked file, built from stories.proto", async () => {
+  const fsMod = await import("node:fs");
+  const { STORIES_ABI_SHA256, abiHash, loadStoriesAbi } = await import("../chain.mjs");
+  const { buildAbi } = await import("../../web/scripts/build-abi.mjs");
+  const text = fsMod.readFileSync(new URL("../stories.abi.json", import.meta.url), "utf8");
+  assert.equal(abiHash(text), STORIES_ABI_SHA256, "run node checker/make-abi.mjs and update STORIES_ABI_SHA256");
+  assert.deepEqual(loadStoriesAbi(), buildAbi("stories/assembly/proto/stories.proto"), "the committed ABI is the one stories.proto builds");
+  assert.equal(abiHash(text.replace(/\n/g, "\r\n")), STORIES_ABI_SHA256, "line endings don't matter");
+  const tampered = text.replace('"set_segment_hidden"', '"set_segment_hidden2"');
+  assert.throws(() => loadStoriesAbi(tampered), /not the reviewed Stories ABI/);
+});
+
+test("L-12: the apply job (moderator key) builds no ABI at run time", async () => {
+  const fs = await import("node:fs");
+  const yml = fs.readFileSync(new URL("../../.github/workflows/copy-checker.yml", import.meta.url), "utf8");
+  const apply = yml.slice(yml.indexOf("\n  apply:"), yml.indexOf("\n  keep-schedule:"));
+  assert.doesNotMatch(apply, /npm run abi/);
+  assert.match(apply, /npm ci --ignore-scripts/);
+  assert.doesNotMatch(fs.readFileSync(new URL("../chain.mjs", import.meta.url), "utf8"), /generated\/abis/);
+});
+
+test("I-13: every web request and node call in the checker has a time limit", async () => {
+  const fs = await import("node:fs");
+  const { FETCH_TIMEOUT_MS, RPC_TIMEOUT_MS, withTimeout } = await import("../chain.mjs");
+  assert.equal(await withTimeout(Promise.resolve(7), 1000, "x"), 7);
+  await assert.rejects(withTimeout(new Promise(() => {}), 20, "The node"), /The node did not answer within 0 s/);
+  assert.ok(FETCH_TIMEOUT_MS > 0 && RPC_TIMEOUT_MS > 0);
+  const read = (f) => fs.readFileSync(new URL("../" + f, import.meta.url), "utf8");
+  const check = read("check.mjs");
+  assert.equal((check.match(/fetch\(/g) || []).length, (check.match(/signal: AbortSignal\.timeout\(FETCH_TIMEOUT_MS\)/g) || []).length, "each fetch has a timeout");
+  assert.match(read("chain.mjs"), /withTimeout\(stories\.functions\[name\]/);
+  const apply = read("apply.mjs");
+  assert.match(apply, /withTimeout\(provider\.getAccountRc/);
+  assert.match(apply, /withTimeout\(tx\.send\(\)/);
+  assert.match(apply, /tx\.wait\("byBlock", \d+\)/);
+});

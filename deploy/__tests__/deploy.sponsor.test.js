@@ -82,7 +82,9 @@ test("sponsor: planSponsorConfig builds the contract's settings in mana base uni
   assert.deepStrictEqual(plan.args.config, {
     enabled: true, ink: INK, shop: SHOP, stories: STORIES, tokens: [TOKEN, KOIN],
     max_mana_per_tx: "1000000000", max_mana_per_account_day: "3000000000", max_mana_per_day: "30000000000",
+    calls: plan.args.config.calls,
   });
+  assert.strictEqual(plan.args.config.calls.length, 10, "the sponsored-call allow-list (audit M-A)");
   assert.match(plan.summary, /sponsor ON/);
   assert.match(plan.summary, /approve\(spender = Shop\)/);
   const off = lib.planSponsorConfig(Object.assign({}, GOOD, { disable: true, tokens: undefined }), SPONSOR);
@@ -150,7 +152,7 @@ test("sponsor: a key for another wallet is refused before anything is signed", a
 });
 
 test("sponsor: upload turns on ONLY the transaction-application flag for the sponsor, none for the others", () => {
-  const src = fs.readFileSync(path.join(__dirname, "..", "deploy.js"), "utf8");
+  const src = fs.readFileSync(path.join(__dirname, "..", "deploy.js"), "utf8").replace(/\r\n/g, "\n"); // a Windows checkout has CRLF
   assert.match(src, /authorizesCallContract: false,\n\s+authorizesTransactionApplication: payFlag,\n\s+authorizesUploadContract: false,/);
   assert.match(src, /sponsor: \{[\s\S]*?authorizesTransactionApplication: true,/);
   for (const name of ["ink", "shop", "stories"]) {

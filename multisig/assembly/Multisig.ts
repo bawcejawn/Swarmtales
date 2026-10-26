@@ -11,7 +11,7 @@ import { multisig } from "./proto/multisig";
 
 const CONFIG_SPACE = 0;
 
-export const MIN_SIGNERS = 2;
+export const MIN_SIGNERS = 3;
 export const MAX_SIGNERS = 10;
 const ADDRESS_LENGTH = 25;
 const SIGNATURE_LENGTH = 65;
@@ -31,12 +31,21 @@ export class Multisig {
    * Called by the chain only. Before setup nothing is authorized. After
    * setup every kind of authority (calls, paying for a transaction,
    * replacing this code) needs `threshold` distinct current signers.
+   *
+   * For a call, the asking contract must also have been called straight
+   * from the transaction (`call.caller` empty). Otherwise any contract code
+   * running inside a quorum-signed transaction (a contract fee payer's
+   * authorize, or a contract called by one of the operations) would get the
+   * multisig's authority too (audit H-1).
    */
   authorize(args: authority.authorize_arguments): authority.authorize_result {
     const cfg = this.config.get()!;
     if (cfg.threshold == 0) return new authority.authorize_result(false);
-    if (
-      args.type != authority.authorization_type.contract_call &&
+    if (args.type == authority.authorization_type.contract_call) {
+      if (!args.call) return new authority.authorize_result(false);
+      const caller = args.call!.caller;
+      if (caller != null && caller.length > 0) return new authority.authorize_result(false);
+    } else if (
       args.type != authority.authorization_type.transaction_application &&
       args.type != authority.authorization_type.contract_upload
     ) {
@@ -55,6 +64,7 @@ export class Multisig {
    * call authority is already handed to `authorize`).
    */
   setup(args: multisig.setup_arguments): multisig.empty_object {
+    requireDirectCall();
     const cfg = this.config.get()!;
     System.require(cfg.threshold == 0, "MULTISIG: already set up");
     System.require(signedBy(this.contractId), "MULTISIG: setup must be signed by this account's own key");
@@ -63,13 +73,21 @@ export class Multisig {
   }
 
   /**
-   * New signers or threshold. Needs the current quorum. With two of three
-   * signers, this replaces a lost or leaked third one.
+   * New signers or threshold. Needs the current quorum, and the signature of
+   * every signer being added, so a typo or a key nobody holds can't become a
+   * signer (audit L-16). With two of three signers, this replaces a lost or
+   * leaked third one.
    */
   set_signers(args: multisig.set_signers_arguments): multisig.empty_object {
+    requireDirectCall();
     const cfg = this.config.get()!;
     System.require(cfg.threshold > 0, "MULTISIG: not set up");
     System.require(countSigners(cfg.signers) >= cfg.threshold, "MULTISIG: not enough signers signed");
+    const signed = signatureAddresses();
+    for (let i = 0; i < args.signers.length; i++) {
+      const s = args.signers[i];
+      if (!contains(cfg.signers, s)) System.require(contains(signed, s), "MULTISIG: every new signer must sign");
+    }
     this.save(args.signers, args.threshold);
     return new multisig.empty_object();
   }
@@ -83,11 +101,15 @@ export class Multisig {
   }
 }
 
-/** The rules for a signer list. Exported for the tests. */
+/**
+ * The rules for a signer list. Exported for the tests. The threshold is
+ * below the number of signers, so one lost key never locks the wallet
+ * (audit L-16); with a threshold of at least 2 that means 3 signers or more.
+ */
 export function validate(signers: Uint8Array[], threshold: u32, self: Uint8Array): void {
   const n = signers.length;
-  System.require(n >= MIN_SIGNERS && n <= MAX_SIGNERS, "MULTISIG: use 2 to 10 signers");
-  System.require(threshold >= 2 && threshold <= <u32>n, "MULTISIG: threshold must be at least 2 and at most the number of signers");
+  System.require(n >= MIN_SIGNERS && n <= MAX_SIGNERS, "MULTISIG: use 3 to 10 signers");
+  System.require(threshold >= 2 && threshold < <u32>n, "MULTISIG: threshold must be at least 2 and less than the number of signers");
   for (let i = 0; i < n; i++) {
     const s = signers[i];
     System.require(isAddress(s), "MULTISIG: invalid signer address");
@@ -125,9 +147,9 @@ function signatureAddresses(): Uint8Array[] {
   for (let i = 0; i < list.values.length; i++) {
     const raw = list.values[i].bytes_value;
     if (!raw || raw.length != SIGNATURE_LENGTH) continue;
-    const publicKey = System.recoverPublicKey(raw, txId);
-    if (!publicKey) continue;
-    out.push(Crypto.addressFromPublicKey(publicKey));
+    // The chain throws on a signature it can't recover a key from, which
+    // fails the whole transaction, so there is no "skip it" case here.
+    out.push(Crypto.addressFromPublicKey(System.recoverPublicKey(raw, txId)!));
   }
   return out;
 }
@@ -148,9 +170,22 @@ export function countSigners(signers: Uint8Array[]): u32 {
 }
 
 function signedBy(account: Uint8Array): bool {
-  const signed = signatureAddresses();
-  for (let j = 0; j < signed.length; j++) {
-    if (Arrays.equal(account, signed[j])) return true;
+  return contains(signatureAddresses(), account);
+}
+
+function contains(list: Uint8Array[], account: Uint8Array): bool {
+  for (let j = 0; j < list.length; j++) {
+    if (Arrays.equal(account, list[j])) return true;
   }
   return false;
+}
+
+/**
+ * Called straight from the transaction, not by another contract. Contract
+ * code inside a quorum-signed transaction must not change the signers
+ * (audit H-1).
+ */
+function requireDirectCall(): void {
+  const caller = System.getCaller().caller;
+  System.require(caller == null || caller.length == 0, "MULTISIG: call the multisig directly from the transaction, not through another contract");
 }

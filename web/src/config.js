@@ -8,9 +8,11 @@
  *      Do not leave a testnet address in the list. Those addresses can
  *      belong to someone else on mainnet.
  *   3. Set paymentSymbol to the token you enabled in the Shop (KOIN, vUSDT, …)
- *      and paymentDecimals to that token's decimals. At startup the page
- *      reads both from the chain (the token's decimals() and the Shop's
- *      get_asset) and shows no prices if they differ from what is set here.
+ *      and paymentDecimals to that token's decimals, and pin it (with its
+ *      code hash) in PAYMENT_TOKENS.mainnet below. At startup the page
+ *      reads all three from the chain (the token's decimals(), the Shop's
+ *      get_asset and the token's code hash) and shows no prices if they
+ *      differ from what is set here.
  *
  * No other file needs to change for mainnet. For a custom domain, see
  * SITE.url below.
@@ -82,6 +84,31 @@ export const contracts = {
 export const network = NETWORKS[ACTIVE];
 
 /**
+ * The payment tokens this site shows and uses, pinned with their code
+ * (audit H-3, L-18): address, symbol, decimals, and codeHash, the sha256 of
+ * the token's code in hex (what `node deploy/deploy.js status --token` prints
+ * after 0x1220). A token's code runs inside every purchase a buyer signs, and
+ * its issuer can replace that code at the same address, so before showing a
+ * price or building a purchase the page reads the token's code hash from the
+ * chain and refuses a token whose code is not its pin. Tokens the Shop lists
+ * but that are not pinned here are never shown. The page's own token
+ * (contracts.paymentToken) must be pinned. Keep this in step with
+ * deploy/lib.js TOKEN_PINS. Launch with one token.
+ */
+export const PAYMENT_TOKENS = {
+  testnet: [
+    // The Foundation testnet's KOIN (tKOIN), read 25 Oct 2026.
+    { address: TESTNET_ADDRESSES.paymentToken, symbol: "tKOIN", decimals: 8, codeHash: "4251a6e9d9c9a37f3bbf67e171f63a7dcad62309e4be7d9da85a74f68520edf7" },
+  ],
+  mainnet: [],
+};
+
+/** The pin for a token address on the selected network, or null. */
+export function pinnedToken(address) {
+  return (PAYMENT_TOKENS[ACTIVE] || []).find((t) => t.address === address) || null;
+}
+
+/**
  * The payment token this page is set up for (the stablecoin). Other tokens
  * the Shop accepts are read from the chain (shop.get_assets) and the buyer
  * may pick one; selectPaymentToken() switches `contracts` to it.
@@ -124,17 +151,57 @@ export function configProblems() {
   if (!Number.isInteger(contracts.paymentDecimals) || contracts.paymentDecimals < 0 || contracts.paymentDecimals > 18) {
     problems.push("paymentDecimals must be a whole number from 0 to 18.");
   }
+  const seen = new Set();
+  for (const t of PAYMENT_TOKENS[ACTIVE] || []) {
+    if (!t || !isAddress(t.address) || !/^[\x21-\x7e]{1,16}$/.test(String(t.symbol)) || !Number.isInteger(t.decimals) || t.decimals < 0 ||
+      t.decimals > 18 || !/^[0-9a-f]{64}$/.test(String(t.codeHash))) {
+      problems.push("Each PAYMENT_TOKENS entry needs an address, a symbol, decimals (0 to 18) and a 64-character lowercase hex code hash.");
+      continue;
+    }
+    // One display symbol per token, so a buyer can't pay with the wrong one (audit I-2).
+    if (seen.has(t.address) || seen.has(t.symbol.toLowerCase())) problems.push("PAYMENT_TOKENS lists " + t.address + " or the symbol " + t.symbol + " twice.");
+    seen.add(t.address);
+    seen.add(t.symbol.toLowerCase());
+  }
+  const pin = pinnedToken(contracts.paymentToken);
+  if (!pin) problems.push("paymentToken must be pinned, with its code hash, in PAYMENT_TOKENS." + ACTIVE + ".");
+  else if (pin.symbol !== contracts.paymentSymbol || pin.decimals !== contracts.paymentDecimals) {
+    problems.push("paymentSymbol and paymentDecimals must match the paymentToken's pin in PAYMENT_TOKENS.");
+  }
   try {
     canonicalBase(SITE.url);
   } catch (error) {
     problems.push(error.message);
   }
   if (network.mainnet) {
+    problems.push(...mainnetSiteProblems(SITE));
     for (const key of Object.keys(TESTNET_ADDRESSES)) {
       if (TESTNET_ADDRESSES[key] && contracts[key] === TESTNET_ADDRESSES[key]) {
         problems.push(key + " is still the testnet address. Replace it before using mainnet.");
       }
     }
+  }
+  return problems;
+}
+
+/**
+ * What a mainnet build needs of SITE (audit I-18, M-7): its own domain, not
+ * the shared github.io origin (the Vault pairing secret, bookmarks and the
+ * Kondor permission live on the site's origin), and a copyright email.
+ */
+export function mainnetSiteProblems(site) {
+  const problems = [];
+  let host = "";
+  try {
+    host = new URL(String(site.url)).hostname.toLowerCase();
+  } catch {
+    host = "";
+  }
+  if (host === "github.io" || host.endsWith(".github.io")) {
+    problems.push("SITE.url must be the site's own domain on mainnet, not a github.io address (M-7).");
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(site.copyrightEmail || ""))) {
+    problems.push("SITE.copyrightEmail must be set on mainnet (where copyright notices go).");
   }
   return problems;
 }

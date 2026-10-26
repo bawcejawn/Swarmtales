@@ -94,6 +94,24 @@ export function sponsorRcEstimate(operations) {
  * so the same action should be tried again with the user's own mana. A
  * refusal by the user or by SwarmTales' own contracts is NOT one of these.
  */
+/**
+ * After a sponsor refusal (audit L-20): a slow reply or a dropped connection
+ * can read as a refusal while the sponsored transaction still went through.
+ * Retry with the user's own mana only when the node doesn't know the
+ * sponsored transaction's id. lookup(id) resolves to the transaction or
+ * null. Returns "landed" (don't retry: wait for it) or "retry". Both use the
+ * user's next nonce anyway, so at most one can ever be included.
+ */
+export async function afterSponsorRefusal(transactionId, lookup) {
+  if (!transactionId) return "retry";
+  const row = await Promise.resolve().then(() => lookup(transactionId)).catch(() => null);
+  return row ? "landed" : "retry";
+}
+
+/** What the page says when a second confirmation opens because the sponsor said no (audit L-20). */
+export const SPONSOR_FALLBACK_NOTE = "The mana sponsor can't pay for this right now, so it is asked again with your own mana: " +
+  "confirm it once more. Only one of the two can ever go through.";
+
 export function isSponsorRefusal(error) {
   const text = String((error && error.message) || error || "");
   return /SPONSOR:|pending account resources|has not authorized transaction|authorize.*payer|payer.*authoriz/i.test(text);

@@ -11,8 +11,9 @@
  *    cosign): operations and signatures, never a key.
  *  - Testnet is the default. Mainnet is refused unless you pass BOTH
  *    --network mainnet and --i-understand-this-is-mainnet.
- *  - On mainnet, Ink, Shop, Stories and the payment token must be the
- *    addresses pinned in deploy/lib.js (MAINNET_PINNED), and wire and
+ *  - On mainnet, Ink, Shop, Stories, the sponsor, the multisig (and --admin)
+ *    must be the addresses pinned in deploy/lib.js (MAINNET_PINNED), payment
+ *    tokens one of TOKEN_PINS.mainnet (with their code hash), and wire and
  *    wire-stories check each contract's code hash against
  *    deploy/release-hashes.json. Uploads check the wasm against that file too.
  *  - The node's chain id must match the network before anything is signed.
@@ -145,7 +146,8 @@
  *       (joins the signatures from the copies, shows everything again, dry runs it, then sends it after SEND)
  *
  * Common flags: --network testnet|mainnet  --rpc <https url>
- * Mainnet only, after checking the address yourself: --i-understand-this-address-is-not-pinned
+ * Mainnet only, after checking the address yourself: --i-understand-this-address-is-not-pinned=<role>
+ *   (the role it lets through: ink, shop, stories, token, sponsor, multisig or admin; several with commas)
  */
 "use strict";
 
@@ -255,6 +257,14 @@ function contractOf(target, id, provider) {
       if (!fields[name]) lib.fail("The built " + target + " ABI has no '" + name + "' for " + op.name + ". Rebuild it: " + CONTRACTS[target].buildHint);
     }
     const out = await encode(op);
+    // What is signed must be what was shown: decode the bytes back and refuse
+    // any number that wrapped around or was cut to fit (audit M-C).
+    const back = await c.decodeOperation(out);
+    const bad = lib.numberMismatch(op.args || {}, back.args || {});
+    if (bad) {
+      lib.fail(target + "." + op.name + ": " + bad.field + " = " + bad.sent + " does not fit the contract's number type (it would be signed as " +
+        bad.got + "). Nothing was sent.");
+    }
     opMeta.set(out, { contract: target, contract_id: id, method: op.name, args: op.args || {} });
     return out;
   };
@@ -554,15 +564,33 @@ async function signersOf(tx) {
   }
 }
 
+// A contract wallet as payer runs its own code (its authorize) inside the
+// transaction, with every signer's signature on it: it could act in the
+// signers' or the multisig's name (audit H-1). Only the acting account itself
+// (the multisig paying for itself) or a normal wallet may pay.
+const CONTRACT_PAYER = "The payer must be the acting account itself or a normal wallet, not another contract wallet: " +
+  "a contract payer's code runs inside the transaction with every signature on it.";
+
+/** true / false, or null when the node could not say. */
+async function isContractWallet(provider, address) {
+  try {
+    const meta = await provider.call("contract_meta_store.get_contract_meta", { contract_id: address });
+    return !!(meta && meta.meta);
+  } catch (e) {
+    return null;
+  }
+}
+
 async function prepareTx(signerAddr, provider, net, operations, onPrepared) {
   const described = operations.map((op, i) => opMeta.get(op) || lib.fail(
-    "This command can't be prepared for multisig signing: operation " + (i + 1) + " is not a call to Ink, Shop or Stories."));
+    "This command can't be prepared for multisig signing: operation " + (i + 1) + " is not a call to Ink, Shop, Stories, the sponsor or the multisig."));
   const f = session.args.flags;
   const payer = f.payer === undefined ? signerAddr : lib.requireAddress(f.payer, "payer");
   const payee = f.payee === undefined ? undefined : lib.requireAddress(f.payee, "payee");
+  if (payer !== signerAddr && (await isContractWallet(provider, payer)) !== false) lib.fail(CONTRACT_PAYER + " Nothing was written.");
   const mana = await freeMana(provider, payer);
   if (mana.free === 0n) lib.fail(payer + " (the payer) has no free mana. Give it some KOIN first, or name another --payer. Nothing was written.");
-  let rcLimit = f["rc-limit"] === undefined ? lib.DEFAULT_PREPARED_RC : lib.parseMana(f["rc-limit"], "--rc-limit");
+  let rcLimit = f["rc-limit"] === undefined ? lib.preparedRcLimit(operations.length) : lib.parseMana(f["rc-limit"], "--rc-limit");
   if (BigInt(rcLimit) > mana.free) {
     if (f["rc-limit"] !== undefined) lib.fail("--rc-limit is more than the " + lib.formatMana(mana.free.toString()) + " mana " + payer + " has. Nothing was written.");
     rcLimit = mana.free.toString();
@@ -595,7 +623,7 @@ async function prepareTx(signerAddr, provider, net, operations, onPrepared) {
   console.log("No dry run yet: it needs the signatures. submit runs one before anything is sent.");
   console.log("Next: each signer runs, on their own computer:  node deploy/deploy.js cosign <this file>" +
     (net.mainnet ? " --network mainnet " + lib.MAINNET_FLAG : ""));
-  if (payer !== signerAddr) console.log("The payer " + payer + " must cosign too, unless it is a contract wallet that pays for itself.");
+  if (payer !== signerAddr) console.log("The payer " + payer + " (a normal wallet) must cosign too.");
   console.log("Then anyone runs:  node deploy/deploy.js submit <the signed file>" + (net.mainnet ? " --network mainnet " + lib.MAINNET_FLAG : ""));
   console.log("It stays valid until " + (payee || payer) + " uses nonce " + lib.nonceNumber(tx.header.nonce) +
     ": to cancel it, send any other transaction from that account first.");
@@ -610,10 +638,13 @@ async function cmdCosign(args) {
   const checked = await lib.verifyPrepared(data, net, verifyDeps(args.flags));
   const signedBy = await signersOf(checked.tx);
   console.log("");
-  for (const w of checked.warnings) console.log(w);
+  if (process.stdout.isTTY) process.stdout.write(lib.TERMINAL_RESET);
+  for (const w of checked.warnings) console.log(lib.terminalSafe(w));
   for (const line of lib.preparedSummary(net, data, checked, signedBy)) console.log(line);
   console.log("");
   console.log("Read every operation above. Sign only if it is exactly what the admins agreed to do.");
+  console.log("You are signing, paid by " + checked.tx.header.payer + ":");
+  for (const line of lib.preparedTargets(checked)) console.log("  " + line);
   const answer = await readLine("Type SIGN (capital letters) to add your signature, or anything else to stop: ");
   if (!lib.isConfirmation(answer, "SIGN")) lib.fail("Stopped. Nothing was signed.");
   const signer = await readKey();
@@ -621,8 +652,13 @@ async function cmdCosign(args) {
   lib.refuseCrossNetworkKey(net, me);
   if (signedBy.includes(me)) lib.fail(me + " has already signed this transaction. Nothing was changed.");
   const needs = checked.needs;
-  if (needs && !needs.signers.includes(me) && me !== checked.tx.header.payer) {
-    lib.fail("That key is for " + me + ", which is not one of the signers this transaction needs:\n  " + needs.signers.join("\n  ") +
+  const h = checked.tx.header;
+  if (needs && me === needs.account) {
+    lib.fail("That key is the multisig wallet's own key (" + me + "). It stopped counting when the multisig was set up. " +
+      "Paste the key of one of its signers instead:\n  " + needs.signers.join("\n  ") + "\nNothing was signed.");
+  }
+  if (needs && !needs.signers.includes(me) && !needs.newSigners.includes(me) && me !== h.payer && me !== h.payee) {
+    lib.fail("That key is for " + me + ", which is not one of the signers this transaction needs:\n  " + needs.signers.concat(needs.newSigners).join("\n  ") +
       "\nPaste one of their keys instead (a contract wallet's or the admin's key doesn't count). Nothing was signed.");
   }
   await signer.signTransaction(checked.tx);
@@ -651,8 +687,11 @@ async function cmdSubmit(args) {
   const tx = Object.assign({}, checked.tx, { signatures });
   const signedBy = await signersOf(tx);
   const needs = checked.needs;
-  // Each signer once; with a known signer list, only its signers and the payer.
-  const keep = (who, i) => signedBy.indexOf(who) === i && (!needs || needs.signers.includes(who) || who === tx.header.payer);
+  // Each signer once; with a known signer list, only its signers, the new
+  // signers a set_signers adds, the payer and the payee (audit I-10: the
+  // payee's signature was dropped).
+  const keep = (who, i) => signedBy.indexOf(who) === i &&
+    (!needs || needs.signers.includes(who) || needs.newSigners.includes(who) || who === tx.header.payer || who === tx.header.payee);
   tx.signatures = signatures.filter((s, i) => keep(signedBy[i], i));
   const unique = [...new Set(signedBy.filter((who, i) => keep(who, i)))];
   if (needs) {
@@ -661,18 +700,42 @@ async function cmdSubmit(args) {
       for (const line of lib.preparedSummary(net, base, checked, unique)) console.log(line);
       lib.fail("It has " + have + " of the " + needs.threshold + " signer signatures it needs. Have more of the signers listed above run cosign. Nothing was sent.");
     }
+    const missing = needs.newSigners.filter((s) => !unique.includes(s));
+    if (missing.length) {
+      for (const line of lib.preparedSummary(net, base, checked, unique)) console.log(line);
+      lib.fail("Each new signer must sign too (the multisig refuses otherwise). Not signed yet: " + missing.join(", ") + ". Nothing was sent.");
+    }
   }
   console.log("");
-  for (const w of checked.warnings) console.log(w);
+  if (process.stdout.isTTY) process.stdout.write(lib.TERMINAL_RESET);
+  for (const w of checked.warnings) console.log(lib.terminalSafe(w));
   for (const line of lib.preparedSummary(net, base, checked, unique)) console.log(line);
   const payer = tx.header.payer;
-  let payerIsContract = false;
+  // The file must use the account's next nonce, read now (audit L-11): an
+  // older one was used already (the file can never be sent), and a later
+  // one means whoever prepared it, or their node, did not give the real
+  // next nonce, and the signed file would wait to be sent later.
+  const nonceAccount = tx.header.payee || payer;
+  let next;
   try {
-    const meta = await provider.call("contract_meta_store.get_contract_meta", { contract_id: payer });
-    payerIsContract = !!(meta && meta.meta);
+    next = lib.nonceNumber(await provider.getNextNonce(nonceAccount));
   } catch (e) {
-    console.log("Could not check whether the payer is a contract wallet; the dry run below will tell.");
+    lib.fail("Could not read the next nonce of " + nonceAccount + " (" + (e && e.message ? e.message : String(e)) + "). Nothing was sent.");
   }
+  const fileNonce = lib.nonceNumber(tx.header.nonce);
+  if (BigInt(fileNonce) !== BigInt(next)) {
+    lib.fail(BigInt(fileNonce) < BigInt(next)
+      ? "This file uses nonce " + fileNonce + " of " + nonceAccount + ", which is already used (the next is " + next + "). It can never be sent: prepare it again. Nothing was sent."
+      : "This file uses nonce " + fileNonce + " of " + nonceAccount + ", but the next one is " + next + ". A file for a later nonce would stay valid until then: " +
+        "prepare it again through your own node. Nothing was sent.");
+  }
+  const payerIsContract = await isContractWallet(provider, payer);
+  // A multisig transaction is paid by the multisig itself or by a normal
+  // wallet that also signs, never by another contract wallet (audit H-1).
+  if (needs && payer !== needs.account && payerIsContract !== false) {
+    lib.fail((payerIsContract === null ? "Could not check whether the payer " + payer + " is a contract wallet. " : "") + CONTRACT_PAYER + " Nothing was sent.");
+  }
+  if (payerIsContract === null) console.log("Could not check whether the payer is a contract wallet; the dry run below will tell.");
   if (!payerIsContract && !unique.includes(payer)) {
     lib.fail("The payer " + payer + " is a normal wallet and has not signed. It must cosign too. Nothing was sent.");
   }
@@ -680,6 +743,19 @@ async function cmdSubmit(args) {
   if (mana.free < BigInt(tx.header.rc_limit)) {
     lib.fail("The payer has " + lib.formatMana(mana.free.toString()) + " mana free, less than this transaction's limit of " +
       lib.formatMana(tx.header.rc_limit) + ". Wait for it to refill (or add KOIN), then submit again. Nothing was sent.");
+  }
+  // Whole-settings setters: show what each field is now and what it will be
+  // (audit L-10), so a change made after the file was prepared isn't undone unseen.
+  for (const o of checked.ops.filter(lib.replacesSettings)) {
+    let cfg;
+    try {
+      cfg = await readOnly(provider, o.contract, o.contractId, "get_config", {});
+    } catch (e) {
+      lib.fail("Could not read " + o.contract + ".get_config to show what " + o.method + " changes. Nothing was sent.");
+    }
+    console.log("");
+    console.log(o.contract + "." + o.method + " sets every one of these. Now on chain -> after this transaction:");
+    for (const line of lib.settingsChanges(o, cfg)) console.log(lib.terminalSafe(line));
   }
   console.log("");
   console.log("What will happen: the operations above, signed by " + unique.length + " wallet(s).");
@@ -951,7 +1027,9 @@ async function cmdTestAsset(args) {
     what = "set small test prices for " + token + " (already enabled; usable from " + lib.utcTime(current.usable_from || 0) + ")";
   } else {
     const sold = !!(await readOnly(provider, "shop", shop, "get_config", {})).sold;
-    const plan = lib.planAsset(current, { token, enabled: true, decimals, symbol }, nowSec(), sold);
+    const plan = lib.planAsset(current, { token, enabled: true, decimals, symbol }, nowSec(), sold, await otherAssets(provider, shop, token));
+    await checkTokenCode(provider, net, token, plan.args);
+    await checkTokenInfo(provider, token, plan.args);
     ops.push(await shopC.encodeOperation({ name: "set_asset", args: plan.args }));
     what = plan.summary + ", and set small test prices";
   }
@@ -964,6 +1042,50 @@ async function cmdTestAsset(args) {
 }
 
 /** set-asset: the admin turns a payment token on (at once before the Shop's first sale, after 7 days later) or off (at once). */
+/** The Shop's other token records, { token, symbol }, for the one-symbol-per-token check (audit I-2). */
+async function otherAssets(provider, shop, token) {
+  const listed = await readOnly(provider, "shop", shop, "get_assets", {});
+  const out = [];
+  for (const t of listed.tokens || []) {
+    if (t === token) continue;
+    const a = await readOnly(provider, "shop", shop, "get_asset", { token: t });
+    out.push({ token: t, symbol: a.symbol || "" });
+  }
+  return out;
+}
+
+/**
+ * The token's own decimals() and symbol() must be what --decimals and
+ * --symbol say (audit L-9): prices are stored in the token's base units, so
+ * a typed decimals value off by two would price everything 100x off.
+ */
+async function checkTokenInfo(provider, token, wanted) {
+  const { Contract, utils } = koilib();
+  const c = new Contract({ id: token, abi: utils.tokenAbi, provider });
+  let decimals;
+  let symbol;
+  try {
+    decimals = Number(((await c.functions.decimals({})).result || {}).value);
+    symbol = String(((await c.functions.symbol({})).result || {}).value || "");
+  } catch (e) {
+    lib.fail("Could not read the token's decimals and symbol from " + token + " (" + (e && e.message ? e.message : String(e)) + "). Nothing was sent.");
+  }
+  lib.checkTokenInfo(token, wanted, { decimals, symbol });
+}
+
+/** The token's code must be its pinned code before it is enabled (audit H-3). */
+async function checkTokenCode(provider, net, token, wanted) {
+  let hash = null;
+  try {
+    hash = lib.codeHashFromMeta(await provider.invokeGetContractMetadata(token));
+  } catch (e) {
+    hash = null;
+  }
+  const warning = lib.checkTokenCode(net, token, hash, wanted);
+  if (warning) console.log(warning);
+  else console.log("Token code: the pinned code of " + wanted.symbol + " (" + hash + ").");
+}
+
 async function cmdSetAsset(args) {
   const f = args.flags;
   const admin = lib.requireAddress(f.admin, "admin");
@@ -974,7 +1096,11 @@ async function cmdSetAsset(args) {
   const { net, provider } = await connect(f);
   const current = await readOnly(provider, "shop", shop, "get_asset", { token });
   const sold = !!(await readOnly(provider, "shop", shop, "get_config", {})).sold;
-  const plan = lib.planAsset(current, { token, enabled, decimals: f.decimals, symbol: f.symbol }, nowSec(), sold);
+  const plan = lib.planAsset(current, { token, enabled, decimals: f.decimals, symbol: f.symbol }, nowSec(), sold, await otherAssets(provider, shop, token));
+  if (enabled) {
+    await checkTokenCode(provider, net, token, plan.args);
+    await checkTokenInfo(provider, token, plan.args);
+  }
   const signer = await getSigner(provider, admin, "the admin wallet");
   const op = await contractOf("shop", shop, provider).encodeOperation({ name: "set_asset", args: plan.args });
   const txId = await dryRunThenSend(signer, provider, net, [op], "shop.set_asset: " + plan.summary);
@@ -998,6 +1124,7 @@ async function cmdSetPrice(args) {
   if (!asset || !asset.symbol) lib.fail("The Shop has no record of token " + token + ". Turn it on first with set-asset. Nothing was sent.");
   const cfg = await readOnly(provider, "shop", shop, "get_config", {});
   const plan = lib.planPrices(f, Number(asset.decimals || 0), cfg);
+  await warnStarterPoem(provider, shop, {}, token, Object.fromEntries(plan.map((p) => [p.item, p.amount])));
   const shopC = contractOf("shop", shop, provider);
   const ops = [];
   for (const p of plan) ops.push(await shopC.encodeOperation({ name: "set_price", args: { item: p.item, token, amount: p.amount } }));
@@ -1008,12 +1135,36 @@ async function cmdSetPrice(args) {
 }
 
 /** Ink each Writer month, pack and story opening brings. Flags not given keep the chain's value. */
+/**
+ * Prints a warning for each enabled token in which a Poem's starter Ink is
+ * worth more than a Poem's open price (audit I-7). cfgOver: Shop settings
+ * about to change; token + priceOver: prices about to change in that token.
+ */
+async function warnStarterPoem(provider, shop, cfgOver, token, priceOver) {
+  try {
+    const cfg = Object.assign({}, await readOnly(provider, "shop", shop, "get_config", {}), cfgOver);
+    const listed = (await readOnly(provider, "shop", shop, "get_assets", {})).tokens || [];
+    for (const t of token ? [token] : listed) {
+      const price = async (item) => (token === t && priceOver[item] !== undefined ? priceOver[item]
+        : ((await readOnly(provider, "shop", shop, "get_price", { item, token: t })) || {}).value || "0");
+      const w = lib.starterPoemWarning({
+        starterPoem: cfg.starter_poem, poemPrice: await price(10),
+        packs: [{ price: await price(3), ink: cfg.pack_s_ink }, { price: await price(4), ink: cfg.pack_m_ink }, { price: await price(5), ink: cfg.pack_l_ink }],
+      });
+      if (w) console.log("WARNING (" + t + "): " + w);
+    }
+  } catch (e) {
+    console.log("Could not check the Poem's starter Ink against its price (" + (e && e.message ? e.message : String(e)) + ").");
+  }
+}
+
 async function cmdSetInkAmounts(args) {
   const f = args.flags;
   const admin = lib.requireAddress(f.admin, "admin");
   const shop = lib.requireAddress(f.shop, "shop");
   const { net, provider } = await connect(f);
   const plan = lib.planInkAmounts(f, await readOnly(provider, "shop", shop, "get_config", {}));
+  await warnStarterPoem(provider, shop, { starter_poem: plan.starter_poem, pack_s_ink: plan.pack_s, pack_m_ink: plan.pack_m, pack_l_ink: plan.pack_l }, null, {});
   const op = await contractOf("shop", shop, provider).encodeOperation({ name: "set_ink_amounts", args: plan });
   const txId = await dryRunThenSend(await getSigner(provider, admin, "the admin wallet"), provider, net, [op], "shop.set_ink_amounts: " + JSON.stringify(plan));
   console.log("Send back: the transaction id (" + txId + ").");
@@ -1770,7 +1921,7 @@ async function cmdTakedown(args) {
   console.log("Last edited by:    " + (seg.last_edited_by || who.writer) + (seg.last_edited_by && seg.last_edited_by !== who.writer ? "" : " (the writer)"));
   console.log("Changed by others: " + (who.changed ? (who.changers.join(", ") || "yes") : "no"));
   if (who.unseen) console.log("                   " + lib.UNSEEN_CHANGER);
-  console.log("Live text:         " + JSON.stringify(String(seg.text || "")));
+  console.log("Live text:         " + lib.terminalSafe(JSON.stringify(String(seg.text || ""))));
   console.log("Text fingerprint:  " + Buffer.from(review.reviewed_hash, "base64url").toString("hex") + ", " + review.reviewed_versions +
     " kept version(s). The takedown is refused if either changes before it lands.");
   if (historyError) {
@@ -1802,6 +1953,8 @@ async function cmdTakedown(args) {
       "Nothing was sent. Check its history on a block explorer (stories.revise_event and stories.segment_changed_event\n" +
       "for this part), then run this command again with --strike <wallet> or --no-strike.");
   }
+  const hideFirst = lib.takedownHideFirst(seg, stories, storyId, seq);
+  if (hideFirst) console.log(hideFirst);
   if (strike && !who.candidates.includes(strike)) {
     console.log("--strike " + strike + " is not the writer or a wallet seen above. The contract accepts it only if that wallet changed this part; the dry run checks this before anything is sent.");
   }
