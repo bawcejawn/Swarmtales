@@ -556,7 +556,7 @@ describe("Stories: opening", () => {
     fails(() => { tryOpen(openArgs(ALICE, SHORT, 100000, 1, 0, "T", "Hi", 2, 0), twoOk()); }, shortMsg);
     fails(() => { tryOpen(openArgs(ALICE, BOOK, 99999, 1, 0, "T", "Hi", 2, 0), twoOk()); }, bookMsg);
     fails(() => { tryOpen(openArgs(ALICE, BOOK, 1000001, 1, 0, "T", "Hi", 2, 0), twoOk()); }, bookMsg);
-    fails(() => { tryOpen(openArgs(ALICE, <stories.story_kind>7, 10000, 1, 0, "T", "Hi", 2, 0), twoOk()); }, "STORIES: kind must be Book or Short Story");
+    fails(() => { tryOpen(openArgs(ALICE, <stories.story_kind>7, 10000, 1, 0, "T", "Hi", 2, 0), twoOk()); }, "STORIES: kind must be Book, Short Story or Poem");
     const book = openAs(ALICE, BOOK, 100000, PUBLIC, "Chapter one.");
     expect(story(book).kind).toBe(BOOK);
     expect(story(book).max_chars).toBe(100000);

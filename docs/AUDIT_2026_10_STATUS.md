@@ -4,7 +4,7 @@ Audit: "SwarmTales Mainnet Audit — audit-2026-10 (16de9dc)". Fixes on branch `
 Status: **Fixed** (code changed and tested), **Doc** (documented, no code change needed),
 **Owner** (an action only the owner can take), **Live** (a check on a real network).
 
-Tests after the fixes: Ink 53, Shop 98, Stories 417, Sponsor 33, Multisig 23, website 168, copy checker 105, deploy tool 122; 0 failing.
+Tests after the fixes: Ink 53, Shop 102, Stories 426, Sponsor 33, Multisig 23, website 179, copy checker 105, deploy tool 127; 0 failing.
 Live checks were run on a throwaway testnet deploy of these exact builds (Ink `1E6NEt…`, Shop `14oJ1f…`, Stories `1EzAZT…`).
 
 ## Medium
@@ -101,3 +101,13 @@ Also closed from earlier rounds: AB-079 (removed with the legacy code) and AB-08
 | Site uses the sponsor (`web/src/lib/sponsor.js`, `chain.js`, `wallet.js`, `testWallet.js`) | Asks the sponsor only when it would say yes; on a sponsor refusal, the same action runs again with the user's mana (same nonce, so at most one is included). KOIN Vault always pays its own. | `sponsor.test.js`; live: the site's new test wallet (no tKOIN) saved a bookmark, paid by the sponsor |
 | Deploy tool | `upload sponsor` (only the transaction-application flag), `sponsor-config` (checks the same rules as the contract), `status --sponsor` | `deploy.sponsor.test.js` |
 | Multisig wallet (`multisig/`) | m-of-n `authorize()` for calls, payments and uploads; setup once by the wallet's own key (sent in the upload transaction); `set_signers` by quorum. Not deployed yet. | `Multisig.spec.ts` (23) |
+
+## Added after the audit, second batch (25 Oct 2026): please review in full
+
+| Item | What it is | Proof |
+|---|---|---|
+| Poem story kind | Stories `KIND_POEM = 3`: 50 to 25,000 characters, 10-character close slack, 50 Ink private pool. Shop `ITEM_OPEN_POEM = 10` and `config.starter_poem` (set with `set_ink_amounts`, which now takes `starter_poem`). Site: open page, labels, checks. | `Stories.poem.spec.ts` (9); Shop poem tests; `rules.test.js` |
+| Admin page (`web/src/pages/admin.js`, `web/src/lib/admin.js`) | Every admin control; signs with the connected wallet or writes a prepared file in the deploy tool's format (own nonce encoding, uint64). | `admin.test.js`: input checks, and a page-made file passes `verifyPrepared`; a downloaded file decoded by the real `cosign` |
+| `multisig-create`, `multisig-signers`, `status --multisig` | Upload + setup in one transaction; signer changes only prepared for the quorum. | `deploy.multisig.test.js`; live on testnet: `1AQb8fmugoSPDmFTdq9ytPxrBjzLeXger2` (2 of 3), its own key refused by the chain |
+| Swappable mana payer | `MANA_PAYER` per network in `web/src/config.js`: `sponsor` (reads caps first) or `payer` (any paying contract, just asked). | `sponsor.test.js` |
+| Mainnet node | `https://koinos.armana.io` (community) in the site, the deploy tool and the checker; the chain id is checked before anything is signed. | config and checker tests |

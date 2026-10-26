@@ -114,6 +114,16 @@ export async function sponsorFunding(address, operations) {
   if (!contracts.sponsor || !isAddress(contracts.sponsor)) return null;
   const ids = { ink: contracts.ink, shop: contracts.shop, stories: contracts.stories };
   if (!sponsorableOperations(operations, ids, [contracts.paymentToken])) return null;
+  const want = sponsorRcEstimate(operations);
+  if (contracts.sponsorKind === "payer") {
+    // Any other paying contract (a mana station): no reads to make first.
+    try {
+      const free = await freeMana(contracts.sponsor);
+      return free.free >= want ? { payer: contracts.sponsor, payee: address, rcLimit: want } : null;
+    } catch {
+      return null;
+    }
+  }
   try {
     const [cfg, mine, total, head, free] = await Promise.all([
       read("sponsor", "get_config", {}),
@@ -131,7 +141,6 @@ export async function sponsorFunding(address, operations) {
       sponsorFree: free.free,
     });
     // Ask only when the sponsor can cover a realistic limit for these calls.
-    const want = sponsorRcEstimate(operations);
     return room >= want ? { payer: contracts.sponsor, payee: address, rcLimit: want } : null;
   } catch {
     return null;

@@ -231,7 +231,7 @@ yarn build:debug
 yarn test
 ```
 
-Success means `shop/build/debug/contract.wasm` exists and the test files together report **98 pass** and **0 fail**.
+Success means `shop/build/debug/contract.wasm` exists and the test files together report **102 pass** and **0 fail**.
 
 ### Stories
 
@@ -242,7 +242,7 @@ yarn build:release
 yarn test
 ```
 
-Success means `stories/build/release/contract.wasm` exists and the test files together report **417 pass** and **0 fail**.
+Success means `stories/build/release/contract.wasm` exists and the test files together report **426 pass** and **0 fail**.
 
 ### Mana sponsor and multisig wallet
 
@@ -269,7 +269,7 @@ cd ..
 node --test "checker/__tests__/*.test.mjs" "deploy/__tests__/*.test.js"
 ```
 
-Success means the website reports **168 pass** and the checker and deploy tool **227 pass**, both with **0 fail**. (`yarn test:deploy` in the root `package.json` runs the deploy tool's tests.)
+Success means the website reports **179 pass** and the checker and deploy tool **232 pass**, both with **0 fail**. (`yarn test:deploy` in the root `package.json` runs the deploy tool's tests.)
 
 ## Testnet
 

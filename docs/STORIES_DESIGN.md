@@ -72,7 +72,7 @@ Editors (at most 10 per story), the allow-list and the wallets an opener or edit
 | Admin-finalize inactivity | 30 days | 30–365 |
 | Writer reports that hide a part, strike limit | 3, 5 | 1–20, 1–20 |
 
-**Fixed in code:** Book 100,000–1,000,000 characters, Short Story 10,000–99,999 (0 at opening means up to the kind's maximum). *Why:* openers sign up for these; changing them needs a published upgrade.
+**Fixed in code:** Book 100,000–1,000,000 characters, Short Story 10,000–99,999, Poem 50–25,000 (0 at opening means up to the kind's maximum). A story within 100 characters of its own maximum (10 for a Poem) may close below the kind minimum. A private story's writers' pool must be at least the kind minimum (50 Ink for a Poem). Each kind has its own open price (Shop items 6, 7 and 10) and starter Ink. *Why:* openers sign up for these; changing them needs a published upgrade.
 
 *Why 6,000:* a part, its versions and a page of reads stay well inside a node's read limit even in a three-byte script (audit M-5).
 

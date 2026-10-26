@@ -53,9 +53,20 @@ export const TESTNET_ADDRESSES = {
   stories: "1Ebsy7ERirZWZwAio8Jz1zueuxQwNfKisR",
   treasury: "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6",
   paymentToken: "1FaSvLjQJsCJKq5ybmGsMMQs8RQYyVv8ju",
-  // The mana sponsor (sponsor/): pays users' mana for SwarmTales transactions
-  // only. "" = no sponsor; everyone pays their own mana.
-  sponsor: "12eQDZUBAaoScqFTW4zSy4ziAoxctnCxyS",
+};
+
+/**
+ * Who pays users' mana. Changing the payer (for example to a mana station
+ * later) is this one setting:
+ *   kind "sponsor": the SwarmTales sponsor contract (sponsor/). The page reads
+ *                   its caps first and asks only when it would say yes.
+ *   kind "payer":   any other paying contract. The page just asks it.
+ * Either way, if the payer says no, the same action is asked again with the
+ * user's own mana. address "" = everyone pays their own mana.
+ */
+export const MANA_PAYER = {
+  testnet: { kind: "sponsor", address: "1De7ea6SyHRT7SsHNnwLzTBuqf5ixZ1ZyZ" },
+  mainnet: { kind: "sponsor", address: "" },
 };
 
 export const contracts = {
@@ -64,12 +75,15 @@ export const contracts = {
   stories: TESTNET_ADDRESSES.stories,
   treasury: TESTNET_ADDRESSES.treasury,
   paymentToken: TESTNET_ADDRESSES.paymentToken,
-  sponsor: TESTNET_ADDRESSES.sponsor,
   paymentSymbol: "tKOIN",
   paymentDecimals: 8,
 };
 
 export const network = NETWORKS[ACTIVE];
+
+// The mana payer for the selected network (see MANA_PAYER above).
+contracts.sponsor = (MANA_PAYER[ACTIVE] && MANA_PAYER[ACTIVE].address) || "";
+contracts.sponsorKind = (MANA_PAYER[ACTIVE] && MANA_PAYER[ACTIVE].kind) || "sponsor";
 
 const ADDRESS_RE = /^1[1-9A-HJ-NP-Za-km-z]{25,34}$/;
 
@@ -87,7 +101,8 @@ export function configProblems() {
   for (const key of ["ink", "shop", "stories", "treasury", "paymentToken"]) {
     if (!isAddress(contracts[key])) problems.push(key + " is not a Koinos address.");
   }
-  if (contracts.sponsor !== "" && !isAddress(contracts.sponsor)) problems.push('sponsor must be a Koinos address or "" (no sponsor).');
+  if (contracts.sponsor !== "" && !isAddress(contracts.sponsor)) problems.push('MANA_PAYER address must be a Koinos address or "" (no payer).');
+  if (contracts.sponsorKind !== "sponsor" && contracts.sponsorKind !== "payer") problems.push('MANA_PAYER kind must be "sponsor" or "payer".');
   if (!Number.isInteger(contracts.paymentDecimals) || contracts.paymentDecimals < 0 || contracts.paymentDecimals > 18) {
     problems.push("paymentDecimals must be a whole number from 0 to 18.");
   }

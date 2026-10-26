@@ -80,6 +80,10 @@ The moderator key can hide parts, take over a hide writer reports made for copyi
 
 How the checker uses it: it hides a part only when a book that is provably older than the part contains its text; matches found only on the web get a note, never a hide. It never hides a part its opener restored. It signs in a separate step that re-checks every action on the chain; the step that searches the web never holds the key. It runs in GitHub Actions and signs only for the chain id it expects.
 
+## The admin page
+
+`#/admin` on the site lists every admin control in one place. It has no powers of its own: it only builds the same calls this page describes, and either asks the connected wallet to sign them or writes a prepared file for the multisig signers to check with `node deploy/deploy.js cosign` and send with `submit`. The contracts check every permission again.
+
 ## The mana sponsor
 
 The sponsor wallet holds KOIN, and its mana pays for users' SwarmTales transactions (`sponsor/`). Its contract decides only one thing: whether this wallet pays for a given transaction. It pays only when the user signed it, every call is to Ink, Shop or Stories (or approves the Shop to take the user's own payment tokens), and the daily caps aren't used up. It can't sign anything for a user, move anyone's tokens or Ink, or change anything in the three contracts. Its key can change its settings (on/off, caps, which contracts and tokens) and move its own KOIN, like any wallet. If it is switched off or empty, everyone simply pays their own mana again.

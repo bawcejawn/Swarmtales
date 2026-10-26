@@ -66,3 +66,20 @@ test("sponsor: the mana limit asked for grows with the size of the calls", () =>
   assert.ok(sponsorRcEstimate([big]) > 181000000n);
   assert.equal(sponsorRcEstimate([{ call_contract: { contract_id: "1SHOP", entry_point: 1, args: new Uint8Array(100) } }]), SPONSOR_BASE_RC + 1500000n);
 });
+
+test("sponsor: the mana payer is one setting, a SwarmTales sponsor or any other payer", async () => {
+  const { MANA_PAYER } = await import("../src/config.js");
+  for (const net of ["testnet", "mainnet"]) {
+    assert.ok(["sponsor", "payer"].includes(MANA_PAYER[net].kind), net);
+    assert.ok(MANA_PAYER[net].address === "" || isAddress(MANA_PAYER[net].address), net);
+  }
+  const saved = contracts.sponsorKind;
+  try {
+    contracts.sponsorKind = "payer";
+    assert.deepEqual(configProblems(), []);
+    contracts.sponsorKind = "station?";
+    assert.match(configProblems().join(" "), /kind must be "sponsor" or "payer"/);
+  } finally {
+    contracts.sponsorKind = saved;
+  }
+});

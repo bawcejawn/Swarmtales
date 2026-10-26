@@ -5,6 +5,7 @@ except where the deploy tool asks for one at its hidden prompt.
 
 Order: **A** (GitHub settings, 10 minutes) → **B** (fresh testnet deploy, `docs/TESTNET_DEPLOY.md`)
 → **C** (live checks on testnet) → **D** (old audit ledger) → **E** (before mainnet).
+**F** is the 25 October update (poems, sponsor, multisig rehearsal, admin page).
 
 ---
 
@@ -126,27 +127,18 @@ vUSDT is `12VoHz41a4HtfiyhTWbg9RXqGMRbYk6pXh` (confirmed by the owner, 23 Oct 20
 README). Whether its `transfer` needs an earlier `approve` doesn't matter for the site, which
 always sends one. The launch-day test purchase in vUSDT proves Shop can take payment with it.
 
-### C3. Multisig emergency pause (audit M-12) — after you make the signer wallets
-Our own multisig contract (`multisig/`, 23 tests) is written; there is no audited ready-made one on
-Koinos. When you're ready, make **3 signer wallets** (each on its own seed, one kept offline as the
-spare) and **1 fresh wallet** to become the multisig, and send me the four **public** addresses.
-I then add the one-transaction upload + setup command and the rehearsal steps: handover of the
-testnet Stories admin to the multisig, a pause and unpause with two signers, and replacing a signer.
+### C3. Multisig (audit M-12): rehearsal in F5
 
-### C5. Mana sponsor (pays users' mana)
-Live on testnet now with a test sponsor wallet (`12eQDZUBAaoScqFTW4zSy4ziAoxctnCxyS`). To see it:
-in the local site (C1), use **Create a test wallet** and don't send it any tKOIN; open a story,
-press **Bookmark**, then **Save to my wallet**. It works because the sponsor pays the mana.
+Signers (2 of 3): `1LrT3gTG9Rpf5zHf9DENaEgXEuhTdKxFtP`, `1C8hrrjXYykrDmPBioex7YRv7cEt1mBcEi`,
+`1Nw9fsuYPjQXX8pnz9sqg1cSyYyJPWoYat`. Testnet rehearsal multisig: `1AQb8fmugoSPDmFTdq9ytPxrBjzLeXger2`
+(made 25 Oct 2026 with a throwaway key, which has no power left). Mainnet multisig, made on launch day:
+`1BtSGxigg2Nc5uNcei3XnrEg9WXDyGJ6if`.
 
-For mainnet you make your **own** sponsor wallet (a fresh Kondor account, recovery phrase on
-paper), then on upload day:
-```powershell
-node deploy/deploy.js upload sponsor --expect <sponsor address> --network mainnet --i-understand-this-is-mainnet
-node deploy/deploy.js sponsor-config --sponsor <sponsor address> --ink <ink> --shop <shop> --stories <stories> --tokens 12VoHz41a4HtfiyhTWbg9RXqGMRbYk6pXh --per-tx 4 --per-account 20 --per-day 300 --network mainnet --i-understand-this-is-mainnet
-```
-Send it KOIN with Kondor (its mana is its KOIN balance and refills over about 5 days). Switch it
-off with the same `sponsor-config` line plus `--disable`. Its key can only change its settings and
-move its own KOIN.
+### C5. Mana sponsor: testnet in F3, mainnet in E
+
+The site's payer is one setting, `MANA_PAYER` in `web/src/config.js`: `kind: "sponsor"` for the
+SwarmTales sponsor contract, or `kind: "payer"` for any other paying contract (your mana station
+later). Change the address and kind; nothing else changes.
 
 ### C4. KOIN Vault (audit W1-04, W1-05) — on mainnet, after launch
 Rex (KOIN Vault) said Vault should work with the site (23 Oct 2026); the launch-day purchase confirms it. Vault works only on mainnet. On launch day, make one small purchase with Vault on your phone and
@@ -189,7 +181,11 @@ Mainnet goes ahead only when **every** box is ticked:
 - [ ] **Separate keys on hardware wallets**: the Ink, Shop and Stories contract keys (new, mainnet
       only), treasury, founder; recovery phrases on paper in two places (`docs/KEY_CUSTODY.md`).
 - [ ] **2-of-3 multisig admin**: the multisig contract re-audited, then rehearsed on testnet (C3).
-- [ ] **Mana sponsor** re-audited; your mainnet sponsor wallet made and loaded with KOIN (C5).
+- [ ] **Mana sponsor** re-audited; your mainnet sponsor wallet made and loaded with KOIN, uploaded
+      and configured like F3 (with the mainnet flags), and its address put in `MANA_PAYER.mainnet`.
+- [ ] **Mainnet multisig** made on upload day: `node deploy/deploy.js multisig-create --expect
+      1BtSGxigg2Nc5uNcei3XnrEg9WXDyGJ6if --signers <the three> --network mainnet --i-understand-this-is-mainnet`
+      (fund that wallet with a few KOIN first), then every contract's admin handed to it as in F5.
 - [ ] **Mainnet node** `https://koinos.armana.io` (community node, set in the site, the deploy tool
       and the checker): confirm it answers with the mainnet chain id (the check in section F).
 - [ ] **Release fingerprints**: two people build the merged commit and get the same hash for every contract (Ink, Shop, Stories, sponsor, multisig);
@@ -204,3 +200,119 @@ Mainnet goes ahead only when **every** box is ticked:
       `MAINNET_PINNED` in `deploy/lib.js`, hand admin to the multisig, wire, enable vUSDT and set
       prices **before** the first sale (so it's usable at once), set Terms and the moderator, then
       compare each contract's code hash with the release hashes and read back every setting.
+
+---
+
+## F. Testnet steps for the 25 October update (poems, sponsor, multisig, admin page)
+
+PowerShell, in `C:\swarmtales`. Keys go in only at the tool's hidden prompt.
+
+### F1. Get the update, check the mainnet node, build
+
+```powershell
+cd C:\swarmtales
+git pull
+Invoke-RestMethod -Method Post -Uri https://koinos.armana.io/ -ContentType 'application/json' -Body '{"jsonrpc":"2.0","id":1,"method":"chain.get_chain_id","params":{}}'
+```
+**Expect** `chain_id` = `EiBZK_GGVP0H_fXVAM3j6EAuz3-B-l3ejxRSewi7qIBfSA==` (Koinos mainnet).
+
+```powershell
+npx.cmd yarn@1.22.22 install --frozen-lockfile; npx.cmd yarn@1.22.22 build:release
+foreach ($c in "shop","stories","sponsor","multisig") { cd $c; npx.cmd yarn@1.22.22 install --frozen-lockfile; npx.cmd yarn@1.22.22 build:release; cd .. }
+cd web; npm.cmd ci; npm.cmd test; cd ..
+Get-FileHash build\release\contract.wasm, shop\build\release\contract.wasm, stories\build\release\contract.wasm, sponsor\build\release\contract.wasm, multisig\build\release\contract.wasm
+```
+**Expect** the five hashes in `AUDIT_SCOPE.md`, and the web tests ending `# fail 0`.
+
+Then set these for the rest of this section (paste again if you reopen PowerShell):
+```powershell
+$ADMIN   = "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6"
+$INK     = "1JXZiYaymCCG61YtfBF4L5bnbxem11rTFk"
+$SHOP    = "13i2g8x9CxKXhuo3EiPbUE6P5G5QDRgqwQ"
+$STORIES = "1Ebsy7ERirZWZwAio8Jz1zueuxQwNfKisR"
+$SPONSOR = "1De7ea6SyHRT7SsHNnwLzTBuqf5ixZ1ZyZ"
+$MSIG    = "1AQb8fmugoSPDmFTdq9ytPxrBjzLeXger2"
+$TKOIN   = "1FaSvLjQJsCJKq5ybmGsMMQs8RQYyVv8ju"
+```
+
+### F2. Upgrade the testnet Shop and Stories (adds poems; stories and settings are kept)
+
+```powershell
+node deploy/deploy.js upload shop --expect $SHOP --upgrade
+```
+Paste the **ST-Shop-2610** key, type `SEND`.
+```powershell
+node deploy/deploy.js upload stories --expect $STORIES --upgrade
+```
+Paste the **ST-Stories-2610** key, type `SEND`. If a wallet's mana is low or held, send it a few
+tKOIN or wait 5 minutes.
+
+### F3. Your mana sponsor (wallet `1De7ea6…`, 1,000 tKOIN)
+
+```powershell
+node deploy/deploy.js upload sponsor --expect $SPONSOR
+```
+Paste the **sponsor wallet** key, `SEND`. Then (sponsor key again):
+```powershell
+node deploy/deploy.js sponsor-config --sponsor $SPONSOR --ink $INK --shop $SHOP --stories $STORIES --tokens $TKOIN --per-tx 4 --per-account 20 --per-day 300
+node deploy/deploy.js status --sponsor $SPONSOR
+```
+**Expect** `call false, pay true, upload false` and `"enabled":true`. The site already points at
+this address (`MANA_PAYER.testnet` in `web/src/config.js`).
+
+### F4. Admin page: poem price and starter Ink
+
+Run the site (`cd web; npm.cmd run build; npm.cmd run preview`) and open
+http://127.0.0.1:4173/#/admin (also linked as **Admin** at the bottom of every page).
+
+Kondor can't sign on this testnet (C1), so on testnet use the file route, which is also exactly how
+the multisig signs on mainnet:
+1. **How to sign** → *Prepare a file for the multisig signers*. **Paying address** → `18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6`.
+2. **Ink amounts** → *Starter Ink, poem* `2000` → **Save Ink amounts**. A `.json` file downloads.
+3. **Prices** → *Open a poem* `0.3` → **Save changed prices**. A second file downloads.
+4. For each file (in a second PowerShell window, in `C:\swarmtales`):
+   ```powershell
+   node deploy/deploy.js cosign "$HOME\Downloads\<file name>.json"
+   ```
+   Read the decoded operations, type `SIGN`, paste the **admin** key. Then:
+   ```powershell
+   node deploy/deploy.js submit "$HOME\Downloads\<file name>.json"
+   ```
+   `SEND`.
+5. On the site, **Open a story** now shows **Poem** with its price and starter Ink.
+
+Everything else on the admin page (promo links, prices, pause, hide, takedown and strikes, blocks,
+limits, Terms, categories, payment tokens, sponsor settings, admin handover, any other call) works
+the same way.
+
+### F5. Multisig rehearsal (testnet, with your three signer keys)
+
+1. Hand the testnet **Stories** admin to the multisig:
+   ```powershell
+   node deploy/deploy.js set-admin stories --contract $STORIES --admin $MSIG --from $ADMIN
+   node deploy/deploy.js accept-admin stories --contract $STORIES --admin $MSIG --prepare accept.json
+   node deploy/deploy.js cosign accept.json
+   node deploy/deploy.js cosign accept.json
+   node deploy/deploy.js submit accept.json
+   ```
+   `set-admin` asks for the **admin** key. The first `cosign` takes **signer 1**'s key, the second
+   **signer 2**'s (normally each on their own computer: copy `accept.json` across).
+2. Pause and unpause with two signers, from the admin page: *Prepare a file*, Paying address =
+   `1AQb8fmugoSPDmFTdq9ytPxrBjzLeXger2`, **Pause Stories** → `cosign` with signers 1 and 2 → `submit`.
+   Then **Unpause Stories** the same way.
+3. Replacing a signer (rehearsed with the same three, so nothing changes):
+   ```powershell
+   node deploy/deploy.js multisig-signers --multisig $MSIG --signers 1LrT3gTG9Rpf5zHf9DENaEgXEuhTdKxFtP,1C8hrrjXYykrDmPBioex7YRv7cEt1mBcEi,1Nw9fsuYPjQXX8pnz9sqg1cSyYyJPWoYat --threshold 2 --prepare signers.json
+   node deploy/deploy.js cosign signers.json
+   node deploy/deploy.js cosign signers.json
+   node deploy/deploy.js submit signers.json
+   ```
+4. Hand Stories back to your single admin key, so testnet stays easy to use:
+   ```powershell
+   node deploy/deploy.js set-admin stories --contract $STORIES --admin $ADMIN --from $MSIG --prepare back.json
+   node deploy/deploy.js cosign back.json
+   node deploy/deploy.js cosign back.json
+   node deploy/deploy.js submit back.json
+   node deploy/deploy.js accept-admin stories --contract $STORIES --admin $ADMIN
+   ```
+5. Send me the transaction ids.

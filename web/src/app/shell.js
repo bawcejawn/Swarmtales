@@ -27,6 +27,7 @@ import { renderFinish } from "../pages/finish.js";
 import { renderBook } from "../pages/book.js";
 import { renderHow, renderTerms } from "../pages/info.js";
 import { renderReportPage } from "../pages/report.js";
+import { renderAdmin } from "../pages/admin.js";
 
 function route() {
   const raw = location.hash.replace(/^#/, "") || "/";
@@ -42,6 +43,7 @@ function route() {
   if (parts[0] === "how") return { name: "how" };
   if (parts[0] === "terms") return { name: "terms" };
   if (parts[0] === "report") return { name: "report" };
+  if (parts[0] === "admin") return { name: "admin" };
   if (parts[0] === "shop" || parts[0] === "membership") return { name: "membership" };
   if (parts[0] === "promo" && isId(parts[1])) return { name: "promo", campaign: parts[1] };
   if (parts[0] === "join" && isId(parts[1]) && isId(parts[2])) return { name: "join", storyId: parts[1], inviteId: parts[2] };
@@ -121,7 +123,8 @@ export function boot() {
           h("a", { href: "#/terms" }, ["Terms of Use"]), " · ",
           h("a", { href: "#/report" }, ["Report copied text"]), " · ",
           h("a", { href: SITE.adminPowersUrl, rel: "noopener" }, ["What the admin can and can't do"]), " · ",
-          h("a", { href: SITE.sourceUrl, rel: "noopener" }, ["Source code"]),
+          h("a", { href: SITE.sourceUrl, rel: "noopener" }, ["Source code"]), " · ",
+          h("a", { href: "#/admin" }, ["Admin"]),
         ]),
         h("details", {}, [
           h("summary", {}, ["Contract addresses on " + network.name]),
@@ -232,6 +235,7 @@ export function renderPage() {
   else if (here.name === "how") renderHow(page);
   else if (here.name === "terms") renderTerms(page);
   else if (here.name === "report") renderReportPage(page);
+  else if (here.name === "admin") renderAdmin(page);
   else renderHome(page);
   const heading = page.querySelector("h1");
   if (heading) heading.setAttribute("tabindex", "-1");

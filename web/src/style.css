@@ -621,3 +621,24 @@ details.chapter[open] .chapter-number { color: var(--page-accent); }
 }
 /* Keep a drop cap inside its own paragraph, even a short one. */
 .book-chapter + .book-text, .chapter-body > .seg:first-child .seg-text { display: flow-root; }
+
+/* Admin page */
+.admin-page .card { margin-top: 16px; }
+.admin-section > summary { cursor: pointer; font-size: 18px; padding: 4px 0; }
+.admin-section[open] > summary { margin-bottom: 12px; }
+.admin-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin: 10px 0; }
+.admin-row > * { flex: 1 1 200px; min-width: 0; }
+.admin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 10px 0; }
+.admin-table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 14px; }
+.admin-table th, .admin-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line, #ddd); vertical-align: middle; }
+.admin-table input { width: 100%; max-width: 160px; }
+.admin-text { white-space: pre-wrap; max-height: 260px; overflow: auto; border-left: 3px solid var(--line, #ddd); padding: 8px 12px; margin: 8px 0; }
+.admin-link { white-space: pre-wrap; word-break: break-all; user-select: all; }
+.admin-list { list-style: none; padding: 0; }
+.admin-list li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 4px 0; }
+.admin-page textarea { width: 100%; }
+.admin-page pre { white-space: pre-wrap; word-break: break-all; }
+.btn-danger { background: #9b1c1c; color: #fff; border-color: #9b1c1c; }
+.stack-sm > * + * { margin-top: 8px; }
+.admin-page .notice p, .admin-page .notice pre { overflow-wrap: anywhere; }
+.admin-row > span { flex: 0 0 150px; }

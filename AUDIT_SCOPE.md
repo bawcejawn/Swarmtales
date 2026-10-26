@@ -43,6 +43,12 @@ The whole repository. The most security-sensitive parts:
 
 - **The three contracts:** `assembly/Ink.ts`, `shop/assembly/Shop.ts`, `stories/assembly/` (all files):
   authority checks, Ink minting and burning, payments, refunds, takedowns and strikes, upgrades.
+- **New since the audit, second batch (25 Oct 2026):** the **Poem** story kind (Stories kind 3,
+  50 to 25,000 characters, Shop item 10 and `starter_poem`); the **admin page** (`web/src/pages/admin.js`,
+  `web/src/lib/admin.js`: signs admin calls with the connected wallet or writes a prepared file that
+  the deploy tool's `cosign` checks); `multisig-create` / `multisig-signers` in the deploy tool; the
+  swappable mana payer (`MANA_PAYER` in `web/src/config.js`); the community mainnet node
+  `koinos.armana.io` (chain id checked before anything is signed).
 - **New since the audit (please review in full):** `sponsor/assembly/Sponsor.ts` (pays mana for
   other people's transactions: which transactions, caps, signature recovery) and
   `multisig/assembly/Multisig.ts` (m-of-n `authorize()` for calls, payments and uploads; setup and
@@ -87,16 +93,16 @@ Expected release sha256 (verified from a fresh clone of this branch):
 | Contract | sha256 of `build/release/contract.wasm` |
 |---|---|
 | Ink | `537f523396c1e195c0262e10dd574c28492b269d247a6025a10f30461b2308dc` |
-| Stories | `4b146f3b68658ce06b4eb43e7152a8194099a9512b181129ae59edb0b7162f40` |
-| Shop | `f0e0622082bf5e13ed1eb6578457fa28450d28bfe5c7ff5c79499b2184b4bcce` |
+| Stories | `231674514bb71c3a44a761babff8df0b27efc3313ccd499f18e9ccebde2335c1` |
+| Shop | `eb8650584c6be10b6e7978d167bf7639c6dcff97f94ccffe3184bd49ee42ae94` |
 | Sponsor | `ed36d0bfc49a52a687489be4f46373b8c12bea52551785582223d66c219f4ad0` |
 | Multisig | `c4867a75bb90afa9b27a64a0452c093e38843764f8171aac0516d8fd2738ddb8` |
 
 (Built with Node.js 22.22.0. These are copied into `deploy/release-hashes.json` once reproduced
 by a second person; the deploy tool refuses a mainnet upload or wiring that doesn't match.)
 
-Expected test totals: Ink 53, Stories 417, Shop 98, Sponsor 33, Multisig 23, web 168, checker 105,
-deploy 122; 0 failing.
+Expected test totals: Ink 53, Stories 426, Shop 102, Sponsor 33, Multisig 23, web 179, checker 105,
+deploy 127; 0 failing.
 The Stories suite takes about an hour on a two-core machine.
 
 ## Deployments
@@ -114,7 +120,11 @@ The Stories suite takes about an hour on a two-core machine.
   paid; a token transfer, an approve for another spender, a payee who didn't sign, a mana limit over
   the cap and a call to another contract were all refused with the contract's message; the
   per-account daily cap stopped the third 2-mana bookmark.
-- **Mainnet:** not deployed.
+- **Testnet multisig rehearsal wallet:** `1AQb8fmugoSPDmFTdq9ytPxrBjzLeXger2`, made with
+  `multisig-create` on 25 Oct 2026: 2 of 3 of the owner's signers `1LrT3gTG9Rpf5zHf9DENaEgXEuhTdKxFtP`,
+  `1C8hrrjXYykrDmPBioex7YRv7cEt1mBcEi`, `1Nw9fsuYPjQXX8pnz9sqg1cSyYyJPWoYat`. A transaction signed only by
+  its own key is refused by the chain ("has not authorized transaction").
+- **Mainnet:** not deployed. The mainnet multisig will be `1BtSGxigg2Nc5uNcei3XnrEg9WXDyGJ6if` (same signers).
 
 ## Keys and roles
 
