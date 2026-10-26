@@ -74,6 +74,7 @@ export async function encode(name, method, args) {
  * The ABIs of the contracts these operations call, keyed by contract id, so
  * a wallet that can decode them (Kondor) shows the function and its
  * arguments (max_price, min_ink, ...) in its confirm window (audit M-9).
+ * The sponsor's too, should an operation ever call it (audit I-22).
  */
 export function abisFor(operations) {
   const known = {
@@ -82,6 +83,7 @@ export function abisFor(operations) {
     [contracts.stories]: abis.stories,
     [contracts.paymentToken]: utils.tokenAbi,
   };
+  if (contracts.sponsor && contracts.sponsorKind === "sponsor") known[contracts.sponsor] = abis.sponsor;
   const out = {};
   for (const op of operations || []) {
     const id = op && op.call_contract && op.call_contract.contract_id;

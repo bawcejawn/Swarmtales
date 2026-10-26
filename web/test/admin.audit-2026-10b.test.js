@@ -38,3 +38,10 @@ test("M-C: decoding the encoded operation back finds a number that did not survi
   assert.equal(await roundTrip("set_price", { item: 1, token: TOKEN, amount: "18446744073709551615" }), null);
   assert.equal(await roundTrip("set_paused", { paused: false }), null);
 });
+
+test("I-22: Kondor gets the sponsor's ABI for an operation that calls the sponsor", async () => {
+  const { abisFor } = await import("../src/chain.js");
+  const { contracts } = await import("../src/config.js");
+  const op = { call_contract: { contract_id: contracts.sponsor, entry_point: abis.sponsor.methods.set_config.entry_point, args: "" } };
+  assert.equal(abisFor([op])[contracts.sponsor], abis.sponsor);
+});
