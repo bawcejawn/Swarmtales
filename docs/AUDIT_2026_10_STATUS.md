@@ -1,6 +1,6 @@
 # 2026-10 mainnet audit: status of every finding
 
-Audit: "SwarmTales Mainnet Audit — audit-2026-10 (16de9dc)". Fixes on branch `audit-2026-10-fixes`.
+Audit: "SwarmTales Mainnet Audit — audit-2026-10 (16de9dc)". Fixes merged into `main` on 25 Oct 2026 (pull request #25).
 Status: **Fixed** (code changed and tested), **Doc** (documented, no code change needed),
 **Owner** (an action only the owner can take), **Live** (a check on a real network).
 
@@ -19,10 +19,10 @@ Live checks were run on a throwaway testnet deploy of these exact builds (Ink `1
 | M-6 | Deploy tool doesn't pin mainnet addresses | Fixed | `MAINNET_PINNED` in `deploy/lib.js` (filled after upload); code-hash check on wiring against `deploy/release-hashes.json` | `deploy.audit-2026-10.test.js` |
 | M-7 | The site shares an origin with other Pages sites | Owner (prepared) | One setting (`SITE.url`) switches every link to your domain; CNAME written by the build | `site.audit-m7.test.js`; buy the domain and follow `docs/UI.md` |
 | M-8 | Token decimals not checked against the chain | Fixed | Startup reads token `decimals` and Shop `get_asset`; prices hidden on mismatch | `payment.audit-m8.test.js` |
-| M-9 | Kondor's window doesn't show what's signed | Fixed, Live pending | ABIs passed to Kondor (`sendAbis`) | Owner: check the Kondor window on testnet (`docs/OWNER_STEPS.md`) |
+| M-9 | Kondor's window doesn't show what's signed | Fixed, Live at launch | ABIs passed to Kondor (`sendAbis`; Kondor's source reads `optsSend.abis`) | Kondor can't sign on the Foundation testnet at all (its built-in testnet is the old Harbinger chain; its "Optimize mana" step fails there), so the window is checked on the first mainnet purchase |
 | M-10 | Checker state can be poisoned through the cache | Fixed | HMAC-sealed state (`CHECKER_STATE_KEY`); Pages build `npm ci --ignore-scripts` | `check.audit-2026-10.test.mjs`; owner adds the secret |
 | M-11 | False hides from newer web matches | Fixed | Hide only on a book provably older than the part; web-only matches become notes | checker tests |
-| M-12 | No multisig path in the tool | Fixed, Live pending | `--prepare`, `cosign`, `submit` for any number of signers | deploy tests; owner rehearses a pause with the real multisig |
+| M-12 | No multisig path in the tool | Fixed, checked live | `--prepare`, `cosign`, `submit` for any number of signers, plus SwarmTales' own m-of-n multisig contract (`multisig/`) | deploy tests; the owner's rehearsal on testnet with his real 2-of-3 signers (multisig `1AQb8fmugoSPDmFTdq9ytPxrBjzLeXger2` as Stories admin: accept, pause, unpause, handover back; transaction ids in `AUDIT_SCOPE.md`) |
 | M-13 | Checker stalls and loses work | Fixed | Saves every few seconds; 20-minute budget; resumes | checker tests |
 
 ## Low
@@ -54,8 +54,8 @@ Live checks were run on a throwaway testnet deploy of these exact builds (Ink `1
 | O1-14 | WIF printed into files/pipes | Fixed | Terminal only (also test-promo, test-invite) |
 | O1-15 | Runbooks say repository secrets | Fixed (docs) | Environment secrets for the key and state key; search keys as repository secrets |
 | O1-16 | Fail-open versions read | Fixed | The part waits instead |
-| W1-04 | Vault "Done" for an unrelated tx | Fixed, Live pending | The transaction is read back and compared before "Done" |
-| W1-05 | Vault secret in GET query strings | Fixed, Live pending | POST body, GET fallback only if Vault refuses; polling every 10 s once paired |
+| W1-04 | Vault "Done" for an unrelated tx | Fixed, Live at launch (Vault is mainnet only) | The transaction is read back and compared before "Done" |
+| W1-05 | Vault secret in GET query strings | Fixed, Live at launch (Vault is mainnet only; Vault's developer says the POST call is supported) | POST body, GET fallback only if Vault refuses; polling every 10 s once paired |
 | W1-06 | Link keys in browser history | Fixed | Stripped from the address bar on load |
 | W1-07 | siteBase carries query strings | Fixed | One canonical base for every link |
 | W1-08 | Test wallet's dry run hands the node a valid tx | Fixed | One signed transaction, dry-run then sent |
@@ -82,12 +82,12 @@ Live checks were run on a throwaway testnet deploy of these exact builds (Ink `1
 | Takedowns not bound to a reviewed text hash | Fixed: `reviewed_hash` and `reviewed_versions` |
 | Citation breaks out of the run summary | Fixed |
 | prepare-testnet points at the unsafe CLI path | Fixed |
-| main-only environment as strong as push access (O1-21) | Owner: branch protection |
+| main-only environment as strong as push access (O1-21) | Owner: done. `main` is protected: changes only by pull request, the `build` check must pass and the branch be up to date, no bypass (admins included), no force pushes or deletion. Approvals: 0 (one maintainer; GitHub doesn't let an author approve their own pull request) |
 | Read-aloud and grammar privacy wording (W1-09) | Fixed |
 | Bookmark prompts (W1-10) | Fixed: saved locally, one "Save to my wallet" (checked live) |
 | ADMIN_POWERS not linked (W1-11) | Fixed (footer) |
 | CSP needs unsafe-eval; h() inline handlers | Doc (koilib/protobufjs need it; reason in `vite.config.js`); h() refuses string handlers |
-| Old audit ledger on GitHub (6.7) | Owner (`docs/OWNER_STEPS.md`) |
+| Old audit ledger on GitHub (6.7) | Owner: the commit isn't in this repository's branches or pull requests; the auditor is asked for its link with this re-audit request |
 | Status × action table with a mirroring test | Fixed: `docs/ADMIN_POWERS.md` and `Stories.status-table.spec.ts` |
 | Split the large files | Fixed: Stories in 3 files + `lib/`; website `main.js` in 32 modules |
 
