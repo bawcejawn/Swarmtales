@@ -554,12 +554,30 @@ async function signersOf(tx) {
   }
 }
 
+// A contract wallet as payer runs its own code (its authorize) inside the
+// transaction, with every signer's signature on it: it could act in the
+// signers' or the multisig's name (audit H-1). Only the acting account itself
+// (the multisig paying for itself) or a normal wallet may pay.
+const CONTRACT_PAYER = "The payer must be the acting account itself or a normal wallet, not another contract wallet: " +
+  "a contract payer's code runs inside the transaction with every signature on it.";
+
+/** true / false, or null when the node could not say. */
+async function isContractWallet(provider, address) {
+  try {
+    const meta = await provider.call("contract_meta_store.get_contract_meta", { contract_id: address });
+    return !!(meta && meta.meta);
+  } catch (e) {
+    return null;
+  }
+}
+
 async function prepareTx(signerAddr, provider, net, operations, onPrepared) {
   const described = operations.map((op, i) => opMeta.get(op) || lib.fail(
     "This command can't be prepared for multisig signing: operation " + (i + 1) + " is not a call to Ink, Shop or Stories."));
   const f = session.args.flags;
   const payer = f.payer === undefined ? signerAddr : lib.requireAddress(f.payer, "payer");
   const payee = f.payee === undefined ? undefined : lib.requireAddress(f.payee, "payee");
+  if (payer !== signerAddr && (await isContractWallet(provider, payer)) !== false) lib.fail(CONTRACT_PAYER + " Nothing was written.");
   const mana = await freeMana(provider, payer);
   if (mana.free === 0n) lib.fail(payer + " (the payer) has no free mana. Give it some KOIN first, or name another --payer. Nothing was written.");
   let rcLimit = f["rc-limit"] === undefined ? lib.DEFAULT_PREPARED_RC : lib.parseMana(f["rc-limit"], "--rc-limit");
@@ -677,13 +695,13 @@ async function cmdSubmit(args) {
   for (const w of checked.warnings) console.log(lib.terminalSafe(w));
   for (const line of lib.preparedSummary(net, base, checked, unique)) console.log(line);
   const payer = tx.header.payer;
-  let payerIsContract = false;
-  try {
-    const meta = await provider.call("contract_meta_store.get_contract_meta", { contract_id: payer });
-    payerIsContract = !!(meta && meta.meta);
-  } catch (e) {
-    console.log("Could not check whether the payer is a contract wallet; the dry run below will tell.");
+  const payerIsContract = await isContractWallet(provider, payer);
+  // A multisig transaction is paid by the multisig itself or by a normal
+  // wallet that also signs, never by another contract wallet (audit H-1).
+  if (needs && payer !== needs.account && payerIsContract !== false) {
+    lib.fail((payerIsContract === null ? "Could not check whether the payer " + payer + " is a contract wallet. " : "") + CONTRACT_PAYER + " Nothing was sent.");
   }
+  if (payerIsContract === null) console.log("Could not check whether the payer is a contract wallet; the dry run below will tell.");
   if (!payerIsContract && !unique.includes(payer)) {
     lib.fail("The payer " + payer + " is a normal wallet and has not signed. It must cosign too. Nothing was sent.");
   }

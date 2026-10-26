@@ -154,3 +154,43 @@ test("H-2: cosign resets the terminal state and repeats the target contract and 
   const src = fs.readFileSync(path.join(__dirname, "..", "deploy.js"), "utf8");
   assert.ok((src.match(/process\.stdout\.write\(lib\.TERMINAL_RESET\)/g) || []).length >= 2, "cosign and submit print the reset");
 });
+
+// ---------------------------------------------------------------- H-1 (tool)
+
+test("H-1: prepare refuses a contract wallet as --payer, and a payer it can't check", async () => {
+  let r = await preparePause(tmpFile("p1.json"), ["--payer", PAYER.getAddress()], { ...MS_READS, contractAccounts: [MULTISIG, PAYER.getAddress()] });
+  assert.match(r.error.message, /acting account itself or a normal wallet/);
+  r = await preparePause(tmpFile("p2.json"), ["--payer", PAYER.getAddress()], { ...MS_READS, metaFails: true });
+  assert.match(r.error.message, /acting account itself or a normal wallet/);
+  // A normal wallet that will cosign is fine, and the multisig paying for itself.
+  r = await preparePause(tmpFile("p3.json"), ["--payer", PAYER.getAddress()], { ...MS_READS, contractAccounts: [MULTISIG] });
+  assert.ok(r.prepared, r.error && r.error.message);
+  assert.match(r.out, /WARNING: +the payer is not the multisig/);
+  r = await preparePause(tmpFile("p4.json"), [], { ...MS_READS, contractAccounts: [MULTISIG] });
+  assert.ok(r.prepared, r.error && r.error.message);
+  assert.doesNotMatch(r.out, /the payer is not the multisig/);
+});
+
+test("H-1: submit refuses a multisig transaction paid by another contract wallet, even fully signed", async () => {
+  const file = tmpFile("payer.json");
+  let r = await preparePause(file, ["--payer", PAYER.getAddress()], { ...MS_READS, contractAccounts: [MULTISIG] });
+  assert.ok(r.prepared, r.error && r.error.message);
+  for (const k of [KEY1, KEY2, PAYER]) {
+    r = await run(["cosign", file], { answers: ["SIGN"], secret: k.getPrivateKey("wif") });
+    assert.ifError(r.error);
+  }
+  // By submit time the payer address has contract code.
+  let node = fakeNode({ ...MS_READS, contractAccounts: [MULTISIG, PAYER.getAddress()] });
+  r = await run(["submit", file], { node, answers: ["SEND"] });
+  assert.match(r.error.message, /acting account itself or a normal wallet[\s\S]*Nothing was sent/);
+  assert.deepStrictEqual(node.log.sent, [], "not even a dry run");
+  node = fakeNode({ ...MS_READS, metaFails: true });
+  r = await run(["submit", file], { node, answers: ["SEND"] });
+  assert.match(r.error.message, /Could not check whether the payer/);
+  assert.deepStrictEqual(node.log.sent, []);
+  // A normal-wallet payer that signed goes through.
+  node = fakeNode({ ...MS_READS, contractAccounts: [MULTISIG] });
+  r = await run(["submit", file], { node, answers: ["SEND"] });
+  assert.ifError(r.error);
+  assert.deepStrictEqual(node.log.sent.map((s) => s.broadcast), [false, true]);
+});

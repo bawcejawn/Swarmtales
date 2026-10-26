@@ -1485,6 +1485,10 @@ function preparedSummary(net, file, checked, signedBy) {
     const n = checked.needs;
     lines.push("Needs:     " + n.threshold + " of these " + n.signers.length + " signers of the multisig " + n.account + ":");
     n.signers.forEach((s, i) => lines.push("             " + (i + 1) + ". " + s + (signedBy.includes(s) ? "  (signed)" : "")));
+    if (h.payer !== n.account) {
+      lines.push("WARNING:   the payer is not the multisig. Sign only if " + h.payer + " is a normal wallet that signs too: a contract " +
+        "wallet's code would run inside this transaction with your signature (submit refuses one).");
+    }
     if (n.newSigners && n.newSigners.length) {
       lines.push("And:       each new signer it adds, to prove they hold the key:");
       n.newSigners.forEach((s) => lines.push("             - " + s + (signedBy.includes(s) ? "  (signed)" : "")));
