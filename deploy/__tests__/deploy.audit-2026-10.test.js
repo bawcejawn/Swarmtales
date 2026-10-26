@@ -345,7 +345,7 @@ test("M-12: submit joins copies signed on different computers, dry runs, then se
   assert.deepStrictEqual(node.log.sent, []);
   // Two different transactions can't be joined.
   const c = tmpFile("c.json");
-  await preparePause(c, ["--rc-limit", "1"]);
+  await preparePause(c, ["--rc-limit", "2"]);
   r = await run(["submit", a, c], { node: fakeNode(TESTNET, { contractAccounts: [MULTISIG] }), answers: ["SEND"] });
   assert.match(r.error.message, /different transaction/);
 });
