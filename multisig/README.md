@@ -26,9 +26,19 @@ operation before anyone signs, and refuses a contract wallet as payer for a mult
 
 The deploy tool's `--prepare` / `cosign` / `submit` flow collects the signatures.
 
-**Status:** written and tested (23 tests); not yet deployed. The deploy-tool command for the
-one-transaction upload + setup and the testnet rehearsal come once the owner has made the signer
-wallets.
+**Status:** written and tested (31 tests). The deploy tool's `multisig-create` does the
+one-transaction upload + setup; `multisig-signers` prepares a signer change for the quorum (and the
+new signers) to cosign. Not on mainnet yet (the planned mainnet multisig,
+`1BtSGxigg2Nc5uNcei3XnrEg9WXDyGJ6if`, is to be created with the build that has the H-1 and L-16
+fixes). On testnet, with the build before those fixes (25 Oct 2026):
+
+- `1AQb8fmugoSPDmFTdq9ytPxrBjzLeXger2`: **the owner's rehearsal multisig**, 2 of 3 of the owner's
+  signers, used as Stories admin (accept, pause, unpause, handover back).
+- `1JvWfpzUmoUg22ja5JHnUAL5Y8qqP3gWa7`: **the developer's preflight multisig**, 2 of 3 test signers,
+  used to find and fix the nonce encoding before the owner's rehearsal.
+
+Both are re-made with the new build for the rehearsal after the H-1 fix: a multisig's own code can
+only be replaced with its quorum, and `multisig-create` needs a fresh wallet.
 
 ## Build and test
 
