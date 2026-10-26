@@ -39,14 +39,27 @@ export function loadStoriesAbi(text = fs.readFileSync(new URL("./stories.abi.jso
   return JSON.parse(text);
 }
 
+/** How long one node call or web request may take before the checker gives up on it (audit I-13). */
+export const RPC_TIMEOUT_MS = 30000;
+export const FETCH_TIMEOUT_MS = 30000;
+
+/** promise, or an error once ms have passed, so one stuck call can't stall a run. */
+export function withTimeout(promise, ms, what) {
+  let timer;
+  const late = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(what + " did not answer within " + Math.round(ms / 1000) + " s")), ms);
+  });
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer));
+}
+
 export async function connect(env) {
   if (!env.STORIES_ADDRESS) throw new Error("Set STORIES_ADDRESS.");
   const rpc = env.RPC || "https://testnet.koinosfoundation.org";
   const provider = new koilib.Provider([rpc]);
   const chainId = expectedChainId(rpc, env.EXPECTED_CHAIN_ID);
-  checkChainId(chainId, await provider.getChainId());
+  checkChainId(chainId, await withTimeout(provider.getChainId(), RPC_TIMEOUT_MS, "The node"));
   const stories = new koilib.Contract({ id: env.STORIES_ADDRESS, abi: loadStoriesAbi(), provider });
-  const read = async (name, args) => (await stories.functions[name](args || {})).result || {};
+  const read = async (name, args) => (await withTimeout(stories.functions[name](args || {}), RPC_TIMEOUT_MS, "Stories." + name)).result || {};
   return { provider, stories, read, chainId };
 }
 

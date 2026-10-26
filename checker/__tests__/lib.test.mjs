@@ -386,3 +386,19 @@ test("L-12: the apply job (moderator key) builds no ABI at run time", async () =
   assert.match(apply, /npm ci --ignore-scripts/);
   assert.doesNotMatch(fs.readFileSync(new URL("../chain.mjs", import.meta.url), "utf8"), /generated\/abis/);
 });
+
+test("I-13: every web request and node call in the checker has a time limit", async () => {
+  const fs = await import("node:fs");
+  const { FETCH_TIMEOUT_MS, RPC_TIMEOUT_MS, withTimeout } = await import("../chain.mjs");
+  assert.equal(await withTimeout(Promise.resolve(7), 1000, "x"), 7);
+  await assert.rejects(withTimeout(new Promise(() => {}), 20, "The node"), /The node did not answer within 0 s/);
+  assert.ok(FETCH_TIMEOUT_MS > 0 && RPC_TIMEOUT_MS > 0);
+  const read = (f) => fs.readFileSync(new URL("../" + f, import.meta.url), "utf8");
+  const check = read("check.mjs");
+  assert.equal((check.match(/fetch\(/g) || []).length, (check.match(/signal: AbortSignal\.timeout\(FETCH_TIMEOUT_MS\)/g) || []).length, "each fetch has a timeout");
+  assert.match(read("chain.mjs"), /withTimeout\(stories\.functions\[name\]/);
+  const apply = read("apply.mjs");
+  assert.match(apply, /withTimeout\(provider\.getAccountRc/);
+  assert.match(apply, /withTimeout\(tx\.send\(\)/);
+  assert.match(apply, /tx\.wait\("byBlock", \d+\)/);
+});

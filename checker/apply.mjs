@@ -33,7 +33,7 @@ import { pathToFileURL } from "url";
 import {
   REASON, citationCovers, cleanNote, fingerprint, isDuplicate, logLine, mdCell, mdFence, noteAllowed, provablyOlder, recordSent, textAt, textKey,
 } from "./lib.mjs";
-import { connect, koilib, timeBudgetMs } from "./chain.mjs";
+import { RPC_TIMEOUT_MS, connect, koilib, timeBudgetMs, withTimeout } from "./chain.mjs";
 import { keyProblem, sealState, writeAtomic } from "./state.mjs";
 
 const PART = /^[1-9]\d{0,15}$/;
@@ -159,7 +159,7 @@ async function main(env) {
 
   /** Sign one Stories call with the moderator key (at most 0.5 mana; a hide uses about 0.05). */
   async function send(name, args) {
-    const mana = BigInt(await provider.getAccountRc(signer.getAddress()));
+    const mana = BigInt(await withTimeout(provider.getAccountRc(signer.getAddress()), RPC_TIMEOUT_MS, "The node"));
     if (mana === 0n) {
       note("  the moderator wallet has no mana; send it a little KOIN (it is never spent)");
       return false;
@@ -169,8 +169,8 @@ async function main(env) {
     await tx.pushOperation(await stories.encodeOperation({ name, args: { actor: signer.getAddress(), ...args } }));
     await tx.prepare();
     await tx.sign();
-    const receipt = await tx.send();
-    await tx.wait();
+    const receipt = await withTimeout(tx.send(), RPC_TIMEOUT_MS, "The node");
+    await tx.wait("byBlock", 120000); // its own limit: two minutes for the block
     if (receipt && receipt.reverted) {
       note("  the chain refused: " + (receipt.logs || []).join(" "));
       return false;

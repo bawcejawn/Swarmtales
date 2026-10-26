@@ -66,7 +66,7 @@ import {
   isDuplicate, isPartialDuplicate, logLine, mdCell, mdFence, normalizeResults, pickPhrases, provablyOlder, publishedEnd,
   readParts, resultMatches, textAt, textKey, worthAsking,
 } from "./lib.mjs";
-import { activityNow, connect, timeBudgetMs } from "./chain.mjs";
+import { FETCH_TIMEOUT_MS, activityNow, connect, timeBudgetMs } from "./chain.mjs";
 import { writeAtomic } from "./state.mjs";
 import { readAllVersions } from "../web/src/lib/versions.js";
 
@@ -124,7 +124,7 @@ const SERVICES = [
     key: () => env.GOOGLE_BOOKS_KEY,
     monthly: BOOKS_MONTHLY,
     ask: (phrase) => fetch("https://www.googleapis.com/books/v1/volumes?maxResults=5&q=" + encodeURIComponent('"' + phrase + '"') +
-      "&key=" + encodeURIComponent(env.GOOGLE_BOOKS_KEY.trim()), { headers: { Accept: "application/json" } }),
+      "&key=" + encodeURIComponent(env.GOOGLE_BOOKS_KEY.trim()), { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }),
   },
   {
     name: "tavily",
@@ -135,6 +135,7 @@ const SERVICES = [
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: "Bearer " + env.TAVILY_API_KEY.trim() },
       body: JSON.stringify({ query: '"' + phrase + '"', search_depth: "basic", max_results: 5 }),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     }),
   },
   {
@@ -144,7 +145,7 @@ const SERVICES = [
     monthly: MONTHLY,
     async ask(phrase) {
       const url = "https://api.search.brave.com/res/v1/web/search?count=5&q=" + encodeURIComponent('"' + phrase + '"');
-      const res = await fetch(url, { headers: { Accept: "application/json", "X-Subscription-Token": env.BRAVE_API_KEY.trim() } });
+      const res = await fetch(url, { headers: { Accept: "application/json", "X-Subscription-Token": env.BRAVE_API_KEY.trim() }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       await pause(1100); // Brave allows 1 request a second
       return res;
     },
