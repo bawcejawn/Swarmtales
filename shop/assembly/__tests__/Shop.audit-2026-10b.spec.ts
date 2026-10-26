@@ -14,8 +14,8 @@ describe("L-4: the founder's share of a large price", () => {
     const ONE_18: u64 = 1000000000000000000;
     expect(founderShare(ONE_18, 100)).toBe(ONE_18 / 100);
     expect(founderShare(ONE_18, 500)).toBe(ONE_18 / 20);
-    expect(founderShare(u64.MAX_VALUE, 500)).toBe(922337203685477580);
-    expect(founderShare(u64.MAX_VALUE, 1)).toBe(1844674407370955);
+    expect(founderShare(u64.MAX_VALUE, 500)).toBe(u64.MAX_VALUE / 20); // 922337203685477580
+    expect(founderShare(u64.MAX_VALUE, 1)).toBe(u64.MAX_VALUE / 10000); // 1844674407370955
   });
 
   it("rounds down exactly as price * fee / 10000 did wherever that didn't overflow", () => {
