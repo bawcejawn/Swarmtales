@@ -582,6 +582,27 @@ export class Shop {
     return new shop.empty_object();
   }
 
+  // Frees one of the MAX_ASSETS record slots (audit L-5). Only a token that
+  // is turned off, so nobody is paying with it; its prices go too, so a later
+  // record for the same address (perhaps with other decimals) starts from no
+  // prices, and turning it on again starts a new 7-day wait.
+  remove_asset(args: shop.remove_asset_arguments): shop.empty_object {
+    this.enter();
+    this.requireAdmin();
+    const assetId = this.requireAddress(args.token, "SHOP: invalid token address");
+    const found = this.assets.get(assetId);
+    System.require(found != null, "SHOP: that token has no record");
+    System.require(!found!.enabled, "SHOP: turn the token off before removing it");
+    this.assets.remove(assetId);
+    for (let item: u32 = <u32>shop.item.ITEM_READER_MONTH; item <= <u32>shop.item.ITEM_OPEN_POEM; item++) {
+      if (this.isItem(item)) this.prices.remove(this.priceKey(item, assetId));
+    }
+    const ev = new shop.asset_removed_event(assetId);
+    System.event("shop.asset_removed_event", Protobuf.encode(ev, shop.asset_removed_event.encode), []);
+    this.leave();
+    return new shop.empty_object();
+  }
+
   set_price(args: shop.set_price_arguments): shop.empty_object {
     this.enter();
     this.requireAdmin();
