@@ -10,7 +10,7 @@ release: Stories changes here, then a short follow-up review, then testnet, then
 | Co-writers overwrite each other, or "drafts" pile up and need manual merging | Google Docs, Ellipsus | **Suggest a change** (`suggest_change`): anyone who may write proposes new wording for someone else's part, free. The writer sees a word-by-word diff and accepts (as their own edit; the part stays theirs) or declines with a reply. A suggestion based on an older version can't be accepted, so nothing is silently undone. |
 | Editors' changes carry no credit; or credit is all-or-nothing | most collaborative editors | An accepted suggestion is kept as its own version naming who suggested it, and that wallet counts as having changed the part (so takedown strikes stay fair). Their AI label and citation carry over. |
 | Paid changes are the only way to touch someone else's words | SwarmTales before | Suggestions are the free, polite path; paid changes (`revise_part`) stay for when a writer has gone quiet. |
-| Spam suggestions bury a writer | comment systems | At most 5 waiting suggestions per part and one per wallet; 20 ever per part. Moderation can clear any suggestion and wipe its text. |
+| Spam suggestions bury a writer | comment systems | At most 5 waiting suggestions per part and one per wallet; a part keeps 20 at most and reuses closed slots, so nobody can use a part up. Moderation can clear any suggestion and wipe its text. |
 | No place for the shared "bible" (characters, world, tone) | Docs, Ellipsus, Reedsy collaboration | **Notes for writers** in the story guide (up to 3,000 characters), kept by the opener and editors. |
 | Finding co-writers happens off-site (Discord, Reddit) | all of them | **Looking for…** line (up to 140 characters). Stories that set it appear under **Seeking writers** in Discover, with the line on their card. |
 | Writing games ("exquisite corpse") need a separate app | — | **Blind round**: the opener switches it on; while the story is open the site shows only the newest part, so each writer continues from it alone. The whole story is one click away and shown in full once finished. |
@@ -45,7 +45,7 @@ Writers accept version 3 the next time they write.
 
 ## Testing
 
-- Stories contract: `Stories.wave2.spec.ts` (17 tests: suggesting, accepting, the stale check,
+- Stories contract: `Stories.wave2.spec.ts` (21 tests: suggesting, accepting, the stale check,
   limits, declining, withdrawing, closing stale ones, moderation, takedown wipe, private stories,
   AI label and citation, and the story guide) plus the whole existing suite.
 - Website: `web/test/wave2.test.js` (the ABI and who may do what with a suggestion).

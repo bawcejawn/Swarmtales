@@ -55,7 +55,13 @@ function accept(writer: Uint8Array, id: u64, seq: u64, sid: u32, text: string): 
 
 function decline(who: Uint8Array, id: u64, seq: u64, sid: u32, note: string): void {
   authorize(who);
-  new Stories().decline_suggestion(new stories.decline_suggestion_arguments(who, id, seq, sid, note));
+  new Stories().decline_suggestion(new stories.decline_suggestion_arguments(who, id, seq, sid, note, false));
+  checkpoint();
+}
+
+function moderate(id: u64, seq: u64, sid: u32, note: string): void {
+  authorize(STORIES);
+  new Stories().decline_suggestion(new stories.decline_suggestion_arguments(STORIES, id, seq, sid, note, true));
   checkpoint();
 }
 
@@ -170,15 +176,19 @@ describe("Stories Wave 2: suggestions", () => {
     expect(segment(gId, 1).pending_suggestions).toBe(5);
   });
 
-  it("takes at most 20 suggestions on a part, ever", () => {
-    gId = openPublic();
+  it("keeps at most 20 suggestions on a part: a new one reuses the oldest closed slot, so the part never fills up", () => {
+    const id = openPublic();
     for (let i: u8 = 1; i <= 20; i++) {
-      const sid = suggest(wallet(i), gId, 1, "Once upon a time, number " + i.toString() + ".");
-      decline(wallet(i), gId, 1, sid, "");
+      const sid = suggest(BOB, id, 1, "Once upon a time, number " + i.toString() + ".");
+      decline(BOB, id, 1, sid, "");
     }
-    gWho = wallet(21);
-    expect(() => { suggest(gWho, gId, 1, "Once upon a time, number 21."); }).toThrow();
-    errorIs("STORIES: this part has had the most suggestions it can take");
+    expect(segment(id, 1).suggestion_count).toBe(20);
+    // Twenty suggest-and-withdraw rounds by one wallet don't stop anyone.
+    const sid = suggest(CARA, id, 1, "Once upon a time, number 21.");
+    expect(sid).toBe(1, "the oldest closed slot");
+    expect(segment(id, 1).suggestion_count).toBe(20);
+    expect(suggestionsOf(id, 1)[0].text).toBe("Once upon a time, number 21.");
+    expect(suggestionsOf(id, 1)[0].status).toBe(0);
   });
 
   it("the writer declines with a note; the proposer withdraws; a stranger can't close a live one", () => {
@@ -212,10 +222,43 @@ describe("Stories Wave 2: suggestions", () => {
     authorize(STORIES);
     new Stories().set_paused(new stories.set_paused_arguments(true));
     checkpoint();
-    decline(STORIES, id, 1, sid, "copied text");
+    moderate(id, 1, sid, "copied text");
     const s = suggestionsOf(id, 1)[0];
     expect(s.status).toBe(4);
     expect(s.text).toBe("");
+    expect(s.cleared).toBe(true);
+  });
+
+  it("clearing an accepted suggestion wipes its text but keeps that it was accepted", () => {
+    const id = openPublic();
+    const sid = suggest(BOB, id, 1, BETTER);
+    accept(ALICE, id, 1, sid, BETTER);
+    moderate(id, 1, sid, "");
+    const s = suggestionsOf(id, 1)[0];
+    expect(s.status).toBe(1);
+    expect(s.cleared).toBe(true);
+    expect(s.text).toBe("");
+  });
+
+  it("only an explicit moderation call clears: the admin declining as a part's writer just declines", () => {
+    gId = openPublic();
+    gSugg = suggest(BOB, gId, 1, BETTER);
+    gWho = MALLORY;
+    expect(() => {
+      authorize(gWho);
+      new Stories().decline_suggestion(new stories.decline_suggestion_arguments(gWho, gId, 1, gSugg, "", true));
+    }).toThrow();
+    MockVM.rollbackTransaction();
+    expect(suggestionsOf(gId, 1)[0].cleared).toBe(false, "a non-moderator can't clear");
+  });
+
+  it("can't be accepted once the proposer was taken off a private story's list", () => {
+    gId = openAs(PRIVATE, 10000);
+    invite(gId, BOB, true);
+    gSugg = suggest(BOB, gId, 1, BETTER);
+    invite(gId, BOB, false);
+    expect(() => { accept(ALICE, gId, 1, gSugg, BETTER); }).toThrow();
+    errorIs("STORIES: the person who suggested this is no longer one of this story's writers");
   });
 
   it("a takedown of the part wipes its suggestions", () => {
@@ -234,6 +277,21 @@ describe("Stories Wave 2: suggestions", () => {
     invite(gId, BOB, true);
     suggest(BOB, gId, 1, BETTER);
     expect(segment(gId, 1).pending_suggestions).toBe(1);
+  });
+
+  it("an accepted suggestion's citation doesn't replace the writer's own", () => {
+    const id = openPublic();
+    authorize(ALICE);
+    new Stories().set_citation(new stories.set_citation_arguments(ALICE, id, 1, "Book A"));
+    checkpoint();
+    authorize(BOB);
+    results([writerMonth()]);
+    const sid = new Stories().suggest_change(new stories.suggest_change_arguments(BOB, id, 1, BETTER, "Book B", false, true, 0)).value;
+    checkpoint();
+    accept(ALICE, id, 1, sid, BETTER);
+    expect(segment(id, 1).citation).toBe("Book A");
+    const vs = versions(id, 1);
+    expect(vs[vs.length - 1].citation).toBe("Book B", "the proposer's source stays with their version");
   });
 
   it("an accepted suggestion keeps the proposer's AI label and citation", () => {

@@ -279,6 +279,7 @@ message suggestion {
   uint64 closed_at = 11 [jstype = JS_STRING];
   string note = 12;              // the writer's reply when declining (up to 200 characters)
   uint64 cost = 13 [jstype = JS_STRING]; // the text's Ink count
+  bool cleared = 14;             // moderation wiped its text (its status is kept)
 }
 
 message suggestion_list {
@@ -737,7 +738,8 @@ message accept_suggestion_arguments {
 
 // @description Close a waiting suggestion without changing the part: the part's writer declines it (with an optional
 // note), the proposer withdraws it, anyone closes it once the part has changed, been removed or the story is no
-// longer open, and the admin or the moderator clears it (its text is wiped). Free.
+// longer open (finished or archived), and the admin or the moderator clears it with moderate = true (its text
+// is wiped; works while paused, and on closed suggestions too). Free.
 // @read-only false
 // @result empty_object
 message decline_suggestion_arguments {
@@ -746,6 +748,7 @@ message decline_suggestion_arguments {
   uint64 seq = 3 [jstype = JS_STRING];
   uint32 id = 4;
   string note = 5;               // up to 200 characters
+  bool moderate = 6;             // the admin or moderator clearing it (wipes its text); false for everyone else
 }
 
 // @description A part's suggestions by id, oldest first, at most 5 per call and about 64 KB of text. Start with

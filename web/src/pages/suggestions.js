@@ -160,7 +160,7 @@ function suggestionItem(storyId, block, s, me, storyOpen) {
       (isWaiting ? (current ? "waiting for " + shortAddress(seg.author) : "out of date (the part changed since)") : STATUS[Number(s.status)] || "closed"),
   ]);
   const parts = [head];
-  if (Number(s.status) === 4) parts.push(h("p", { class: "seg-placeholder" }, ["Removed by moderation."]));
+  if (Number(s.status) === 4 || s.cleared) parts.push(h("p", { class: "seg-placeholder" }, ["Its text was removed by moderation."]));
   else parts.push(isWaiting && current ? diffView(seg.text || "", s.text || "") : h("p", { class: "version-text" }, [s.text || ""]));
   if (s.citation) parts.push(h("p", { class: "source-note" }, ["Source: " + s.citation]));
   if (s.ai_assisted) parts.push(h("span", { class: "tag-ai" }, ["Written with AI help"]));
@@ -206,7 +206,7 @@ function suggestionItem(storyId, block, s, me, storyOpen) {
         btn.disabled = true;
         try {
           const op = await encode("stories", "decline_suggestion", {
-            account: me, story_id: String(storyId), seq: String(block.seq), id: Number(s.id), note: me === seg.author ? note.value.trim() : "",
+            account: me, story_id: String(storyId), seq: String(block.seq), id: Number(s.id), note: me === seg.author ? note.value.trim() : "", moderate: false,
           });
           if (await send([op], status)) renderPage();
         } catch (error) {

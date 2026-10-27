@@ -410,7 +410,7 @@ export function planClearSuggestion({ actor, storyId, seq, suggestionId, noteTex
   const s = whole(seq, "Part number", 1, null);
   const n = whole(suggestionId, "Suggestion number", 1, 20);
   return call("stories", "decline_suggestion", {
-    account: requireAddress(actor, "Your admin address"), story_id: id.toString(), seq: s.toString(), id: Number(n), note: note(noteText),
+    account: requireAddress(actor, "Your admin address"), story_id: id.toString(), seq: s.toString(), id: Number(n), note: note(noteText), moderate: true,
   }, "Clear suggestion #" + n + " on story " + id + " part " + s + " (its text is wiped)");
 }
 

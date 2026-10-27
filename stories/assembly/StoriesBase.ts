@@ -306,7 +306,7 @@ export class StoriesBase {
     let version = seg.version_count + 1;
     // An accepted suggestion keeps its own version (it records who suggested
     // it), so it must fit in the writer's room; the writer can still edit.
-    System.require(kind != VERSION_SUGGESTED || version <= WRITER_VERSION_ROOM,
+    System.require(kind != VERSION_SUGGESTED || version < WRITER_VERSION_ROOM,
       "STORIES: this part has too many versions to accept a suggestion; edit it yourself instead");
     if (version > WRITER_VERSION_ROOM && kind == VERSION_EDITED) {
       const newest = this.versions.get(versionKey(storyId, seq, seg.version_count));

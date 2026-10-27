@@ -738,7 +738,9 @@ export class Stories extends StoriesAdmin {
       // and citation carry over (AB-039).
       this.recordChanger(key, seg, proposer, false);
       if (aiAssisted) seg.ai_assisted = true;
-      if (citation.length > 0) seg.citation = citation;
+      // Their citation names the source only where the part had none; it is
+      // always kept with their version.
+      if (citation.length > 0 && (seg.citation == null || seg.citation!.length == 0)) seg.citation = citation;
     }
     this.segments.put(key, seg);
 
@@ -1192,19 +1194,31 @@ export class Stories extends StoriesAdmin {
     System.require(cost <= <u64>cfg.contribution_cap || cost <= seg.current_cost, "STORIES: text is over the per-submission cap");
     System.require(text != (seg.text != null ? seg.text! : ""), "STORIES: the text is unchanged");
     System.require(seg.pending_suggestions < MAX_PENDING_SUGGESTIONS, "STORIES: this part already has 5 suggestions waiting for its writer");
-    System.require(seg.suggestion_count < MAX_SUGGESTIONS, "STORIES: this part has had the most suggestions it can take");
-    // One waiting suggestion per wallet and part.
+    // One waiting suggestion per wallet and part. While looking, find the
+    // oldest closed suggestion: once a part keeps MAX_SUGGESTIONS, a new one
+    // takes that slot, so suggesting and withdrawing can't use the part up
+    // (and a takedown still wipes at most MAX_SUGGESTIONS).
+    let reuse: u32 = 0;
+    let reuseAt: u64 = u64.MAX_VALUE;
     for (let i: u32 = 1; i <= seg.suggestion_count; i++) {
       const other = this.suggestions.get(versionKey(args.story_id, args.seq, i));
-      System.require(other == null || other.status != SUGGESTION_WAITING || !Arrays.equal(other.proposer!, proposer),
+      if (other == null) continue;
+      System.require(other.status != SUGGESTION_WAITING || !Arrays.equal(other.proposer!, proposer),
         "STORIES: you already have a suggestion waiting on this part; withdraw it first");
+      const closedAt = other.closed_at;
+      if (other.status != SUGGESTION_WAITING && closedAt < reuseAt) {
+        reuse = i;
+        reuseAt = closedAt;
+      }
     }
-    const id = seg.suggestion_count + 1;
+    // pending < 5 and 20 slots: when all 20 are taken, at least 15 are closed.
+    const id = seg.suggestion_count < MAX_SUGGESTIONS ? seg.suggestion_count + 1 : reuse;
+    System.require(id > 0, "STORIES: this part has no room for another suggestion");
     const hash = seg.text_hash != null ? seg.text_hash! : new Uint8Array(0);
     const sug = new stories.suggestion(id, proposer, text, hash, seg.version_count, citation, args.ai_assisted, nowSeconds(),
       SUGGESTION_WAITING, null, 0, "", cost);
     this.suggestions.put(versionKey(args.story_id, args.seq, id), sug);
-    seg.suggestion_count = id;
+    if (id > seg.suggestion_count) seg.suggestion_count = id;
     seg.pending_suggestions = seg.pending_suggestions + 1;
     this.segments.put(key, seg);
     this.emitSuggestion(args.story_id, args.seq, id, proposer, "suggested", proposer, 0, seg.author!);
@@ -1230,8 +1244,13 @@ export class Stories extends StoriesAdmin {
     const hash = seg.text_hash != null ? seg.text_hash! : new Uint8Array(0);
     System.require(Arrays.equal(sug.base_hash!, hash) && sug.base_versions == seg.version_count,
       "STORIES: the part changed since this was suggested; ask for a new suggestion");
-    // The proposer may have been blocked since.
+    // The proposer may have been blocked, or taken off a private story's
+    // list of writers, since.
     this.requireNotBlocked(sug.proposer!);
+    const st = this.requireStory(args.story_id);
+    System.require(st.visibility == stories.visibility.VISIBILITY_PUBLIC || this.isPrivileged(args.story_id, st, sug.proposer!) ||
+      this.allowed.get(idAddrKey(args.story_id, sug.proposer!))!.value,
+      "STORIES: the person who suggested this is no longer one of this story's writers");
     const text = sug.text != null ? sug.text! : "";
     const version = this.ownEdit(args.story_id, args.seq, writer, text, args.expected_cost, args.max_ink,
       args.rights_confirmed, args.terms_version, VERSION_SUGGESTED, sug.proposer!, sug.citation != null ? sug.citation! : "", sug.ai_assisted,
@@ -1261,10 +1280,10 @@ export class Stories extends StoriesAdmin {
     const sug = found!;
     const note = requireNote(args.note);
     let action = "";
-    if (this.isModeratorOrAdmin(account)) {
+    if (args.moderate) {
       // Moderation: works while paused, on any suggestion, and wipes its text.
       this.requireModeratorOrAdmin(account);
-      System.require(sug.status != SUGGESTION_CLEARED, "STORIES: that suggestion was already cleared");
+      System.require(!sug.cleared, "STORIES: that suggestion was already cleared");
       action = "cleared";
     } else {
       this.requireNotPaused();
@@ -1272,8 +1291,10 @@ export class Stories extends StoriesAdmin {
       System.require(sug.status == SUGGESTION_WAITING, "STORIES: that suggestion is no longer waiting");
       const st = this.requireStory(args.story_id);
       const hash = seg.text_hash != null ? seg.text_hash! : new Uint8Array(0);
-      const stale = st.status != stories.story_status.STATUS_OPEN || seg.status != stories.segment_status.SEGMENT_ACTIVE ||
-        !Arrays.equal(sug.base_hash!, hash) || sug.base_versions != seg.version_count;
+      // Stale: the part changed or is gone, or the story is over. A story
+      // that is only locked can reopen after a takedown, so it doesn't count.
+      const stale = st.status == stories.story_status.STATUS_FINALIZED || st.status == stories.story_status.STATUS_ARCHIVED ||
+        seg.status != stories.segment_status.SEGMENT_ACTIVE || !Arrays.equal(sug.base_hash!, hash) || sug.base_versions != seg.version_count;
       if (Arrays.equal(account, seg.author!)) action = "declined";
       else if (Arrays.equal(account, sug.proposer!)) action = "withdrawn";
       else {
@@ -1282,11 +1303,18 @@ export class Stories extends StoriesAdmin {
       }
     }
     const wasWaiting = sug.status == SUGGESTION_WAITING;
-    sug.status = action == "cleared" ? SUGGESTION_CLEARED : action == "withdrawn" ? SUGGESTION_WITHDRAWN : SUGGESTION_DECLINED;
-    if (action == "cleared") sug.text = "";
+    if (action == "cleared") {
+      // An accepted or declined suggestion keeps its status; a waiting one is closed.
+      if (wasWaiting) sug.status = SUGGESTION_CLEARED;
+      sug.text = "";
+      sug.cleared = true;
+      sug.note = note;
+    } else {
+      sug.status = action == "withdrawn" ? SUGGESTION_WITHDRAWN : SUGGESTION_DECLINED;
+      sug.note = action == "declined" ? note : "";
+    }
     sug.closed_by = account;
     sug.closed_at = nowSeconds();
-    sug.note = action == "declined" || action == "cleared" ? note : "";
     this.suggestions.put(sKey, sug);
     if (wasWaiting && seg.pending_suggestions > 0) {
       seg.pending_suggestions = seg.pending_suggestions - 1;
