@@ -50,3 +50,5 @@ Writers accept version 3 the next time they write.
   AI label and citation, and the story guide) plus the whole existing suite.
 - Website: `web/test/wave2.test.js` (the ABI and who may do what with a suggestion).
 - Deploy tool: Terms with blanks or a wrong version number are refused.
+
+Stories release build of this branch (sha256 of `stories/build/release/contract.wasm`): `7b38df3c49e539b0a9fa76e3a821a26d19600b3c5eb6eb06d81ae03e84e117a9`. It replaces the audited `d0337155…35cf` only after the follow-up review.

@@ -1250,7 +1250,7 @@ export class Stories extends StoriesAdmin {
     const st = this.requireStory(args.story_id);
     System.require(st.visibility == stories.visibility.VISIBILITY_PUBLIC || this.isPrivileged(args.story_id, st, sug.proposer!) ||
       this.allowed.get(idAddrKey(args.story_id, sug.proposer!))!.value,
-      "STORIES: the person who suggested this is no longer one of this story's writers");
+    "STORIES: the person who suggested this is no longer one of this story's writers");
     const text = sug.text != null ? sug.text! : "";
     const version = this.ownEdit(args.story_id, args.seq, writer, text, args.expected_cost, args.max_ink,
       args.rights_confirmed, args.terms_version, VERSION_SUGGESTED, sug.proposer!, sug.citation != null ? sug.citation! : "", sug.ai_assisted,
