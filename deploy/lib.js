@@ -1372,7 +1372,9 @@ const SPONSOR_DEFAULT_CAPS = { "per-tx": "1", "per-account": "20", "per-day": "3
 // the user's own mana. Changing this list is a reviewed change.
 const SPONSORED_CALLS = {
   shop: ["buy_membership", "buy_pack", "claim_writer_ink", "claim_promo"],
-  stories: ["open_story", "contribute", "edit_segment", "remove_segment", "join_with_invite", "set_reading_place"],
+  stories: ["open_story", "contribute", "edit_segment", "remove_segment", "join_with_invite", "set_reading_place",
+    // Wave 2: suggesting a change is free in Ink, and accepting one is the writer's own edit.
+    "suggest_change", "accept_suggestion"],
 };
 
 /** A contract method's entry point: the first 4 bytes of sha256(name), as the contract build and web/scripts/build-abi.mjs make it. */
@@ -1791,7 +1793,25 @@ function preparedTargets(checked) {
   return checked.ops.map((o, i) => terminalSafe((i + 1) + ". " + o.contract + " " + o.contractId + " ." + o.method));
 }
 
+/**
+ * Terms of Use go on chain by fingerprint, so they can't be fixed after: refuse
+ * a file that still has a fill-in slot ({{OPERATOR}}, {{STATE}}...) or whose
+ * own "Version N." line doesn't match the version being published.
+ */
+function checkTermsText(text, version) {
+  const slots = [...new Set(String(text).match(/\{\{[A-Z_]+\}\}/g) || [])];
+  if (slots.length) {
+    fail("The Terms file still has blanks to fill in: " + slots.join(", ") + ". Replace each one with the real value (operator, state, " +
+      "contact email, copyright agent), have the text reviewed, then publish. Nothing was sent.");
+  }
+  const m = /^Version (\d+)\./m.exec(String(text));
+  if (!m || Number(m[1]) !== Number(version)) {
+    fail("The Terms file says " + (m ? "Version " + m[1] : "no version") + " but --version is " + version + ". They must match. Nothing was sent.");
+  }
+}
+
 module.exports = {
+  checkTermsText,
   STORIES_MINT_MASK,
   STORY_CATEGORIES,
   MEASURE_SIZES,

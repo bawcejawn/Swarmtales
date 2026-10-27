@@ -11,7 +11,7 @@ import { contracts, DEFAULT_PAYMENT, network, pinnedToken, SITE } from "../confi
 import { codeHashOf, encode, getProvider, read, verifyChain } from "../chain.js";
 import {
   AdminInputError, INK_AMOUNT_FIELDS, REASONS, SHOP_ITEMS, fromBaseUnits, numberMismatch, planAcceptAdmin, planAny, planAsset,
-  planBlock, planCampaignEnabled, planCampaignLimits, planCategory, planCategoryActive, planClearSummary, planFee, planHide,
+  planBlock, planCampaignEnabled, planCampaignLimits, planCategory, planCategoryActive, planClearGuide, planClearSuggestion, planClearSummary, planFee, planHide,
   planInkAmounts, planLimits, planMinContribution, planModeration, planPause, planPrice, planPromo, planPromoSwitch, planSetAdmin,
   planSourceNote, planTakedown, planTakeOver, planTerms, preparedFile, promoLink, SPONSOR_DEFAULT_CAPS, sponsorCommand, strikeChoices, toBaseUnits,
   ADMIN_METHODS, canAdminister, planAddToken, preparedRcLimit, ratePrice, RATE_ITEMS, starterPoemWarning,
@@ -480,6 +480,9 @@ function moderationSection(d, me) {
     }
   });
   const sid = input("");
+  const sugStory = input("");
+  const sugSeq = input("");
+  const sugId = input("");
   return section("Moderation: hide, take down, strikes, blocks", "A hide is reversible. A takedown clears the text for good (no Ink refund) and gives one strike; enough strikes block the wallet. It is bound to the text you read: if the part changes first, nothing happens.", [
     row(field("Story id", storyId), field("Part number", seq)),
     look,
@@ -496,7 +499,11 @@ function moderationSection(d, me) {
     h("h3", { class: "h4" }, ["A story"]),
     row(field("Story id", sid)),
     row(actionButton("Clear its summary", () => planClearSummary({ actor: me || d.storiesCfg.admin, storyId: sid.value })),
+      actionButton("Clear its notes for writers", () => planClearGuide({ actor: me || d.storiesCfg.admin, storyId: sid.value })),
       actionButton("Take over its final edit", () => planTakeOver(sid.value))),
+    h("h3", { class: "h4" }, ["A suggested change"]),
+    row(field("Story id", sugStory), field("Part", sugSeq), field("Suggestion #", sugId)),
+    row(actionButton("Clear it (wipes its text)", () => planClearSuggestion({ actor: me || d.storiesCfg.admin, storyId: sugStory.value, seq: sugSeq.value, suggestionId: sugId.value, noteText: note.value }), { danger: true })),
     h("p", { class: "meta small" }, ["Publishing a new book link after a takedown in a finished book: use node deploy/deploy.js replace-pdf, which recomputes the book's text hash from the chain."]),
   ]);
 }

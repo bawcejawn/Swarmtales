@@ -85,6 +85,8 @@ export function storyGuide(id, story, chapters, me, flags, writers) {
       status,
     ]));
   }
+  // Notes for writers and who the story is looking for (Wave 2).
+  append(box, writersNotes(id, story, me, flags));
   append(box,
     h("h3", { class: "guide-h" }, ["Characters"]),
     characters.length
@@ -95,4 +97,53 @@ export function storyGuide(id, story, chapters, me, flags, writers) {
       : h("p", { class: "meta small" }, ["Names appear here as the story mentions them."]),
     h("p", { class: "meta small" }, ["Found automatically in the text, so it can miss or mix up a name."]));
   return box;
+}
+
+/**
+ * The opener's notes for writers (characters, world, tone), the "looking for"
+ * line that lists the story under Seeking writers, and the blind round switch.
+ * Shown to everyone; the opener and editors edit them.
+ */
+function writersNotes(id, story, me, flags) {
+  const canEdit = !!me && [1, 2, 3].includes(Number(story.status)) && (story.opener === me || !!(flags && flags.editor));
+  const isOpener = !!me && story.opener === me;
+  const out = h("div", { class: "writers-notes" }, [
+    h("h3", { class: "guide-h" }, ["Notes for writers"]),
+    story.wanted ? h("p", { class: "wanted-line" }, [h("b", {}, ["Looking for: "]), story.wanted]) : null,
+    story.notes
+      ? h("p", { class: "body-2 small guide-notes" }, [story.notes])
+      : h("p", { class: "meta small" }, [canEdit ? "Add the characters, world and tone writers should know." : "No notes yet."]),
+  ]);
+  if (!canEdit) return out;
+  const notes = h("textarea", { rows: "6", maxlength: "3000" });
+  notes.value = story.notes || "";
+  const wanted = h("input", { type: "text", maxlength: "140", placeholder: "e.g. a villain's point of view; someone who writes dialogue" });
+  wanted.value = story.wanted || "";
+  const blind = h("input", { type: "checkbox", disabled: isOpener ? null : true });
+  blind.checked = !!story.blind;
+  const status = statusBox();
+  const save = h("button", { type: "button", class: "btn btn-primary btn-small" }, ["Save notes"]);
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    try {
+      const op = await encode("stories", "set_story_guide", {
+        account: me, story_id: String(id), notes: notes.value.trim(), wanted: wanted.value.trim(), blind: blind.checked,
+      });
+      if (await send([op], status)) renderPage();
+    } catch (error) {
+      failure(status, error);
+    } finally {
+      save.disabled = false;
+    }
+  });
+  append(out, h("details", { class: "more-options guide-edit" }, [
+    h("summary", {}, [story.notes || story.wanted ? "Edit the notes" : "Write notes for writers"]),
+    h("p", { class: "meta small" }, ["The opener and editors keep these. Notes up to 3,000 characters; the looking-for line up to 140, and it lists the story under \u201cSeeking writers\u201d in Discover."]),
+    notes,
+    h("label", { class: "field" }, [h("span", {}, ["Looking for"]), wanted]),
+    h("label", { class: "check" }, [blind, "Blind round: writers see only the newest part until the story is finished" + (isOpener ? "" : " (only the opener can change this)")]),
+    h("div", { class: "actions" }, [save]),
+    status,
+  ]));
+  return out;
 }

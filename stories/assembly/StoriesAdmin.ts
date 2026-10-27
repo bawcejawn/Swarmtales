@@ -184,6 +184,10 @@ export class StoriesAdmin extends StoriesBase {
     // removed (AB-032). MAX_VERSIONS bounds this loop.
     for (let v: u32 = 1; v <= seg.version_count; v++) this.versions.remove(versionKey(args.story_id, args.seq, v));
     seg.version_count = 0;
+    // And every suggestion made on it (at most MAX_SUGGESTIONS, Wave 2).
+    for (let i: u32 = 1; i <= seg.suggestion_count; i++) this.suggestions.remove(versionKey(args.story_id, args.seq, i));
+    seg.suggestion_count = 0;
+    seg.pending_suggestions = 0;
     seg.taken_down = true;
     seg.moderation_reason = args.reason;
     this.segments.put(key, seg);

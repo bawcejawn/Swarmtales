@@ -502,3 +502,11 @@ test("I-7: a warning when a Poem's starter Ink is worth more than a Poem costs (
     assert.ok(body.indexOf("warnStarterPoem(") > 0 && body.indexOf("warnStarterPoem(") < body.indexOf("dryRunThenSend("), fn);
   }
 });
+
+test("set-terms: a Terms file with blanks, or a different version number, is refused", () => {
+  assert.throws(() => lib.checkTermsText("Version 3. Run by {{OPERATOR}} under {{STATE}} law.", 3), /\{\{OPERATOR\}\}, \{\{STATE\}\}/);
+  assert.throws(() => lib.checkTermsText("Version 2. All filled in.", 3), /says Version 2 but --version is 3/);
+  assert.doesNotThrow(() => lib.checkTermsText("# Terms\n\nVersion 3. All filled in.", 3));
+  const v3 = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "..", "web", "public", "terms", "v3.md"), "utf8");
+  assert.throws(() => lib.checkTermsText(v3, 3), /blanks to fill in/, "the v3 draft can't be published until its blanks are filled");
+});

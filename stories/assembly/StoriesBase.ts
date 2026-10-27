@@ -3,7 +3,7 @@
 // else); see the top of Stories.ts for what the contract does.
 import { System, Storage, authority, Protobuf, SafeMath, Crypto, StringBytes, Arrays } from "@koinos/sdk-as";
 import { stories } from "./proto/stories";
-import { CONFIG_SPACE_ID, LOCK_SPACE_ID, STORIES_SPACE_ID, SEGMENTS_SPACE_ID, EDITORS_SPACE_ID, ALLOWED_SPACE_ID, INVITES_SPACE_ID, CONTRIBUTOR_TOTALS_SPACE_ID, SURVIVING_TOTALS_SPACE_ID, TRIAL_USED_SPACE_ID, OPEN_COUNT_SPACE_ID, OPENER_COUNT_SPACE_ID, OPENER_LIST_SPACE_ID, CATEGORY_COUNT_SPACE_ID, CATEGORY_LIST_SPACE_ID, CATEGORY_MEMBER_SPACE_ID, AUTHOR_COUNT_SPACE_ID, AUTHOR_LIST_SPACE_ID, CATEGORIES_SPACE_ID, REPORTS_SPACE_ID, TEXT_HASHES_SPACE_ID, TERMS_ACCEPTED_SPACE_ID, ACCOUNT_STATUS_SPACE_ID, READING_PLACE_SPACE_ID, READING_COUNT_SPACE_ID, READING_LIST_SPACE_ID, VERSIONS_SPACE_ID, REMOVED_SPACE_ID, PART_EDITORS_SPACE_ID, PART_CHANGERS_SPACE_ID, LIVE_PARTS_SPACE_ID, VERSION_ORIGINAL, VERSION_REMOVED, VERSION_EDITED, WRITER_VERSION_ROOM, MAX_VERSIONS, ADDRESS_LENGTH, CITATION_CHANGER_ROOM, SIGNATURE_LENGTH, INVITE_DOMAIN, DEFAULT_MIN_CONTRIBUTION, MAX_SKIP_PER_CALL, DEFAULT_STRIKE_LIMIT, DEFAULT_CAP, DEFAULT_TRIAL, DEFAULT_OPEN_LIMIT, DEFAULT_ARCHIVE_DAYS, DEFAULT_INACTIVITY_DAYS, INK_BURN_ENTRY, INK_MINT_ENTRY, SHOP_MEMBERSHIP_ENTRY, SHOP_PROMO_ENTRY, BURN_CONTRIBUTION, MINT_REFUND, SHOP_TIER_WRITER } from "./lib/constants";
+import { CONFIG_SPACE_ID, LOCK_SPACE_ID, STORIES_SPACE_ID, SEGMENTS_SPACE_ID, EDITORS_SPACE_ID, ALLOWED_SPACE_ID, INVITES_SPACE_ID, CONTRIBUTOR_TOTALS_SPACE_ID, SURVIVING_TOTALS_SPACE_ID, TRIAL_USED_SPACE_ID, OPEN_COUNT_SPACE_ID, OPENER_COUNT_SPACE_ID, OPENER_LIST_SPACE_ID, CATEGORY_COUNT_SPACE_ID, CATEGORY_LIST_SPACE_ID, CATEGORY_MEMBER_SPACE_ID, AUTHOR_COUNT_SPACE_ID, AUTHOR_LIST_SPACE_ID, CATEGORIES_SPACE_ID, REPORTS_SPACE_ID, TEXT_HASHES_SPACE_ID, TERMS_ACCEPTED_SPACE_ID, ACCOUNT_STATUS_SPACE_ID, READING_PLACE_SPACE_ID, READING_COUNT_SPACE_ID, READING_LIST_SPACE_ID, VERSIONS_SPACE_ID, REMOVED_SPACE_ID, PART_EDITORS_SPACE_ID, PART_CHANGERS_SPACE_ID, LIVE_PARTS_SPACE_ID, SUGGESTIONS_SPACE_ID, VERSION_ORIGINAL, VERSION_REMOVED, VERSION_EDITED, VERSION_SUGGESTED, WRITER_VERSION_ROOM, MAX_VERSIONS, ADDRESS_LENGTH, CITATION_CHANGER_ROOM, SIGNATURE_LENGTH, INVITE_DOMAIN, DEFAULT_MIN_CONTRIBUTION, MAX_SKIP_PER_CALL, DEFAULT_STRIKE_LIMIT, DEFAULT_CAP, DEFAULT_TRIAL, DEFAULT_OPEN_LIMIT, DEFAULT_ARCHIVE_DAYS, DEFAULT_INACTIVITY_DAYS, INK_BURN_ENTRY, INK_MINT_ENTRY, SHOP_MEMBERSHIP_ENTRY, SHOP_PROMO_ENTRY, BURN_CONTRIBUTION, MINT_REFUND, SHOP_TIER_WRITER } from "./lib/constants";
 import { u64Key, u32Key, join, pairKey, versionKey, idAddrKey, addrIdxKey, u32IdxKey, u32IdKey, sha256, foldHash } from "./lib/keys";
 import { requireAddress } from "./lib/text";
 import { nowSeconds, requireSigner, resultIsFalse } from "./lib/rules";
@@ -56,6 +56,8 @@ export class StoriesBase {
   // (story, wallet) -> how many live parts the wallet wrote there. "A current
   // writer" means owning one (AB-066).
   liveParts: Storage.Map<Uint8Array, stories.uint32>;
+  // Suggested changes (Wave 2), keyed like versions: story, part, id.
+  suggestions: Storage.Map<Uint8Array, stories.suggestion>;
   // How many removed segments this call may still fold in (fix M2).
   skipBudget: u32 = MAX_SKIP_PER_CALL;
 
@@ -100,6 +102,7 @@ export class StoriesBase {
     this.partEditors = new Storage.Map(id, PART_EDITORS_SPACE_ID, stories.boole.decode, stories.boole.encode, () => new stories.boole(false));
     this.partChangers = new Storage.Map(id, PART_CHANGERS_SPACE_ID, stories.address_list.decode, stories.address_list.encode, () => new stories.address_list());
     this.liveParts = new Storage.Map(id, LIVE_PARTS_SPACE_ID, stories.uint32.decode, stories.uint32.encode, () => new stories.uint32(0));
+    this.suggestions = new Storage.Map(id, SUGGESTIONS_SPACE_ID, stories.suggestion.decode, stories.suggestion.encode, null);
   }
 
   // ===================================================================
@@ -301,6 +304,10 @@ export class StoriesBase {
       seg.version_count = 1;
     }
     let version = seg.version_count + 1;
+    // An accepted suggestion keeps its own version (it records who suggested
+    // it), so it must fit in the writer's room; the writer can still edit.
+    System.require(kind != VERSION_SUGGESTED || version <= WRITER_VERSION_ROOM,
+      "STORIES: this part has too many versions to accept a suggestion; edit it yourself instead");
     if (version > WRITER_VERSION_ROOM && kind == VERSION_EDITED) {
       const newest = this.versions.get(versionKey(storyId, seq, seg.version_count));
       if (newest != null && newest.kind == VERSION_EDITED) version = seg.version_count;

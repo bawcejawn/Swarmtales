@@ -128,6 +128,17 @@ Every action takes the acting wallet as an argument and requires its signature. 
 
 **Versions.** Every change to a part's text is kept as a version naming who made it: the original, the writer's edits (from version 99 on, an edit replaces the writer's own newest version), each paid change, a removal, and the final edit. A part has at most 220 versions, so a takedown can always wipe them in one call. `get_versions` returns at most 5 per call and stops at about 64 KB.
 
+### 5.2b Suggestions and the story guide (Wave 2, October 2026)
+| Entry point | Who | Cost | Rules |
+|---|---|---|---|
+| `suggest_change` | anyone who may write in the story (checked like new text), not blocked, not the part's writer | free | Story OPEN, part active and not hidden; rules and cap of new text; rights confirmation and current Terms; at most 5 waiting suggestions per part (one per wallet) and 20 ever, so a takedown can always wipe them in one call. Stores the part's `text_hash` and `version_count`. |
+| `accept_suggestion` | the part's writer | as the writer's own edit: added letters cost the writer Ink (at most `max_ink`), cuts refund as for an edit | Refused if the part changed since the suggestion (hash or version count). Kept as version kind 6 with `by` = the proposer, who is recorded as a changer (strikes, AB-028); their AI label and citation carry over. Needs a version slot within the writer's room (`WRITER_VERSION_ROOM`), so the version bound holds. |
+| `decline_suggestion` | the writer (declines, with a note), the proposer (withdraws), anyone once it is stale (part changed, removed, or story not open), the admin or moderator (clears it and wipes its text, also while paused) | free | Frees a waiting slot. |
+| `get_suggestions` | read | | 5 per call, about 64 KB, `next`; empty for a part that was taken down. |
+| `set_story_guide` | opener or editor; only the opener changes `blind` | free | Notes up to 3,000 characters, the looking-for line up to 140 (lists the story under Seeking writers), the blind round flag. Open, locked or in final edit. The admin or moderator clears notes and wanted (also while paused). |
+
+A takedown also wipes every suggestion on the part. Suggested text is not checked by the copy checker until it is accepted (it then is the part's text), and moderation can clear any suggestion at once.
+
 ### 5.3 Closing and the final edit
 | Entry point | Who | Rules |
 |---|---|---|
@@ -200,6 +211,8 @@ Every action takes the acting wallet as an argument and requires its signature. 
 - Close fees: closing has been free since October 2026.
 
 ## 10. History (short)
+
+- **Wave 2 (October 2026):** suggested changes (`suggest_change`, `accept_suggestion`, `decline_suggestion`, `get_suggestions`) and the story guide (`set_story_guide`: notes, looking-for, blind round). Needs a short follow-up review before mainnet.
 
 - **19 October 2026:** design decisions (UTF-16 counting, invites as signed links, Sponsor contract separate).
 - **October 2026 security review:** direct calls only (H1), signed invite links (H2), bounded final-edit skips (M2).

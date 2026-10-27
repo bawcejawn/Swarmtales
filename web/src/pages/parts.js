@@ -13,6 +13,7 @@ import { num } from "../app/format.js";
 import { inviteOnly } from "../app/story.js";
 import { changePanel, editPanel, removePanel } from "./editing.js";
 import { composer } from "./composer.js";
+import { MAX_SUGGESTIONS, suggestionsView, suggestPanel } from "./suggestions.js";
 import { hiddenHelp, REASON_LABELS, reportControl } from "./moderation.js";
 
 export function segmentView(block, story, storyId, ctx) {
@@ -50,6 +51,7 @@ export function segmentView(block, story, storyId, ctx) {
     }
     if (segment.ai_assisted) notes.push(h("span", { class: "tag-ai" }, ["Written with AI help"]));
     if (Number(segment.version_count || 0) > 1) notes.push(versionsView(storyId, block));
+    if (Number(segment.suggestion_count || 0) > 0) notes.push(suggestionsView(storyId, story, block));
     if (segment.citation) notes.push(h("span", { class: "source-note" }, ["Source: " + segment.citation]));
     if (segment.source_note) {
       notes.push(h("span", { class: "source-note", title: "Added automatically by SwarmTales' copy checker" }, [segment.source_note]));
@@ -98,6 +100,11 @@ export function segmentView(block, story, storyId, ctx) {
       append(tools, h("button", { type: "button", class: "text-button tool", title: "Change this part: you pay for the letters you add and remove, \u00d7" + times + ". The earlier version stays readable." }, ["Change (\u00d7" + times + ")"]));
       tools.lastChild.addEventListener("click", () => toggle("change", () => changePanel(storyId, story, block, ctx.active)));
     }
+    // Suggest a change: free, and the part's writer decides (Wave 2).
+    if (open && ctx.canAdd && !segment.hidden && !ownPart && me && Number(segment.suggestion_count || 0) < MAX_SUGGESTIONS) {
+      append(tools, h("button", { type: "button", class: "text-button tool", title: "Propose new wording; the part's writer accepts or declines. Free." }, ["Suggest a change"]));
+      tools.lastChild.addEventListener("click", () => toggle("suggest", () => suggestPanel(storyId, block)));
+    }
     if (!segment.hidden && typeof window !== "undefined" && window.speechSynthesis) {
       append(tools, h("button", { type: "button", class: "text-button tool", onClick: () => ctx.listen && ctx.listen.startFrom(block.seq) }, ["Listen from here"]));
     }
@@ -137,6 +144,7 @@ function versionLabel(v) {
     case 3: return "removed by " + shortAddress(v.by);
     case 4: return "edited by its writer, " + shortAddress(v.by);
     case 5: return "final edit by " + shortAddress(v.by);
+    case 6: return "suggested by " + shortAddress(v.by) + ", accepted by its writer";
     default: return "changed by " + shortAddress(v.by);
   }
 }

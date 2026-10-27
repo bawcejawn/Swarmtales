@@ -124,9 +124,9 @@
 
 import { System, Protobuf, SafeMath, Arrays } from "@koinos/sdk-as";
 import { stories } from "./proto/stories";
-import { MAX_SUMMARY, VERSION_CHANGED, VERSION_REMOVED, VERSION_EDITED, VERSION_FINAL, MIN_CHANGE_UNITS, MAX_PAID_CHANGES, MAX_VERSION_READ, MAX_VERSION_READ_BYTES, HIDDEN_BY_REPORTS, DAY_SECONDS, MAX_EDITORS, MAX_ACCOUNTS_PER_CALL, MAX_FREE_CHAPTERS, MAX_BATCH_ITEMS, MAX_BATCH_UNITS, MAX_SEGMENT_READ, MAX_SEGMENT_READ_BYTES, MAX_INVITE_USES, MAX_INVITE_DAYS, MAX_PDF_URI, MIN_PDF_HASH, MAX_PDF_HASH, INK_BURN_ENTRY, SHOP_OPEN_FEE_ENTRY, BURN_CONTRIBUTION } from "./lib/constants";
+import { MAX_SUMMARY, MAX_NOTES, MAX_WANTED, MAX_PENDING_SUGGESTIONS, MAX_SUGGESTIONS, MAX_SUGGESTION_READ, SUGGESTION_WAITING, SUGGESTION_ACCEPTED, SUGGESTION_DECLINED, SUGGESTION_WITHDRAWN, SUGGESTION_CLEARED, VERSION_SUGGESTED, VERSION_CHANGED, VERSION_REMOVED, VERSION_EDITED, VERSION_FINAL, MIN_CHANGE_UNITS, MAX_PAID_CHANGES, MAX_VERSION_READ, MAX_VERSION_READ_BYTES, HIDDEN_BY_REPORTS, DAY_SECONDS, MAX_EDITORS, MAX_ACCOUNTS_PER_CALL, MAX_FREE_CHAPTERS, MAX_BATCH_ITEMS, MAX_BATCH_UNITS, MAX_SEGMENT_READ, MAX_SEGMENT_READ_BYTES, MAX_INVITE_USES, MAX_INVITE_DAYS, MAX_PDF_URI, MIN_PDF_HASH, MAX_PDF_HASH, INK_BURN_ENTRY, SHOP_OPEN_FEE_ENTRY, BURN_CONTRIBUTION } from "./lib/constants";
 import { u64Key, u32Key, pairKey, versionKey, idAddrKey, addrIdxKey, u32IdxKey, reportKey, foldHash } from "./lib/keys";
-import { str, utf8, isLowSurrogate, requireText, requireTitle, isPlainAscii, isAddress, requireAddress, requireCitation } from "./lib/text";
+import { str, utf8, isLowSurrogate, requireText, requireTitle, isPlainAscii, isAddress, requireAddress, requireCitation, requireNote } from "./lib/text";
 import { allowance, closeReady, isKnownKind, kindMin, kindMax, minContribution, openMultiplier, listLimit, requireVisibility, requirePool, cutRefund, refundable, clearSegment, nowSeconds, requireSigner } from "./lib/rules";
 import { StoriesAdmin } from "./StoriesAdmin";
 
@@ -662,12 +662,23 @@ export class Stories extends StoriesAdmin {
     this.requireNotPaused();
     const editor = requireAddress(args.editor, "STORIES: invalid editor address");
     requireSigner(editor, "STORIES: editor has not authorized this");
+    this.ownEdit(args.story_id, args.seq, editor, str(args.new_text), args.expected_cost, args.max_ink,
+      args.rights_confirmed, args.terms_version, VERSION_EDITED, editor, "", false, null);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  // The part's writer changes its text: their own edit, or a suggestion they
+  // accept (Wave 2). `kind` and `by` say what the kept version records.
+  private ownEdit(storyId: u64, seq: u64, editor: Uint8Array, text: string, expectedCost: u64, maxInk: u64,
+    rightsConfirmed: bool, termsVersion: u32, kind: u32, by: Uint8Array, citation: string, aiAssisted: bool,
+    proposer: Uint8Array | null = null): u32 {
     this.requireNotBlocked(editor);
     const cfg = this.config.get()!;
     const ink = requireAddress(cfg.ink, "STORIES: Ink contract is not set");
-    const st = this.requireStory(args.story_id);
+    const st = this.requireStory(storyId);
     System.require(st.status == stories.story_status.STATUS_OPEN, "STORIES: text can only be edited while the story is open");
-    const key = pairKey(args.story_id, args.seq);
+    const key = pairKey(storyId, seq);
     const seg = this.requireActiveSegment(key);
     // Only the part's own writer edits it here. Anyone else changes it with
     // revise_part, which costs Ink.
@@ -676,14 +687,13 @@ export class Stories extends StoriesAdmin {
     System.require(!seg.hidden, "STORIES: a hidden part can't be edited while it is checked; you can remove it instead");
     // A writer taken off a private story's allow-list can't change its text
     // there any more; it can still remove its parts for a refund (audit M-4).
-    this.requireMember(args.story_id, st, editor);
+    this.requireMember(storyId, st, editor);
     // Rewritten text is new text: the same rights confirmation and current
     // Terms as a new part (audit F-04).
-    this.requireRightsAndTerms(editor, args.rights_confirmed, args.terms_version, cfg);
+    this.requireRightsAndTerms(editor, rightsConfirmed, termsVersion, cfg);
 
-    const text = str(args.new_text);
     const newCost = <u64>requireText(text, true);
-    System.require(newCost == args.expected_cost, "STORIES: Ink cost does not match expected_cost");
+    System.require(newCost == expectedCost, "STORIES: Ink cost does not match expected_cost");
     const oldText = seg.text != null ? seg.text! : "";
     System.require(text != oldText, "STORIES: the text is unchanged");
     const oldCost = seg.current_cost;
@@ -699,44 +709,51 @@ export class Stories extends StoriesAdmin {
     const growth: u64 = newCost > oldCost ? newCost - oldCost : 0;
     // The page shows the price from the part as it was; if someone shortened
     // it since, the same text costs more, and the writer never agreed (AB-049).
-    System.require(growth <= args.max_ink, "STORIES: this edit now costs more Ink than you agreed to; reload the part and try again");
+    System.require(growth <= maxInk, "STORIES: this edit now costs more Ink than you agreed to; reload the part and try again");
     if (growth > 0) {
       System.require(nextUsed <= st.max_chars, "STORIES: not enough space left in this story");
-      this.checkWriter(args.story_id, st, editor, growth, cfg);
+      this.checkWriter(storyId, st, editor, growth, cfg);
     }
     const refund = cutRefund(seg, newCost);
     const now = nowSeconds();
-    this.keepVersion(args.story_id, args.seq, seg, oldText, VERSION_EDITED, editor, text, newCost, now, "", false);
-    const mint = this.settleRefund(args.story_id, st, seg, refund);
+    const version = this.keepVersion(storyId, seq, seg, oldText, kind, by, text, newCost, now, citation, aiAssisted);
+    const mint = this.settleRefund(storyId, st, seg, refund);
     seg.charged = SafeMath.add(seg.charged - refund, growth);
     if (growth > 0) {
       if (seg.fund_paid) seg.own_paid = SafeMath.add(seg.own_paid, growth);
-      const totalKey = idAddrKey(args.story_id, editor);
+      const totalKey = idAddrKey(storyId, editor);
       const total = this.contributorTotals.get(totalKey)!;
       total.value = SafeMath.add(total.value, growth);
       this.contributorTotals.put(totalKey, total);
       st.total_burned = SafeMath.add(st.total_burned, growth);
     }
     seg.text = text;
-    seg.text_hash = this.newTextHash(args.story_id, args.seq, text);
+    seg.text_hash = this.newTextHash(storyId, seq, text);
     seg.current_cost = newCost;
     seg.last_edited_by = editor;
     seg.last_edited_at = now;
+    if (proposer != null) {
+      // An accepted suggestion: its words came from someone else, so the
+      // part counts as changed by them (strikes, AB-028), and their AI label
+      // and citation carry over (AB-039).
+      this.recordChanger(key, seg, proposer, false);
+      if (aiAssisted) seg.ai_assisted = true;
+      if (citation.length > 0) seg.citation = citation;
+    }
     this.segments.put(key, seg);
 
     st.used_chars = nextUsed;
     this.touch(st, editor, true);
-    this.maybeAutoLock(args.story_id, st, editor);
-    this.putStory(args.story_id, st);
+    this.maybeAutoLock(storyId, st, editor);
+    this.putStory(storyId, st);
 
-    this.emitChange(args.story_id, args.seq, editor, oldCost, newCost, refund, false, false, seg.author!);
+    this.emitChange(storyId, seq, editor, oldCost, newCost, refund, false, false, seg.author!);
     if (growth > 0) {
-      const burn = new stories.ink_burn_call(editor, growth, BURN_CONTRIBUTION, "e:" + args.story_id.toString() + ":" + args.seq.toString());
+      const burn = new stories.ink_burn_call(editor, growth, BURN_CONTRIBUTION, "e:" + storyId.toString() + ":" + seq.toString());
       this.callOut(ink, INK_BURN_ENTRY, Protobuf.encode(burn, stories.ink_burn_call.encode), [editor], "STORIES: Ink burn failed");
     }
-    if (mint > 0) this.refundInk(ink, seg.author!, mint, args.story_id, args.seq);
-    this.leave();
-    return new stories.empty_object();
+    if (mint > 0) this.refundInk(ink, seg.author!, mint, storyId, seq);
+    return version;
   }
 
   remove_segment(args: stories.remove_segment_arguments): stories.empty_object {
@@ -1147,6 +1164,205 @@ export class Stories extends StoriesAdmin {
     if (mint > 0) this.refundInk(ink, owner, mint, args.story_id, args.seq);
     this.leave();
     return new stories.uint32(version);
+  }
+
+  // ===================================================================
+  // Suggestions (Wave 2): propose a change, the part's writer decides
+  // ===================================================================
+
+  suggest_change(args: stories.suggest_change_arguments): stories.uint32 {
+    this.enter();
+    this.requireNotPaused();
+    const proposer = requireAddress(args.proposer, "STORIES: invalid address");
+    requireSigner(proposer, "STORIES: proposer has not authorized this");
+    this.requireNotBlocked(proposer);
+    const cfg = this.config.get()!;
+    const st = this.requireStory(args.story_id);
+    System.require(st.status == stories.story_status.STATUS_OPEN, "STORIES: changes can only be suggested while the story is open");
+    const key = pairKey(args.story_id, args.seq);
+    const seg = this.requireActiveSegment(key);
+    System.require(!seg.hidden, "STORIES: a hidden part can't be changed while it is checked");
+    System.require(!Arrays.equal(proposer, seg.author!), "STORIES: this is your own part; edit it instead of suggesting");
+    // Whoever may write here may suggest (no Ink is used now).
+    this.checkWriter(args.story_id, st, proposer, 0, cfg);
+    this.requireRightsAndTerms(proposer, args.rights_confirmed, args.terms_version, cfg);
+    const citation = requireCitation(args.citation);
+    const text = str(args.text);
+    const cost = <u64>requireText(text, true);
+    System.require(cost <= <u64>cfg.contribution_cap || cost <= seg.current_cost, "STORIES: text is over the per-submission cap");
+    System.require(text != (seg.text != null ? seg.text! : ""), "STORIES: the text is unchanged");
+    System.require(seg.pending_suggestions < MAX_PENDING_SUGGESTIONS, "STORIES: this part already has 5 suggestions waiting for its writer");
+    System.require(seg.suggestion_count < MAX_SUGGESTIONS, "STORIES: this part has had the most suggestions it can take");
+    // One waiting suggestion per wallet and part.
+    for (let i: u32 = 1; i <= seg.suggestion_count; i++) {
+      const other = this.suggestions.get(versionKey(args.story_id, args.seq, i));
+      System.require(other == null || other.status != SUGGESTION_WAITING || !Arrays.equal(other.proposer!, proposer),
+        "STORIES: you already have a suggestion waiting on this part; withdraw it first");
+    }
+    const id = seg.suggestion_count + 1;
+    const hash = seg.text_hash != null ? seg.text_hash! : new Uint8Array(0);
+    const sug = new stories.suggestion(id, proposer, text, hash, seg.version_count, citation, args.ai_assisted, nowSeconds(),
+      SUGGESTION_WAITING, null, 0, "", cost);
+    this.suggestions.put(versionKey(args.story_id, args.seq, id), sug);
+    seg.suggestion_count = id;
+    seg.pending_suggestions = seg.pending_suggestions + 1;
+    this.segments.put(key, seg);
+    this.emitSuggestion(args.story_id, args.seq, id, proposer, "suggested", proposer, 0, seg.author!);
+    this.leave();
+    return new stories.uint32(id);
+  }
+
+  accept_suggestion(args: stories.accept_suggestion_arguments): stories.uint32 {
+    this.enter();
+    this.requireNotPaused();
+    const writer = requireAddress(args.writer, "STORIES: invalid writer address");
+    requireSigner(writer, "STORIES: writer has not authorized this");
+    const key = pairKey(args.story_id, args.seq);
+    const seg = this.requireActiveSegment(key);
+    System.require(Arrays.equal(writer, seg.author!), "STORIES: only the part's writer may accept a suggestion");
+    const sKey = versionKey(args.story_id, args.seq, args.id);
+    const found = this.suggestions.get(sKey);
+    System.require(found != null, "STORIES: unknown suggestion");
+    const sug = found!;
+    System.require(sug.status == SUGGESTION_WAITING, "STORIES: that suggestion is no longer waiting");
+    // Accepting applies the exact text the proposer wrote to the exact text
+    // they saw: if the part changed since, it would undo that change.
+    const hash = seg.text_hash != null ? seg.text_hash! : new Uint8Array(0);
+    System.require(Arrays.equal(sug.base_hash!, hash) && sug.base_versions == seg.version_count,
+      "STORIES: the part changed since this was suggested; ask for a new suggestion");
+    // The proposer may have been blocked since.
+    this.requireNotBlocked(sug.proposer!);
+    const text = sug.text != null ? sug.text! : "";
+    const version = this.ownEdit(args.story_id, args.seq, writer, text, args.expected_cost, args.max_ink,
+      args.rights_confirmed, args.terms_version, VERSION_SUGGESTED, sug.proposer!, sug.citation != null ? sug.citation! : "", sug.ai_assisted,
+      sug.proposer);
+    sug.status = SUGGESTION_ACCEPTED;
+    sug.closed_by = writer;
+    sug.closed_at = nowSeconds();
+    this.suggestions.put(sKey, sug);
+    const after = this.segments.get(key)!;
+    after.pending_suggestions = after.pending_suggestions > 0 ? after.pending_suggestions - 1 : 0;
+    this.segments.put(key, after);
+    this.emitSuggestion(args.story_id, args.seq, args.id, writer, "accepted", sug.proposer!, version, writer);
+    this.leave();
+    return new stories.uint32(version);
+  }
+
+  decline_suggestion(args: stories.decline_suggestion_arguments): stories.empty_object {
+    this.enter();
+    const account = requireAddress(args.account, "STORIES: invalid address");
+    const key = pairKey(args.story_id, args.seq);
+    const segFound = this.segments.get(key);
+    System.require(segFound != null, "STORIES: unknown segment");
+    const seg = segFound!;
+    const sKey = versionKey(args.story_id, args.seq, args.id);
+    const found = this.suggestions.get(sKey);
+    System.require(found != null, "STORIES: unknown suggestion");
+    const sug = found!;
+    const note = requireNote(args.note);
+    let action = "";
+    if (this.isModeratorOrAdmin(account)) {
+      // Moderation: works while paused, on any suggestion, and wipes its text.
+      this.requireModeratorOrAdmin(account);
+      System.require(sug.status != SUGGESTION_CLEARED, "STORIES: that suggestion was already cleared");
+      action = "cleared";
+    } else {
+      this.requireNotPaused();
+      requireSigner(account, "STORIES: account has not authorized this");
+      System.require(sug.status == SUGGESTION_WAITING, "STORIES: that suggestion is no longer waiting");
+      const st = this.requireStory(args.story_id);
+      const hash = seg.text_hash != null ? seg.text_hash! : new Uint8Array(0);
+      const stale = st.status != stories.story_status.STATUS_OPEN || seg.status != stories.segment_status.SEGMENT_ACTIVE ||
+        !Arrays.equal(sug.base_hash!, hash) || sug.base_versions != seg.version_count;
+      if (Arrays.equal(account, seg.author!)) action = "declined";
+      else if (Arrays.equal(account, sug.proposer!)) action = "withdrawn";
+      else {
+        System.require(stale, "STORIES: only the part's writer or the person who suggested it may close this suggestion");
+        action = "closed";
+      }
+    }
+    const wasWaiting = sug.status == SUGGESTION_WAITING;
+    sug.status = action == "cleared" ? SUGGESTION_CLEARED : action == "withdrawn" ? SUGGESTION_WITHDRAWN : SUGGESTION_DECLINED;
+    if (action == "cleared") sug.text = "";
+    sug.closed_by = account;
+    sug.closed_at = nowSeconds();
+    sug.note = action == "declined" || action == "cleared" ? note : "";
+    this.suggestions.put(sKey, sug);
+    if (wasWaiting && seg.pending_suggestions > 0) {
+      seg.pending_suggestions = seg.pending_suggestions - 1;
+      this.segments.put(key, seg);
+    }
+    this.emitSuggestion(args.story_id, args.seq, args.id, account, action, sug.proposer!, 0, seg.author!);
+    this.leave();
+    return new stories.empty_object();
+  }
+
+  get_suggestions(args: stories.get_suggestions_arguments): stories.suggestion_list {
+    const out = new stories.suggestion_list();
+    const seg = this.segments.get(pairKey(args.story_id, args.seq));
+    if (seg == null || seg.taken_down) return out;
+    const limit = args.count == 0 || args.count > MAX_SUGGESTION_READ ? MAX_SUGGESTION_READ : args.count;
+    let id: u32 = args.from == 0 ? 1 : args.from;
+    let bytes: i32 = 0;
+    for (let n: u32 = 0; n < limit && id <= seg.suggestion_count; n++) {
+      const found = this.suggestions.get(versionKey(args.story_id, args.seq, id));
+      if (found != null) {
+        const size = utf8(found.text != null ? found.text! : "");
+        if (out.values.length > 0 && bytes + size > MAX_VERSION_READ_BYTES) break;
+        bytes += size;
+        out.values.push(found);
+      }
+      id++;
+    }
+    out.next = id <= seg.suggestion_count ? id : 0;
+    return out;
+  }
+
+  private emitSuggestion(storyId: u64, seq: u64, id: u32, by: Uint8Array, action: string, proposer: Uint8Array, version: u32,
+    author: Uint8Array): void {
+    const ev = new stories.suggestion_event(storyId, seq, id, by, action, proposer, version);
+    System.event("stories.suggestion_event", Protobuf.encode(ev, stories.suggestion_event.encode), [proposer, author]);
+  }
+
+  // ===================================================================
+  // The story guide (Wave 2): notes, who the story is looking for, blind round
+  // ===================================================================
+
+  set_story_guide(args: stories.set_story_guide_arguments): stories.empty_object {
+    this.enter();
+    const account = requireAddress(args.account, "STORIES: invalid address");
+    const st = this.requireStory(args.story_id);
+    const notes = str(args.notes);
+    const wanted = str(args.wanted);
+    let blind = args.blind;
+    if (notes.length == 0 && wanted.length == 0 && this.isModeratorOrAdmin(account)) {
+      // Moderation: clear the notes and the wanted line, even while paused.
+      // The blind round is the opener's choice and stays as it is.
+      this.requireModeratorOrAdmin(account);
+      blind = st.blind;
+    } else {
+      this.requireNotPaused();
+      requireSigner(account, "STORIES: account has not authorized this");
+      this.requireNotBlocked(account);
+      System.require(st.status == stories.story_status.STATUS_OPEN || st.status == stories.story_status.STATUS_LOCKED ||
+        st.status == stories.story_status.STATUS_EDITING, "STORIES: the guide can't change once the story is finished or archived");
+      System.require(this.isPrivileged(args.story_id, st, account), "STORIES: only the opener or an editor may change the story guide");
+      System.require(args.blind == st.blind || Arrays.equal(account, st.opener!), "STORIES: only the opener may switch the blind round on or off");
+    }
+    System.require(notes.length <= MAX_NOTES, "STORIES: the notes must be at most 3,000 characters");
+    System.require(wanted.length <= MAX_WANTED, "STORIES: the looking-for line must be at most 140 characters");
+    if (notes.length > 0) requireText(notes, false);
+    if (wanted.length > 0) requireText(wanted, false);
+    st.notes = notes;
+    st.wanted = wanted;
+    st.blind = blind;
+    st.guide_by = account;
+    st.guide_at = nowSeconds();
+    this.putStory(args.story_id, st);
+    const ev = new stories.guide_event(args.story_id, account, notes, wanted, blind);
+    System.event("stories.guide_event", Protobuf.encode(ev, stories.guide_event.encode), [account]);
+    this.leave();
+    return new stories.empty_object();
   }
 
   // "The story so far": the opener, an editor, or a current writer of the

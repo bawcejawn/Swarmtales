@@ -1784,6 +1784,7 @@ async function cmdSetTerms(args) {
   // Fingerprint the text with Unix line endings, whatever computer this runs
   // on, so it matches the file the website serves.
   const text = fs.readFileSync(f.file, "utf8").replace(/\r\n/g, "\n");
+  lib.checkTermsText(text, version);
   const hash = lib.sha256(Buffer.from(text, "utf8"));
   const { net, provider } = await connect(f);
   const cfg = await readOnly(provider, "stories", stories, "get_config");

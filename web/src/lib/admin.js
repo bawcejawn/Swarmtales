@@ -397,6 +397,23 @@ export function planClearSummary({ actor, storyId }) {
     "Clear story " + id + "'s summary");
 }
 
+/** Moderation (Wave 2): clear a story's notes and looking-for line (the contract keeps its blind round setting). */
+export function planClearGuide({ actor, storyId, blind }) {
+  const id = whole(storyId, "Story id", 1, null);
+  return call("stories", "set_story_guide", { account: requireAddress(actor, "Your admin address"), story_id: id.toString(), notes: "", wanted: "", blind: !!blind },
+    "Clear story " + id + "'s notes for writers and looking-for line");
+}
+
+/** Moderation (Wave 2): clear a suggested change; its text is wiped from the contract. */
+export function planClearSuggestion({ actor, storyId, seq, suggestionId, noteText }) {
+  const id = whole(storyId, "Story id", 1, null);
+  const s = whole(seq, "Part number", 1, null);
+  const n = whole(suggestionId, "Suggestion number", 1, 20);
+  return call("stories", "decline_suggestion", {
+    account: requireAddress(actor, "Your admin address"), story_id: id.toString(), seq: s.toString(), id: Number(n), note: note(noteText),
+  }, "Clear suggestion #" + n + " on story " + id + " part " + s + " (its text is wiped)");
+}
+
 export function planTakeOver(storyId) {
   const id = whole(storyId, "Story id", 1, null);
   return call("stories", "admin_take_over", { story_id: id.toString() }, "Take over story " + id + "'s final edit");

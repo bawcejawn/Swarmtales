@@ -48,6 +48,7 @@ export function storyCard(row, excerptText, opts = {}) {
     ]),
     h("h3", { class: "card-title" }, [story.title || "Untitled"]),
     opts.badge ? h("p", { class: "new-badge" }, [opts.badge]) : null,
+    story.wanted && Number(story.status) === 1 ? h("p", { class: "card-wanted" }, ["Looking for: " + clip(story.wanted, 90)]) : null,
     line,
     h("p", { class: "meta small card-stats" }, [[
       plural(Number(story.segment_count || 0), "part"),
@@ -67,6 +68,8 @@ export function pickFeatured(rows) {
 
 const TABS = [
   ["open", "Open for writing", (s) => Number(s.status) === 1],
+  // Wave 2: stories whose opener says who they're looking for.
+  ["seeking", "Seeking writers", (s) => Number(s.status) === 1 && !!String(s.wanted || "").trim()],
   ["finishing", "Being finished", (s) => Number(s.status) === 2 || Number(s.status) === 3],
   ["finished", "Finished", (s) => Number(s.status) === 4],
 ];
