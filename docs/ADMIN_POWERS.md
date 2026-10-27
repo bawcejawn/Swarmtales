@@ -1,6 +1,6 @@
 # What the SwarmTales admins and keys can do
 
-SwarmTales runs on three Koinos contracts: **Ink** (the writing allowance), **Shop** (payments, memberships, promos) and **Stories** (the books and stories). This page lists, in plain words, everything a privileged key can do. It is public on purpose: if a power is not on this page, no key has it.
+SwarmTales runs on Koinos contracts: **Ink** (the writing allowance), **Shop** (payments, memberships, promos), **Stories** (the books and stories) and, from Wave 3, **Editions** (keepsake editions of finished books). This page lists, in plain words, everything a privileged key can do. It is public on purpose: if a power is not on this page, no key has it.
 
 Last checked against the code: October 2026, after the 2026-10 mainnet audit fixes. The table in "What works at each stage" is mirrored by `stories/assembly/__tests__/Stories.status-table.spec.ts`: if the code and this page ever disagree, that test fails.
 
@@ -11,6 +11,7 @@ Last checked against the code: October 2026, after the 2026-10 mainnet audit fix
 | Ink contract key | Founder, offline | The key of the address Ink was uploaded to |
 | Shop contract key | Founder, offline | The key of the address Shop was uploaded to |
 | Stories contract key | Founder, offline | The key of the address Stories was uploaded to |
+| Editions contract key | Founder, offline | The key of the address Editions was uploaded to |
 | Admin (one per contract) | 2-of-3 multisig wallet on mainnet | Runs day-to-day settings |
 | Moderator | The automated copy checker | Hides parts, unhides parts the admin didn't hide, writes source notes, clears summaries (details below) |
 | Treasury, founder | Founder | Only receive payments. They have no powers in the contracts |
@@ -100,6 +101,19 @@ What the sponsor's mana can still pay for, within the caps (audit L-13, L-14):
 - **Other code in a sponsored transaction.** A user whose wallet is a contract wallet runs its own authorize code, and a listed payment token runs its own code, inside a transaction the sponsor pays for. The per-transaction cap (about 1 mana) bounds what that costs.
 - **A burst of pending transactions.** The node doesn't count sponsored transactions still waiting for a block against the daily caps, so a burst can tie up the sponsor's free mana for about two minutes. Keep the sponsor's KOIN well above five times the daily cap; the website retries with the user's own mana when a sponsored transaction is refused, and the hourly sponsor alert (`.github/workflows/sponsor-alert.yml`) warns when the day's use passes 80% of the cap or the sponsor's mana falls below five times it.
 - **Filling the day's cap.** Anyone can make new wallets, so a determined spammer can still use up the day's budget with listed actions; the alert above says so, and everyone then pays their own mana until 00:00 UTC.
+
+## Editions admin (Wave 3)
+
+Editions (`editions/`) makes keepsake editions of finished books. Its admin can:
+
+- Set the Stories and Shop addresses **once**, and change the treasury address.
+- Accept a payment token (it must also be on in Shop) with a price range, or turn it off.
+- Set the treasury's share of each Collector's Edition sale, **at most 30%** (20% at launch).
+- Set the website link shown in each edition's metadata.
+- **Pause** sales and claims of writers' editions. Writers can still collect earnings, and holders can still give away or burn editions, while paused.
+- **Propose a new admin**, who must accept.
+
+The Editions admin **cannot** mint editions, move or burn anyone's edition, change a book's opener or shares, or take the money kept for writers: there is no withdraw, and the contract pays out only to the writer a claim names. The Editions contract key can replace its code, like every contract key.
 
 ## What works at each stage
 

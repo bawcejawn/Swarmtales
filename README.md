@@ -15,7 +15,7 @@ Three contracts exist in this repository and have passing tests: **Ink**, **Shop
 | A practice stablecoin inside this repo | Not included. On testnet, deploy the official Koinos token and point Shop at it |
 | Stories (the books themselves, trials, open-project limits, archive, refunds, moderation) | Built and tested in the mock chain. The 2026-10 audit fixes need a fresh testnet deploy (the testnet is being reset) |
 | Sponsor (paying Mana for someone else) | Optional, later, a separate contract, OFF by default. Not in Stories |
-| Books NFT | Planned |
+| Editions (keepsake editions of finished books, `editions/`) | Built and tested in the mock chain (Wave 3). Needs the follow-up review and a testnet run |
 | Website | Static pages in `web/`. Reads the testnet. GitHub Pages publishing needs one repo setting (see docs/UI.md) |
 
 The prices and rules in the next sections are the design Carl confirmed. Shop can charge those prices, but the numbers are **not hardcoded**. An admin enters them. On the Foundation testnet, Stories is uploaded and wired to Ink and Shop, so the chain enforces those rules there. Mainnet is still not deployed.
@@ -87,7 +87,7 @@ flowchart TD
   ink[Ink - built, on testnet]
   stories[Stories - built, on testnet]
   sponsor[Sponsor - optional, later, off by default]
-  nft[Books NFT - planned]
+  nft[Editions - built, Wave 3]
   token[vUSDT or vUSDC, or a testnet KCS-4 token]
   treasury[Treasury address]
   founder[Founder address]
@@ -102,7 +102,7 @@ flowchart TD
   stories -->|pay_open_fee| shop
   stories -->|burn when text is added| ink
   stories -->|mint REFUND only| ink
-  nft -->|planned: points at a finished book| stories
+  nft -->|reads finished books and writers' shares| stories
   sponsor -->|later, separate contract: not built, Stories and Shop do not pay Mana| person
 ```
 
@@ -115,7 +115,7 @@ Shop does not mint Ink by itself. It calls Ink, and Ink checks that Shop was all
 | Test stablecoin | Not in this repo. Use the official Koinos KCS-4 token on testnet. SDK 1.0.0 cannot build a safe token, because it lacks the allowance check a real token needs |
 | Sponsor | Optional and later. A separate contract, OFF by default, that could pay Mana for a user. Kept out of Stories so a bug in it can never reach Ink or refunds |
 | Stories | On the Foundation testnet (`stories/`). Books, chapters, the trial, open-project limits, the 60-day archive, private invites, editing, paid changes, moderation, the final edit, and refunds |
-| Books NFT | Planned. A collectible for a finished book. Not a way to transfer Ink |
+| Editions | First and Contributor Editions for writers (free), numbered Collector's Editions for readers. Each sale is split on chain: 80% to the book's writers by surviving text, 20% to the treasury. Not a way to transfer Ink |
 | Website | Static files in `web/`. A browser talks to the public testnet node. See [docs/UI.md](docs/UI.md) |
 
 ## Security model
@@ -326,7 +326,7 @@ Do not point Shop at mainnet vUSDT while you are on a testnet. Those contracts a
 3. Testnet rehearsal. The three contracts are on the Foundation testnet and wired together. Mana for a real write was measured outside this page (about 0.09 to 0.58). A signed write from the website still needs Kondor on a computer.
 4. Stories. Built and tested in the mock chain. Enforces the trial, open-project limits, character ranges, private invites, the 60-day archive, refunds, moderation, and the UTF-16 Ink charge (most emoji cost 2).
 5. Website. A first static site is in `web/`. It can read the testnet. Publishing it is a GitHub Pages setting. See [docs/UI.md](docs/UI.md).
-6. Books NFT. Not started. Not required for the first public story.
+6. Editions (the Books NFT). Built in Wave 3; see docs/WAVE_3.md.
 6a. Sponsor. Optional, later, a separate contract that is OFF by default. Not required.
 6b. Reactions and reports. A separate small contract, later.
 6c. Keepsake and tip items. A later Shop upgrade.
