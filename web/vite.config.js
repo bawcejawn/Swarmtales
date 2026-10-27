@@ -85,6 +85,8 @@ function siteAddress() {
 export default defineConfig({
   base: "./",
   plugins: [contentSecurityPolicy(), siteAddress()],
+  // Names this release's offline cache (public/sw.js): the commit on GitHub, "dev" locally.
+  define: { __BUILD_ID__: JSON.stringify(String(process.env.GITHUB_SHA || "dev").slice(0, 12)) },
   build: {
     outDir: "dist",
     emptyOutDir: true,

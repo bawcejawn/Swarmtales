@@ -23,9 +23,25 @@ export function supportPanel(storyId, story, credits) {
   const status = statusBox();
   const button = h("button", { type: "button", class: "btn btn-primary btn-small" }, ["Send to the writers"]);
   let plan = [];
+  let sending = false;
+  let sentFor = "";
+  // The page's payment-token check must have passed (decimals and symbol confirmed on chain, M-8).
+  const tokenOk = () => !!(state.payment && !state.payment.mismatch);
+
+  // The plan for this amount, payer and token, worked out fresh each time.
+  const planFor = (me) => {
+    const base = parseTip(amount.value, Number(contracts.paymentDecimals));
+    return typeof base === "string" ? base : splitTip(base, writers, me);
+  };
 
   const draw = () => {
     const me = currentAddress() || "";
+    if (!tokenOk()) {
+      plan = [];
+      replace(preview, h("p", { class: "meta small" }, ["The payment token can't be checked on the network right now, so support is unavailable. Try again shortly."]));
+      button.disabled = true;
+      return;
+    }
     const base = parseTip(amount.value, decimals);
     if (typeof base === "string") {
       plan = [];
@@ -41,7 +57,7 @@ export function supportPanel(storyId, story, credits) {
       button.disabled = true;
       return;
     }
-    button.disabled = false;
+    button.disabled = sending || sentFor === amount.value + "|" + me;
     replace(preview, h("ul", { class: "tip-list" }, plan.map((p) => h("li", {}, [
       h("span", { class: "mono small" }, [shortAddress(p.address)]),
       h("b", {}, [formatUnits(p.value.toString(), decimals) + " " + symbol]),
@@ -53,22 +69,39 @@ export function supportPanel(storyId, story, credits) {
 
   button.addEventListener("click", async () => {
     const me = currentAddress();
-    if (!me) return;
-    if (state.payment && state.payment.mismatch) {
-      replace(status, notice("bad", h("p", {}, ["The payment token's details don't match what this page expects, so nothing was sent."])));
+    if (!me || sending) return;
+    if (!tokenOk()) {
+      replace(status, notice("bad", h("p", {}, ["The payment token's details couldn't be confirmed, so nothing was sent."])));
       return;
     }
+    // Recompute with the wallet, token and amount as they are now.
+    const fresh = planFor(me);
+    if (typeof fresh === "string" || !fresh.length) {
+      draw();
+      return;
+    }
+    const shown = plan.map((p) => p.address + ":" + p.value).join(",");
+    if (fresh.map((p) => p.address + ":" + p.value).join(",") !== shown) {
+      plan = fresh;
+      draw();
+      replace(status, notice("warn", h("p", {}, ["The amounts changed (a different wallet or token). Check them above, then send again."])));
+      return;
+    }
+    sending = true;
     button.disabled = true;
     try {
       const ops = [];
-      for (const p of plan) ops.push(await encode("token", "transfer", { from: me, to: p.address, value: p.value.toString() }));
+      for (const p of fresh) ops.push(await encode("token", "transfer", { from: me, to: p.address, value: p.value.toString() }));
       if (await send(ops, status)) {
+        // Not again for the same amount by accident: change the amount to send more.
+        sentFor = amount.value + "|" + me;
         replace(status, notice("ok", h("p", {}, ["Thank you. Your support went straight to the writers' wallets."])));
       }
     } catch (error) {
       failure(status, error);
     } finally {
-      button.disabled = false;
+      sending = false;
+      draw();
     }
   });
 

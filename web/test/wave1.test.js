@@ -191,7 +191,8 @@ test("export: Word, Markdown and HTML carry the text and the credits", () => {
   assert.ok(doc.includes("Second &lt;b&gt;line&lt;/b&gt;."));
   assert.ok(doc.includes(B + " — 40%"));
   const md = toMarkdown(sample());
-  assert.match(md, /^# The <Little> Jawn & Co/);
+  assert.match(md, /^# The \\<Little\\> Jawn \\& Co/);
+  assert.ok(md.includes("Second \\<b\\>line\\</b\\>."), "no raw HTML can come from a part");
   assert.match(md, /## Chapter 2\n\nNew chapter here\./);
   const html = toHtml(sample());
   assert.ok(html.includes("<p>Second &lt;b&gt;line&lt;/b&gt;.</p>"));
@@ -234,4 +235,31 @@ test("feeds: newest visible parts of public stories, escaped", () => {
   assert.ok(!xml.includes("<shiny>"));
   assert.ok(!xml.includes("Secret"));
   assert.equal(escapeXml("\u0007ok"), "ok");
+});
+
+test("export: Markdown can't carry raw HTML, links or images from story text", async () => {
+  const { mdText } = await import("../src/lib/exportBook.js");
+  assert.equal(mdText("<img src=x onerror=alert(1)>"), "\\<img src=x onerror=alert(1)\\>");
+  assert.equal(mdText("[x](javascript:alert(1))"), "\\[x\\](javascript:alert(1))");
+  assert.equal(mdText("![i](http://e/x.png)"), "\\!\\[i\\](http://e/x.png)");
+  assert.equal(mdText("# not a heading"), "\\# not a heading");
+});
+
+test("follow: a browser that refuses to save leaves the state unchanged", () => {
+  const refusing = { ...memoryStore(), setItem: () => { throw new Error("blocked"); } };
+  assert.equal(setFollow("1S", 5, true, "", refusing), false);
+  assert.equal(isFollowing("1S", 5, refusing), false);
+});
+
+test("credits: a finished part that didn't survive the final edit counts 0", () => {
+  const seg = (author, extra) => ({ segment: { author, current_cost: "500", status: 1, ...extra } });
+  assert.deepEqual(storyCredits({ status: 4 }, [seg(A, { surviving: "100" }), seg(B, { surviving: "0" })]).map((c) => c.address), [A]);
+});
+
+test("offline: only a lost connection falls back to the saved copy", async () => {
+  const { looksOffline } = await import("../src/lib/offline.js");
+  assert.equal(looksOffline(new TypeError("Failed to fetch"), true), true);
+  assert.equal(looksOffline(new Error("anything"), false), true, "the browser says it's offline");
+  assert.equal(looksOffline(new Error("This page is set up for the Koinos testnet, but the node answered with another chain"), true), false);
+  assert.equal(looksOffline(new Error("STORIES: unknown story"), true), false);
 });

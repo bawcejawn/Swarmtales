@@ -32,10 +32,18 @@ async function readChain() {
   const stories = new Contract({ id: contracts.stories, abi: abis.stories, provider });
   const call = async (method, args) => (await withTimeout(stories.functions[method](args || {}), TIMEOUT_MS)).result || {};
   const cfg = await call("get_config");
-  const last = Math.min(Number(cfg.next_story_id || 1) - 1, MAX_STORIES);
+  // The newest MAX_STORIES stories (new ones must keep appearing as the count grows).
+  const last = Number(cfg.next_story_id || 1) - 1;
+  const first = Math.max(1, last - MAX_STORIES + 1);
   const rows = [];
-  for (let id = 1; id <= last; id++) {
-    const story = await call("get_story", { story_id: String(id) });
+  let failed = 0;
+  for (let id = first; id <= last; id++) {
+    // One unreadable story is skipped, not the whole feed.
+    const story = await call("get_story", { story_id: String(id) }).catch(() => null);
+    if (!story) {
+      failed++;
+      continue;
+    }
     if (!Number(story.status || 0)) continue;
     const count = Number(story.segment_count || 0);
     let parts = [];
@@ -46,7 +54,19 @@ async function readChain() {
     }
     rows.push({ id, story, parts });
   }
+  if (last >= first && failed > (last - first + 1) / 2) throw new Error(failed + " of " + (last - first + 1) + " stories could not be read");
   return rows;
+}
+
+/** The feed the live site serves now, kept as it is when this run can't read the chain. */
+async function liveFeed(name) {
+  try {
+    const response = await withTimeout(fetch(SITE.url + "feeds/" + name), TIMEOUT_MS);
+    const text = response.ok ? await response.text() : "";
+    return text.startsWith("<?xml") && text.includes("<rss") ? text : "";
+  } catch {
+    return "";
+  }
 }
 
 let rows = [];
@@ -55,12 +75,14 @@ try {
   rows = await readChain();
 } catch (e) {
   error = e && e.message ? e.message : String(e);
-  console.log("Feeds: could not read " + network.rpc + " (" + error + "). Writing empty feeds.");
+  console.log("Feeds: could not read " + network.rpc + " (" + error + "). Keeping the live feeds if there are any.");
 }
 const site = SITE.url;
 const now = new Date();
 fs.mkdirSync(outDir, { recursive: true });
-fs.writeFileSync(path.join(outDir, "latest.xml"), feedXml({
+// The node is down: keep serving the last good feeds rather than emptying them.
+const keep = error ? { latest: await liveFeed("latest.xml"), stories: await liveFeed("stories.xml") } : {};
+fs.writeFileSync(path.join(outDir, "latest.xml"), keep.latest || feedXml({
   title: "SwarmTales: new parts",
   link: site,
   self: site + "feeds/latest.xml",
@@ -68,7 +90,7 @@ fs.writeFileSync(path.join(outDir, "latest.xml"), feedXml({
   items: latestParts(rows, site, 50),
   now,
 }));
-fs.writeFileSync(path.join(outDir, "stories.xml"), feedXml({
+fs.writeFileSync(path.join(outDir, "stories.xml"), keep.stories || feedXml({
   title: "SwarmTales: new stories",
   link: site,
   self: site + "feeds/stories.xml",
@@ -76,4 +98,4 @@ fs.writeFileSync(path.join(outDir, "stories.xml"), feedXml({
   items: newestStories(rows, site, 30),
   now,
 }));
-console.log("Feeds: " + rows.length + " stories read; wrote " + path.relative(process.cwd(), outDir) + (error ? " (empty: node not reachable)" : ""));
+console.log("Feeds: " + rows.length + " stories read; wrote " + path.relative(process.cwd(), outDir) + (error ? (keep.latest ? " (node not reachable: kept the live feeds)" : " (empty: node not reachable)") : ""));

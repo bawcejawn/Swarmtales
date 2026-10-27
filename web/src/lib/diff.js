@@ -7,7 +7,7 @@
 
 // Above this many cells the comparison would be slow in a phone browser:
 // the change is then shown as "everything replaced".
-const MAX_CELLS = 4000000;
+const MAX_CELLS = 1000000;
 
 export function tokens(text) {
   return String(text || "").match(/\S+\s*|\s+/g) || [];

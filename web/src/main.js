@@ -18,4 +18,4 @@ import { isFramed } from "./lib/frame.js";
 
 boot();
 // Offline opening and "install on home screen" (the built site only).
-if (import.meta.env && import.meta.env.PROD && !isFramed(window)) registerServiceWorker();
+if (import.meta.env && import.meta.env.PROD && !isFramed(window)) registerServiceWorker(typeof __BUILD_ID__ === "string" ? __BUILD_ID__ : "dev");

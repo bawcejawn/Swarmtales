@@ -18,7 +18,7 @@ import { supportPanel } from "./support.js";
 export function renderBook(page, id) {
   const container = h("div", { class: "container page narrow book-page" }, [loadingLine("Opening the book…")]);
   append(page, container);
-  loadStoryOrCopy(contracts.stories, id, loadStory).then(async ({ bundle: { story, segments } }) => {
+  loadStoryOrCopy(contracts.stories, id, loadStory).then(async ({ bundle: { story, segments }, savedAt }) => {
     setMeta(story.title || "Book", "A finished SwarmTales book.");
     const { text, ordered } = bookText(story, segments);
     const hex = await sha256Hex(text);
@@ -59,6 +59,7 @@ export function renderBook(page, id) {
     replace(container,
       h("div", { class: "no-print" }, [
         h("p", { class: "breadcrumb" }, [h("a", { href: "#/stories/" + id }, ["← Back to the story"])]),
+        savedAt ? notice("warn", h("p", {}, ["You're offline, so this is the copy saved in this browser. It may be missing newer changes."])) : null,
         h("div", { class: "row" }, [
           h("button", { type: "button", class: "btn btn-primary btn-small", onClick: () => window.print() }, ["Print or save as PDF"]),
           h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: download }, ["Download as text"]),

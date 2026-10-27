@@ -175,8 +175,9 @@ function versionsView(storyId, block) {
             : h(p.op === "add" ? "ins" : "del", {}, [p.text]))),
         ]);
       };
+      // The switch sits outside the list, so it keeps focus when the list redraws.
+      list.before(h("label", { class: "check small version-toggle" }, [showChanges, "Show what changed in each version"]));
       const draw = () => list.replaceChildren(
-        h("li", { class: "version-toggle" }, [h("label", { class: "check small" }, [showChanges, "Show what changed in each version"])]),
         ...values.slice().reverse().map((v) => h("li", {}, [
         h("p", { class: "meta small" }, [
           "Version " + v.version + " \u00b7 " + versionLabel(v) + (formatUtc(v.at) ? " \u00b7 " + formatUtc(v.at).split(",")[0] : ""),

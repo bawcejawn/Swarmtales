@@ -27,7 +27,8 @@ export function storyCredits(story, blocks) {
   for (const b of blocks || []) {
     const s = b.segment || {};
     if (Number(s.status) === 2 || s.hidden || !s.author) continue;
-    const chars = finished && Number(s.surviving || 0) > 0 ? Number(s.surviving) : Number(s.current_cost || s.charged || 0);
+    // In a finished book a part that didn't survive the final edit counts 0.
+    const chars = finished ? Number(s.surviving || 0) : Number(s.current_cost || s.charged || 0);
     totals.set(s.author, (totals.get(s.author) || 0) + chars);
   }
   const rows = Array.from(totals.entries()).filter(([, c]) => c > 0).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));

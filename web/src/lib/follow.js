@@ -47,14 +47,15 @@ export function isFollowing(contract, id, store = storage()) {
 export function setFollow(contract, id, on, title = "", store = storage(), now = Date.now()) {
   const record = load(contract, store);
   const key = String(id);
+  const was = Object.prototype.hasOwnProperty.call(record.follow, key);
   if (on) {
-    if (!record.follow[key] && Object.keys(record.follow).length >= MAX_FOLLOWS) return false;
+    if (!was && Object.keys(record.follow).length >= MAX_FOLLOWS) return false;
     record.follow[key] = { title: String(title || "").slice(0, 120), at: now };
   } else {
     delete record.follow[key];
   }
-  save(contract, record, store);
-  return !!on;
+  // If the browser refused to save, nothing changed.
+  return save(contract, record, store) ? !!on : was;
 }
 
 /** Remember that this browser has seen `count` parts of the story. */

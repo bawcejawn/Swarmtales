@@ -5,7 +5,10 @@
  * blockchain node or wallet requests: those always go to the network.
  * Story text read earlier is kept by the page itself (src/lib/offline.js).
  */
-const SHELL = "st-shell-v1";
+// One cache per release: the page registers this file as sw.js?build=<commit>,
+// so each deploy installs afresh and the last release's files are deleted.
+const BUILD = (new URL(self.location.href).searchParams.get("build") || "dev").replace(/[^\w.-]/g, "").slice(0, 40);
+const SHELL = "st-shell-" + BUILD;
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(SHELL).then((cache) => cache.addAll(["./", "./manifest.webmanifest", "./favicon.svg"])).then(() => self.skipWaiting()));
@@ -24,10 +27,18 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
   // The page itself: the network first, so a new release shows at once; the saved copy when offline.
   if (request.mode === "navigate") {
+    // Only the site's own page is kept as the offline copy: opening a feed,
+    // the Terms or an icon directly must not replace it.
+    const scope = new URL(self.registration.scope).pathname;
+    const isApp = url.pathname === scope || url.pathname === scope + "index.html";
     event.respondWith(fetch(request).then((response) => {
-      if (response.ok) caches.open(SHELL).then((cache) => cache.put("./", response.clone()));
+      const html = (response.headers.get("content-type") || "").includes("text/html");
+      if (isApp && response.ok && html) {
+        const copy = response.clone();
+        caches.open(SHELL).then((cache) => cache.put("./", copy));
+      }
       return response;
-    }).catch(() => caches.match("./")));
+    }).catch(() => (isApp ? caches.match("./") : caches.match(request))));
     return;
   }
   // Built files have a content hash in their name, so a saved copy is always right.

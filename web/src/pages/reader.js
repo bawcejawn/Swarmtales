@@ -12,7 +12,7 @@ import { shortAddress } from "../lib/money.js";
 import { append, h, icons, replace } from "../ui/dom.js";
 import { readingOrder } from "../lib/order.js";
 import * as reading from "../lib/bookmarks.js";
-import { isFollowing, markSeen, newParts, setFollow } from "../lib/follow.js";
+import { isFollowing, markSeen, MAX_FOLLOWS, newParts, setFollow } from "../lib/follow.js";
 import { createReader } from "../ui/readAloud.js";
 import { currentAddress, readPref, state, writePref } from "../app/state.js";
 import { chapterWord, clip, num, plural } from "../app/format.js";
@@ -358,7 +358,13 @@ function followButton(id, story) {
     btn.title = on ? "Saved in this browser. My stories shows new parts." : "Get a \u201cnew parts\u201d note on My stories. Saved in this browser; no account needed.";
   };
   draw(isFollowing(contracts.stories, id));
-  btn.addEventListener("click", () => draw(setFollow(contracts.stories, id, !isFollowing(contracts.stories, id), story.title)));
+  btn.addEventListener("click", () => {
+    const want = !isFollowing(contracts.stories, id);
+    const now = setFollow(contracts.stories, id, want, story.title);
+    draw(now);
+    if (now !== want) btn.title = want ? "Couldn't follow: this browser isn't saving site data, or you already follow " + MAX_FOLLOWS + " stories." : btn.title;
+    if (now !== want) btn.textContent = "Couldn't save (browser storage)";
+  });
   return btn;
 }
 

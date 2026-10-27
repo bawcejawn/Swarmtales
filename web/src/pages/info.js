@@ -94,7 +94,7 @@ export function renderPrivacy(page) {
       "Each part is signed by its writer's wallet. Changes by other people are recorded as new versions with their name, and the earlier versions stay readable."),
     item("SwarmTales doesn't train or sell AI on your writing",
       "We don't use your writing to train AI models, and we don't sell or license it to anyone who does.",
-      "This website asks AI crawlers not to collect it: it publishes a machine-readable “no text and data mining” notice (the opt-out European law recognises) and tells known AI crawlers to stay away."),
+      "Every page of this website carries a machine-readable \u201cno text and data mining\u201d notice (the opt-out European law recognises). Once the site has its own web address, it will also tell known AI crawlers to stay away."),
     item("What we can't promise",
       "Text on a public blockchain can be copied by anyone who reads the chain, and some scrapers ignore opt-outs. No public site can fully stop that, and we won't pretend otherwise."),
     item("AI help is your choice, and it's labelled",

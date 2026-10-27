@@ -79,9 +79,11 @@ function renderNav() {
   ];
   replace(nav, ...items.map(([name, href, text, short]) => {
     const current = here === name || (name === "discover" && (here === "story" || here === "book"));
-    return h("a", { href, "aria-current": current ? "page" : null, "aria-label": text }, [
+    // Only one of the two names is shown (and read) at a time, so the
+    // accessible name is always the visible word (WCAG 2.5.3).
+    return h("a", { href, "aria-current": current ? "page" : null }, [
       h("span", { class: "nav-long" }, [text]),
-      h("span", { class: "nav-short", "aria-hidden": "true" }, [short]),
+      h("span", { class: "nav-short" }, [short]),
     ]);
   }));
 }

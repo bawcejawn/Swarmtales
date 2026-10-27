@@ -99,7 +99,9 @@ export function renderDiscover(page) {
   const filters = h("div", { class: "filters" });
   const chips = h("div", { class: "chips", role: "group", "aria-label": "Category" });
   const count = h("p", { class: "meta", "aria-live": "polite" });
-  const countRow = h("div", { class: "count-row" }, [count]);
+  // Made once, so keyboard focus stays on it while the shelf redraws.
+  const sorter = h("select", { "aria-label": "Order" }, SORTS.map(([id, text]) => h("option", { value: id }, [text])));
+  const countRow = h("div", { class: "count-row" }, [count, h("label", { class: "sort" }, ["Order: ", sorter])]);
   const grid = h("div", { class: "card-grid" }, [loadingLine("Reading the shelves…")]);
   const filterBlock = h("div", { class: "stack" }, [filters, chips, countRow, grid]);
   filterBlock.style.marginTop = "40px";
@@ -144,10 +146,8 @@ export function renderDiscover(page) {
     const sort = SORTS.find((x) => x[0] === state.discover.sort) || SORTS[0];
     shown.sort(sort[2]);
     count.textContent = plural(shown.length, "story", "stories") + (library && library.truncated ? " (showing the first 200 on the network)" : "");
-    const sorter = h("select", { "aria-label": "Order" }, SORTS.map(([id, text]) => h("option", { value: id }, [text])));
     sorter.value = sort[0];
-    sorter.addEventListener("change", () => { state.discover.sort = sorter.value; draw(library); });
-    replace(countRow, count, h("label", { class: "sort" }, ["Order: ", sorter]));
+    sorter.onchange = () => { state.discover.sort = sorter.value; draw(library); };
     if (!shown.length) {
       replace(grid, h("div", { class: "empty" }, [
         h("p", { class: "serif" }, ["No stories here yet."]),

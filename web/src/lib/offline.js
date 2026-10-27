@@ -56,6 +56,13 @@ export async function loadStoryCopy(contract, id) {
   }
 }
 
+/** A failure that means "no connection" (not a wrong chain or a refused read). */
+export function looksOffline(error, online = typeof navigator !== "undefined" ? navigator.onLine : true) {
+  if (online === false) return true;
+  const text = String((error && error.message) || error || "");
+  return error instanceof TypeError || /failed to fetch|networkerror|network request failed|load failed|timed? ?out|ECONN|ENOTFOUND|EAI_AGAIN/i.test(text);
+}
+
 /** Read the story from the chain and keep a copy; fall back to the copy when offline. */
 export async function loadStoryOrCopy(contract, id, load) {
   try {
@@ -63,6 +70,9 @@ export async function loadStoryOrCopy(contract, id, load) {
     if (bundle && bundle.story && Number(bundle.story.status || 0) !== 0) saveStoryCopy(contract, id, bundle);
     return { bundle, savedAt: 0 };
   } catch (error) {
+    // Only when the network can't be reached; a wrong network or a refused
+    // read is shown as the error it is.
+    if (!looksOffline(error)) throw error;
     const copy = await loadStoryCopy(contract, id);
     if (!copy) throw error;
     return { bundle: copy.bundle, savedAt: copy.at };
@@ -70,11 +80,11 @@ export async function loadStoryOrCopy(contract, id, load) {
 }
 
 /** Register the service worker (production build, not inside a frame). */
-export function registerServiceWorker() {
+export function registerServiceWorker(build = "dev") {
   try {
     if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
     if (!/^https:$|^http:$/.test(location.protocol)) return;
-    navigator.serviceWorker.register("./sw.js", { scope: "./" }).catch(() => {});
+    navigator.serviceWorker.register("./sw.js?build=" + encodeURIComponent(build), { scope: "./" }).catch(() => {});
   } catch {
     /* not available: the site still works online */
   }

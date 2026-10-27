@@ -13,7 +13,9 @@ permissions:
 
 concurrency:
   group: pages-${{ github.ref }}
-  cancel-in-progress: true
+  # Pull requests replace their older run; a deploy (push or the hourly feed
+  # rebuild) waits for the one before it instead of cancelling it.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:

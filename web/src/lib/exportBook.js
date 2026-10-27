@@ -55,11 +55,18 @@ function footer(book) {
   return "Written together on SwarmTales" + (where ? ", " + where : "") + ". Every part is recorded on the Koinos blockchain.";
 }
 
+/** Story text as plain Markdown text: no raw HTML, links or images can come from a part. */
+export function mdText(text) {
+  return String(text)
+    .replace(/[\\`*_[\]<>&|!]/g, (c) => "\\" + c)
+    .replace(/^([#>+-]|\d+\.)/, "\\$1");
+}
+
 export function toMarkdown(book) {
-  const lines = ["# " + book.title, ""];
+  const lines = ["# " + mdText(book.title), ""];
   for (const ch of book.chapters) {
     lines.push("## Chapter " + ch.number, "");
-    for (const p of ch.paragraphs) lines.push(p.replace(/^([#>*+-]|\d+\.)/, "\\$1"), "");
+    for (const p of ch.paragraphs) lines.push(mdText(p), "");
   }
   lines.push("## Written by", "");
   for (const c of book.credits) lines.push("- " + creditLine(c));
