@@ -266,6 +266,47 @@
       "read_only": false,
       "description": "The opener, an editor or a current writer of the story updates \"the story so far\" while it is"
     },
+    "suggest_change": {
+      "entry_point": 3837309353,
+      "argument": "stories.suggest_change_arguments",
+      "return": "stories.uint32",
+      "read_only": false,
+      "description": "Suggest a change to someone else's part in an OPEN story. Free: nothing is charged until the part's",
+      "default_output": {
+        "value": 0
+      }
+    },
+    "accept_suggestion": {
+      "entry_point": 1908125856,
+      "argument": "stories.accept_suggestion_arguments",
+      "return": "stories.uint32",
+      "read_only": false,
+      "description": "The part's writer accepts a waiting suggestion: the part's text becomes the suggested text, exactly as",
+      "default_output": {
+        "value": 0
+      }
+    },
+    "decline_suggestion": {
+      "entry_point": 626063024,
+      "argument": "stories.decline_suggestion_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "Close a waiting suggestion without changing the part: the part's writer declines it (with an optional"
+    },
+    "get_suggestions": {
+      "entry_point": 42118858,
+      "argument": "stories.get_suggestions_arguments",
+      "return": "stories.suggestion_list",
+      "read_only": true,
+      "description": "A part's suggestions by id, oldest first, at most 5 per call and about 64 KB of text. Start with"
+    },
+    "set_story_guide": {
+      "entry_point": 2873590644,
+      "argument": "stories.set_story_guide_arguments",
+      "return": "stories.empty_object",
+      "read_only": false,
+      "description": "The story guide: notes for writers (characters, world, tone; up to 3,000 characters), who the story is"
+    },
     "edit_segment": {
       "entry_point": 449317411,
       "argument": "stories.edit_segment_arguments",
@@ -931,6 +972,32 @@
                 "options": {
                   "jstype": "JS_STRING"
                 }
+              },
+              "notes": {
+                "type": "string",
+                "id": 38
+              },
+              "wanted": {
+                "type": "string",
+                "id": 39
+              },
+              "blind": {
+                "type": "bool",
+                "id": 40
+              },
+              "guide_by": {
+                "type": "bytes",
+                "id": 41,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "guide_at": {
+                "type": "uint64",
+                "id": 42,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
               }
             },
             "reserved": [
@@ -1095,6 +1162,14 @@
               "refund_forfeited": {
                 "type": "bool",
                 "id": 34
+              },
+              "pending_suggestions": {
+                "type": "uint32",
+                "id": 36
+              },
+              "suggestion_count": {
+                "type": "uint32",
+                "id": 37
               }
             },
             "reserved": [
@@ -1177,6 +1252,94 @@
               "ai_assisted": {
                 "type": "bool",
                 "id": 9
+              }
+            }
+          },
+          "suggestion": {
+            "fields": {
+              "id": {
+                "type": "uint32",
+                "id": 1
+              },
+              "proposer": {
+                "type": "bytes",
+                "id": 2,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "text": {
+                "type": "string",
+                "id": 3
+              },
+              "base_hash": {
+                "type": "bytes",
+                "id": 4
+              },
+              "base_versions": {
+                "type": "uint32",
+                "id": 5
+              },
+              "citation": {
+                "type": "string",
+                "id": 6
+              },
+              "ai_assisted": {
+                "type": "bool",
+                "id": 7
+              },
+              "at": {
+                "type": "uint64",
+                "id": 8,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "status": {
+                "type": "uint32",
+                "id": 9
+              },
+              "closed_by": {
+                "type": "bytes",
+                "id": 10,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "closed_at": {
+                "type": "uint64",
+                "id": 11,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "note": {
+                "type": "string",
+                "id": 12
+              },
+              "cost": {
+                "type": "uint64",
+                "id": 13,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "cleared": {
+                "type": "bool",
+                "id": 14
+              }
+            }
+          },
+          "suggestion_list": {
+            "fields": {
+              "values": {
+                "rule": "repeated",
+                "type": "suggestion",
+                "id": 1
+              },
+              "next": {
+                "type": "uint32",
+                "id": 2
               }
             }
           },
@@ -2224,6 +2387,195 @@
               "summary": {
                 "type": "string",
                 "id": 3
+              }
+            }
+          },
+          "suggest_change_arguments": {
+            "fields": {
+              "proposer": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 3,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "text": {
+                "type": "string",
+                "id": 4
+              },
+              "citation": {
+                "type": "string",
+                "id": 5
+              },
+              "ai_assisted": {
+                "type": "bool",
+                "id": 6
+              },
+              "rights_confirmed": {
+                "type": "bool",
+                "id": 7
+              },
+              "terms_version": {
+                "type": "uint32",
+                "id": 8
+              }
+            }
+          },
+          "accept_suggestion_arguments": {
+            "fields": {
+              "writer": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 3,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "id": {
+                "type": "uint32",
+                "id": 4
+              },
+              "expected_cost": {
+                "type": "uint64",
+                "id": 5,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "max_ink": {
+                "type": "uint64",
+                "id": 6,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "rights_confirmed": {
+                "type": "bool",
+                "id": 7
+              },
+              "terms_version": {
+                "type": "uint32",
+                "id": 8
+              }
+            }
+          },
+          "decline_suggestion_arguments": {
+            "fields": {
+              "account": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 3,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "id": {
+                "type": "uint32",
+                "id": 4
+              },
+              "note": {
+                "type": "string",
+                "id": 5
+              },
+              "moderate": {
+                "type": "bool",
+                "id": 6
+              }
+            }
+          },
+          "get_suggestions_arguments": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "from": {
+                "type": "uint32",
+                "id": 3
+              },
+              "count": {
+                "type": "uint32",
+                "id": 4
+              }
+            }
+          },
+          "set_story_guide_arguments": {
+            "fields": {
+              "account": {
+                "type": "bytes",
+                "id": 1,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "story_id": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "notes": {
+                "type": "string",
+                "id": 3
+              },
+              "wanted": {
+                "type": "string",
+                "id": 4
+              },
+              "blind": {
+                "type": "bool",
+                "id": 5
               }
             }
           },
@@ -3784,6 +4136,80 @@
                 "options": {
                   "jstype": "JS_STRING"
                 }
+              }
+            }
+          },
+          "suggestion_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "seq": {
+                "type": "uint64",
+                "id": 2,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "id": {
+                "type": "uint32",
+                "id": 3
+              },
+              "by": {
+                "type": "bytes",
+                "id": 4,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "action": {
+                "type": "string",
+                "id": 5
+              },
+              "proposer": {
+                "type": "bytes",
+                "id": 6,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "version": {
+                "type": "uint32",
+                "id": 7
+              }
+            }
+          },
+          "guide_event": {
+            "fields": {
+              "story_id": {
+                "type": "uint64",
+                "id": 1,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "by": {
+                "type": "bytes",
+                "id": 2,
+                "options": {
+                  "(koinos.btype)": "ADDRESS"
+                }
+              },
+              "notes": {
+                "type": "string",
+                "id": 3
+              },
+              "wanted": {
+                "type": "string",
+                "id": 4
+              },
+              "blind": {
+                "type": "bool",
+                "id": 5
               }
             }
           }
