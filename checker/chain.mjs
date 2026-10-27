@@ -24,7 +24,7 @@ export const koilib = require("koilib");
  * key, no longer builds ABIs from the proto with protobufjs at run time.
  * Regenerate both with: node checker/make-abi.mjs
  */
-export const STORIES_ABI_SHA256 = "879fd167941697256da8b3db64476641050844fca51a003457ecd9b02e6d0c40";
+export const STORIES_ABI_SHA256 = "3e625ecc5c064b79486af48eb1e5eb7ce7d6075e10b66c04d35e7337c0508062";
 
 /** sha256 of an ABI file's text, ignoring line endings (a Windows checkout has CRLF). */
 export function abiHash(text) {
