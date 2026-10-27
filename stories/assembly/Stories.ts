@@ -979,6 +979,7 @@ export class Stories extends StoriesAdmin {
       seg.final_mode = item.mode;
       this.segments.put(key, seg);
       this.addSurviving(args.story_id, seg.author!, seg.surviving);
+      st.surviving_sum = SafeMath.add(st.surviving_sum, seg.surviving);
       st.running_hash = foldHash(st.running_hash, next, <u8>item.mode, removed ? new Uint8Array(32) : seg.text_hash!);
       st.final_cursor = next;
       if (item.mode != stories.final_mode.FINAL_UNCHANGED) {
