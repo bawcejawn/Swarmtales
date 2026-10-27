@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Hourly: rebuild the RSS feeds (web/scripts/build-feeds.mjs) with the newest parts.
+  schedule:
+    - cron: "17 * * * *"
 
 permissions:
   contents: read
@@ -39,14 +42,17 @@ jobs:
       - name: Build the website
         working-directory: web
         run: npm run build
+      - name: Build the RSS feeds (read-only; empty feeds if the node is down)
+        working-directory: web
+        run: node scripts/build-feeds.mjs
       - name: Upload the site
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: (github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: web/dist
 
   deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     permissions:

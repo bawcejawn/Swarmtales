@@ -14,6 +14,7 @@ import { charsLine, progressBar, storyCategories } from "../app/story.js";
 import { loadingLine, notice, setMeta, stat } from "../app/ui.js";
 import { firstLine, loadLibrary } from "../app/data.js";
 import { pickFeatured, storyCard } from "./discover.js";
+import * as reading from "../lib/bookmarks.js";
 
 export function renderHome(page) {
   setMeta("", "SwarmTales is collaborative fiction: read a chapter, then write the next part. Reading is free. Every contribution is credited on the Koinos blockchain.");
@@ -36,6 +37,7 @@ export function renderHome(page) {
         featuredSlot,
       ]),
     ]),
+    continueStrip(),
     accountDesk(),
     h("section", { class: "section section-surface", "aria-labelledby": "how-title" }, [
       h("div", { class: "container" }, [
@@ -136,4 +138,21 @@ function accountDesk() {
     h("a", { class: "btn btn-secondary btn-small", href: "#/membership" }, ["Membership and Ink"])
   );
   return wrap;
+}
+
+/** Coming back: the stories this browser was reading, one tap from where you left off. */
+function continueStrip() {
+  const places = reading.list(contracts.stories).filter((p) => p.last || p.mark).slice(0, 3);
+  if (!places.length) return null;
+  return h("section", { class: "container continue-strip", "aria-labelledby": "continue-title" }, [
+    h("h2", { class: "h3", id: "continue-title" }, ["Continue reading"]),
+    h("ul", { class: "reading-list" }, places.map((p) => h("li", { class: "reading-item" }, [
+      h("div", {}, [
+        h("b", {}, [p.title || "Story " + p.id]),
+        h("span", { class: "meta small" }, [p.last ? " Chapter " + p.last.chapter + " \u00b7 " + p.last.percent + "% read" : " \u2605 bookmarked"]),
+      ]),
+      h("a", { class: "btn btn-primary btn-small", href: "#/stories/" + p.id + (p.last ? "?resume=1" : "?mark=1") }, ["Continue"]),
+    ]))),
+    h("p", { class: "meta small" }, [h("a", { href: "#/mine" }, ["Your shelf"]), " has everything you follow and read."]),
+  ]);
 }

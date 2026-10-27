@@ -1,7 +1,9 @@
 /**
  * The writing box: add the next part, or text between parts.
  */
+import { contracts } from "../config.js";
 import { encode, quoteCost, writerFlags } from "../chain.js";
+import { agoText, clearDraft, draftKey, loadDraft, saveDraft } from "../lib/drafts.js";
 import { shortAddress } from "../lib/money.js";
 import { assessWrite, isActiveWriter } from "../lib/rules.js";
 import { checkStoryText, inkCost, MAX_CHARS_PER_SIGNATURE, MAX_PARTS_PER_SIGNATURE, normalizePasted, splitIntoParts } from "../lib/text.js";
@@ -117,11 +119,42 @@ export function composer(id, story, active, insertAfter, flags) {
           : ", with one confirmation.")
       : "";
   }
-  area.addEventListener("input", update);
+  // Unsent text is kept in this browser as you type, so nothing is lost to a
+  // closed tab, a refresh or a failed transaction.
+  const draftId = draftKey(contracts.stories, id, after);
+  const draftNote = h("span", { class: "draft-note", "aria-live": "polite" });
+  let draftTimer = null;
+  const keepDraft = () => {
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(() => {
+      const ok = saveDraft(draftId, area.value);
+      draftNote.textContent = area.value.trim() ? (ok ? "Draft saved in this browser" : "This browser can't save drafts") : "";
+    }, 600);
+  };
+  const restored = loadDraft(draftId);
+  let restoredBanner = null;
+  if (restored) {
+    area.value = restored.text;
+    restoredBanner = notice("info", h("p", {}, [
+      "We kept your unsent text from " + agoText(restored.at) + ". It isn't in the story yet. ",
+      h("button", { type: "button", class: "text-button", onClick: () => {
+        area.value = "";
+        clearDraft(draftId);
+        draftNote.textContent = "";
+        restoredBanner.remove();
+        update();
+      } }, ["Discard it"]),
+    ]));
+  }
+  area.addEventListener("input", () => {
+    update();
+    keepDraft();
+  });
   update();
 
   const form = h("form", { onSubmit: (event) => { event.preventDefault(); go(); } }, [
     after ? null : writingHelp(),
+    restoredBanner,
     field("Your part", area),
     grammarTool(area, () => update()),
     h("div", { class: "counter", id: uid + "-count" }, [
@@ -132,6 +165,7 @@ export function composer(id, story, active, insertAfter, flags) {
       openEnded(story) ? null : h("span", {}, [num(space) + " characters left in this story"]),
       h("span", { "aria-live": "polite" }, [shortText]),
       h("span", { "aria-live": "polite" }, [splitNote]),
+      draftNote,
     ]),
     h("label", { class: "check" }, [chapter, "Start a new chapter"]),
     citation.node,
@@ -229,6 +263,7 @@ export function composer(id, story, active, insertAfter, flags) {
       }
       const sent = await send(ops, status2);
       if (sent) {
+        clearDraft(draftId);
         area.value = "";
         update();
         state.excerpts.delete(Number(id));
