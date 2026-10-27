@@ -588,7 +588,7 @@ export class Editions {
   set_admin(args: editions.set_admin_arguments): editions.empty_object {
     this.enter();
     this.requireAdmin();
-    const proposed = this.requireAddress(args.admin, "EDITIONS: invalid admin address");
+    const proposed = this.requireAddress(args.new_admin, "EDITIONS: invalid admin address");
     const cfg = this.config.get()!;
     cfg.pending_admin = Arrays.equal(proposed, this.getAdmin()) ? null : proposed;
     this.saveConfig(cfg);

@@ -467,7 +467,7 @@ message set_paused_arguments {
 // @read-only false
 // @result empty_object
 message set_admin_arguments {
-  bytes admin = 1 [(koinos.btype) = ADDRESS];
+  bytes new_admin = 1 [(koinos.btype) = ADDRESS];
 }
 
 // @description The proposed admin accepts
