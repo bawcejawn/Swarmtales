@@ -50,7 +50,7 @@ async function draw(body, storyId, story, credits) {
 
   // Readers: the Collector's Edition.
   const buyStatus = statusBox();
-  if (price > 0n && !story.needs_new_pdf) {
+  if (price > 0n && !story.needs_new_pdf && story.sum_tracked) {
     const { toWriters, toTreasury } = splitSale(price, bps);
     const buy = h("button", { type: "button", class: "btn btn-primary btn-small" }, ["Buy No. " + (sold + 1) + " for " + formatUnits(price.toString(), decimals) + " " + symbol]);
     buy.disabled = !me || !tokenOk || paused;
@@ -86,6 +86,8 @@ async function draw(body, storyId, story, credits) {
       me && !tokenOk ? h("p", { class: "meta small" }, ["The payment token can't be checked on the network right now. Try again shortly."]) : null,
       buyStatus,
     ]));
+  } else if (!story.sum_tracked) {
+    parts.push(h("p", { class: "meta small" }, ["This book was finished before Collector's Editions could share their sales with its writers, so it isn't sold as one. Its writers can still claim their free editions."]));
   } else if (story.needs_new_pdf) {
     parts.push(h("p", { class: "meta small" }, ["This book is being updated after a part was taken down. Collector's Editions are on sale again once it's republished."]));
   }
