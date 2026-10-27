@@ -21,11 +21,12 @@ const MAINNET_PINNED = {
   stories: "",
   sponsor: "",
   multisig: "",
+  editions: "",
 };
-const PINNED_ROLES = ["ink", "shop", "stories", "token", "sponsor", "multisig"];
+const PINNED_ROLES = ["ink", "shop", "stories", "token", "sponsor", "multisig", "editions"];
 // Roles the override flag may name: the pinned roles, and --admin.
 const OVERRIDE_ROLES = PINNED_ROLES.concat(["admin"]);
-const CONTRACT_ROLES = ["ink", "shop", "stories", "sponsor", "multisig"];
+const CONTRACT_ROLES = ["ink", "shop", "stories", "sponsor", "multisig", "editions"];
 const PIN_OVERRIDE_FLAG = "--i-understand-this-address-is-not-pinned";
 
 // ---- PAYMENT TOKENS (audit H-3) ----
@@ -988,7 +989,7 @@ function checkPinnedFlags(net, flags, target) {
   }
   for (const name of ["contract", "expect"]) {
     if (flags[name] === undefined || !net.mainnet) continue;
-    if (!CONTRACT_ROLES.includes(target)) fail("Say which contract --" + name + " is: ink, shop, stories, sponsor or multisig.");
+    if (!CONTRACT_ROLES.includes(target)) fail("Say which contract --" + name + " is: ink, shop, stories, sponsor, multisig or editions.");
     warnings.push(checkPinned(net, target, flags[name], flags, name === "expect"));
   }
   warnings.push(checkPinnedAdmin(net, flags.admin, flags));
@@ -1269,6 +1270,40 @@ function parseTokenAmount(value, decimals, label) {
  * and the three packs from the Ink they bring (rounded up), unless that item
  * is given too.
  */
+// ---- Editions (editions/, Wave 3) ----
+
+// Writers always get at least 70% of a Collector's Edition sale (the contract's cap).
+const EDITIONS_MAX_SHARE_BPS = 3000;
+
+/**
+ * set_payment_token settings for Editions from whole-token flags:
+ * --default, --min, --max (like 3 or 0.5), or --disable. The contract wants
+ * 0 < min <= default <= max.
+ */
+function planEditionsToken(flags, decimals) {
+  if (flags.disable === true) {
+    return { enabled: false, default_price: "0", min_price: "0", max_price: "0" };
+  }
+  for (const k of ["default", "min", "max"]) {
+    if (flags[k] === undefined) fail("Give --default, --min and --max (whole tokens, like 3 or 0.5), or --disable.");
+  }
+  const def = BigInt(parseTokenAmount(flags.default, decimals, "--default"));
+  const min = BigInt(parseTokenAmount(flags.min, decimals, "--min"));
+  const max = BigInt(parseTokenAmount(flags.max, decimals, "--max"));
+  if (min === 0n) fail("--min must be more than 0.");
+  if (!(min <= def && def <= max)) fail("The prices must satisfy --min <= --default <= --max.");
+  return { enabled: true, default_price: def.toString(), min_price: min.toString(), max_price: max.toString() };
+}
+
+/** --percent (like 20 or 12.5) as basis points, at most 30%. */
+function planEditionsShare(percent) {
+  const m = /^([0-9]{1,2})(?:\.([0-9]{1,2}))?$/.exec(String(percent === undefined ? "" : percent));
+  if (!m) fail("--percent must be the treasury's share of each sale, like 20 or 12.5.");
+  const bps = Number(m[1]) * 100 + Number(((m[2] || "") + "00").slice(0, 2));
+  if (bps > EDITIONS_MAX_SHARE_BPS) fail("The treasury's share can't be above 30%: writers always get at least 70%.");
+  return bps;
+}
+
 function planPrices(flags, decimals, cfg) {
   const prices = {};
   for (const [flag, item] of Object.entries(PRICE_FLAGS)) {
@@ -1519,6 +1554,7 @@ const PREPARED_MAX_OPS = 64;
 // the admin page. cosign and submit refuse any other name (audit H-2).
 const PREPARED_COMMANDS = [
   "multisig-signers", "set-admin", "accept-admin", "pause", "unpause", "wire", "set-asset", "set-price", "set-ink-amounts",
+  "wire-editions", "editions-token", "editions-share",
   "test-asset", "promo-new", "promo-on", "promo-off", "promo-end", "wire-stories", "stories-limits", "set-terms",
   "set-moderation", "hide", "takedown", "replace-pdf", "block", "clear-summary", "admin-page",
 ];
@@ -1668,8 +1704,8 @@ async function verifyPrepared(file, net, deps) {
     const op = ops[i];
     const d = described[i] || {};
     const call = op && op.call_contract;
-    if (!call || Object.keys(op).length !== 1) fail("Operation " + (i + 1) + " is not a contract call. This tool only signs calls to Ink, Shop, Stories, the sponsor and the multisig.");
-    if (!CONTRACT_ROLES.includes(d.contract)) fail("Operation " + (i + 1) + " is not a call to Ink, Shop, Stories, the sponsor or the multisig.");
+    if (!call || Object.keys(op).length !== 1) fail("Operation " + (i + 1) + " is not a contract call. This tool only signs calls to Ink, Shop, Stories, Editions, the sponsor and the multisig.");
+    if (!CONTRACT_ROLES.includes(d.contract)) fail("Operation " + (i + 1) + " is not a call to Ink, Shop, Stories, Editions, the sponsor or the multisig.");
     if (call.contract_id !== d.contract_id) fail("Operation " + (i + 1) + " calls " + call.contract_id + " but says " + d.contract_id + ". Nothing was signed.");
     const warn = checkPinned(net, d.contract, call.contract_id, deps.flags || {}, false);
     if (warn) warnings.push(warn);
@@ -1884,6 +1920,9 @@ module.exports = {
   checkWasmHash,
   planSponsorConfig,
   SPONSORED_CALLS,
+  planEditionsToken,
+  planEditionsShare,
+  EDITIONS_MAX_SHARE_BPS,
   SPONSOR_DEFAULT_CAPS,
   entryPoint,
   planPrices,

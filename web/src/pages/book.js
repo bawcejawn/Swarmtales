@@ -13,6 +13,8 @@ import { contracts, network } from "../config.js";
 import { storyCredits } from "../lib/credits.js";
 import { bookFromBlocks, fileBase, FORMATS } from "../lib/exportBook.js";
 import { supportPanel } from "./support.js";
+import { readersCutPanel } from "./readersCut.js";
+import { editionsPanel } from "./editions.js";
 
 /** The finished book: read, print or save as PDF, or download as text. Free. */
 export function renderBook(page, id) {
@@ -82,6 +84,8 @@ export function renderBook(page, id) {
         h("p", { class: "meta small" }, [(finished ? "Shares count the characters that survived the final edit. " : "Shares count the characters in the story now. ") +
           "Written together on SwarmTales. Every part is recorded on the Koinos blockchain, story " + id + "."]),
       ]),
+      finished ? editionsPanel(id, story, credits) : null,
+      finished ? readersCutPanel(id, story, segments) : null,
       h("div", { class: "no-print" }, [supportPanel(id, story, credits)]));
   }).catch((error) => replace(container, notice("bad", h("p", {}, [explainFailure(error)]))));
 }

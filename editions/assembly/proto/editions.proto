@@ -1,0 +1,550 @@
+syntax = "proto3";
+
+// =====================================================================
+// SwarmTales Editions — interface definition (Wave 3, October 2026)
+//
+// Keepsake editions of FINISHED books, as NFTs that follow the Koinos
+// KCS-5 read interface, so wallets can show them.
+//
+//   - First Edition: one for the story's opener. Free, can't be sold.
+//   - Contributor Edition: one for each writer whose surviving text in the
+//     finished book reaches the story's contributor_edition_min (at least
+//     1). Free, can't be sold.
+//   - Collector's Edition: for readers. Numbered, no cap, fixed price in an
+//     accepted payment token (the opener may choose a price inside the
+//     admin's range). The buyer's payment is split in the same
+//     transaction: platform_bps (20% at launch, never above 30%) to the
+//     treasury, the rest to the book's writers. A Collector's Edition's
+//     holder can send it to another wallet (a gift or a private sale);
+//     marketplaces aren't supported (no approvals).
+//
+// WRITERS' MONEY
+//   The writers' part of each sale is kept by this contract, per book and
+//   token, and each writer's earnings are their share of the book's
+//   surviving text:   earned = received * your_surviving / surviving_sum
+//   (both read from Stories). Anyone may pay a writer what they're owed
+//   (claim_earnings); the tokens always go to the writer. Nobody, the
+//   admin included, can take the writers' money out any other way. A book
+//   never pays out more than it received, even if a takedown later
+//   changes the shares. Claims work while the contract is paused.
+//
+// WHAT THIS CONTRACT DOES NOT DO
+//   - No approvals or operators (approve / set_approval_for_all are
+//     refused): owners move their own Collector's Editions directly.
+//   - No royalties on resale, no auctions, no random rarity, no
+//     promise of value: collectibles are keepsakes (Terms of Use §13).
+//   - Owning an edition gives no copyright in the book.
+//
+// Every user action must come straight from the user's transaction, not
+// through another contract (as in Shop, fix H1).
+// =====================================================================
+
+package editions;
+
+import "koinos/options.proto";
+
+enum edition_kind {
+  EDITION_NONE = 0;
+  EDITION_FIRST = 1;        // the opener
+  EDITION_CONTRIBUTOR = 2;  // a writer of the finished book
+  EDITION_COLLECTOR = 3;    // bought by a reader
+}
+
+message config {
+  bytes admin = 1 [(koinos.btype) = ADDRESS];
+  bytes pending_admin = 2 [(koinos.btype) = ADDRESS];
+  bool paused = 3;
+  bytes stories = 4 [(koinos.btype) = ADDRESS];   // set once
+  bytes shop = 5 [(koinos.btype) = ADDRESS];      // set once: payment tokens must also be enabled there
+  bytes treasury = 6 [(koinos.btype) = ADDRESS];
+  uint32 platform_bps = 7;                        // share of each sale to the treasury (default 2000 = 20%, at most 3000)
+  string site = 8;                                // website, for the link in each edition's metadata
+  uint64 next_token_id = 9 [jstype = JS_STRING];  // the last token id used (ids start at 1)
+  uint64 total_supply = 10 [jstype = JS_STRING];  // editions that exist (burned ones don't count)
+  repeated bytes payment_tokens = 11 [(koinos.btype) = ADDRESS]; // at most 4
+}
+
+// What a payment token costs per Collector's Edition, in its base units.
+message token_settings {
+  bool enabled = 1;
+  uint64 default_price = 2 [jstype = JS_STRING];
+  uint64 min_price = 3 [jstype = JS_STRING];
+  uint64 max_price = 4 [jstype = JS_STRING];
+}
+
+message edition {
+  bytes owner = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  edition_kind kind = 3;
+  uint64 number = 4 [jstype = JS_STRING];   // Collector's Edition number within the book (1, 2, ...); 0 for writers' editions
+  string title = 5;                         // the book's title when the edition was made
+  uint64 made_at = 6 [jstype = JS_STRING];  // seconds
+}
+
+// Per book.
+message book_editions {
+  uint64 collector_count = 1 [jstype = JS_STRING]; // Collector's Editions sold (the next one is this + 1)
+  uint64 writer_count = 2 [jstype = JS_STRING];    // First and Contributor Editions claimed
+}
+
+// Per book and payment token: the writers' part of every sale.
+message pot {
+  uint64 received = 1 [jstype = JS_STRING]; // all writers' parts ever received
+  uint64 paid = 2 [jstype = JS_STRING];     // all ever paid out to writers
+  uint64 sales = 3 [jstype = JS_STRING];
+}
+
+message earnings {
+  uint64 earned = 1 [jstype = JS_STRING];   // the writer's share of everything received so far
+  uint64 paid = 2 [jstype = JS_STRING];     // already paid to them
+  uint64 owed = 3 [jstype = JS_STRING];     // what claim_earnings would pay now
+}
+
+message uint64 {
+  uint64 value = 1 [jstype = JS_STRING];
+}
+
+message empty_object {}
+
+message address_list {
+  repeated bytes values = 1 [(koinos.btype) = ADDRESS];
+}
+
+// ---------------------------------------------------------------------
+// The parts of Stories and Shop records this contract reads. Field
+// numbers match stories.proto and shop.proto; other fields are skipped.
+// ---------------------------------------------------------------------
+
+message stories_story_query {
+  uint64 story_id = 1 [jstype = JS_STRING];
+}
+
+message stories_story {
+  bytes opener = 2 [(koinos.btype) = ADDRESS];
+  string title = 3;
+  uint32 status = 7;
+  uint64 contributor_edition_min = 16 [jstype = JS_STRING];
+  bool needs_new_pdf = 32;
+  uint64 surviving_sum = 43 [jstype = JS_STRING];
+  bool sum_tracked = 44;
+}
+
+message stories_surviving_query {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  bytes account = 2 [(koinos.btype) = ADDRESS];
+}
+
+message shop_asset_query {
+  bytes token = 1 [(koinos.btype) = ADDRESS];
+}
+
+message shop_asset {
+  bool enabled = 1;
+  uint64 usable_from = 4 [jstype = JS_STRING];
+}
+
+// =====================================================================
+// SwarmTales reads
+// =====================================================================
+
+// @description Admin, pause, Stories and Shop addresses, treasury, platform share, counters and payment tokens
+// @read-only true
+// @result config
+message get_config_arguments {}
+
+// @description Collector's Edition prices for one payment token (base units)
+// @read-only true
+// @result token_settings
+message get_token_settings_arguments {
+  bytes token = 1 [(koinos.btype) = ADDRESS];
+}
+
+// @description What a Collector's Edition of this book costs in this token now (0: not on sale in it)
+// @read-only true
+// @result uint64
+message get_price_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  bytes token = 2 [(koinos.btype) = ADDRESS];
+}
+
+// @description The writers' part of this book's sales in one token
+// @read-only true
+// @result pot
+message get_pot_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  bytes token = 2 [(koinos.btype) = ADDRESS];
+}
+
+// @description One writer's earnings from a book's Collector's Editions in one token
+// @read-only true
+// @result earnings
+message get_earnings_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  bytes token = 2 [(koinos.btype) = ADDRESS];
+  bytes writer = 3 [(koinos.btype) = ADDRESS];
+}
+
+// @description One edition by token number (empty owner: none, or burned)
+// @read-only true
+// @result edition
+message get_edition_arguments {
+  uint64 token_number = 1 [jstype = JS_STRING];
+}
+
+// @description The token number of a wallet's First or Contributor Edition of a book (0: not claimed)
+// @read-only true
+// @result uint64
+message get_writer_edition_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  bytes writer = 2 [(koinos.btype) = ADDRESS];
+}
+
+// @description How many editions of a book exist
+// @read-only true
+// @result book_editions
+message get_book_editions_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+}
+
+// =====================================================================
+// KCS-5 reads (so wallets and explorers can show editions)
+// =====================================================================
+
+message str {
+  string value = 1;
+}
+
+message boole {
+  bool value = 1;
+}
+
+message address {
+  bytes value = 1 [(koinos.btype) = ADDRESS];
+}
+
+message token_ids {
+  repeated bytes values = 1 [(koinos.btype) = HEX];
+}
+
+message royalty {
+  uint64 percentage = 1 [jstype = JS_STRING];
+  bytes address = 2 [(koinos.btype) = ADDRESS];
+}
+
+message royalties_result {
+  repeated royalty value = 1;
+}
+
+message approved_result {
+  bytes value = 1 [(koinos.btype) = ADDRESS];
+  repeated bytes values = 2 [(koinos.btype) = ADDRESS];
+}
+
+message operator_approvals_result {
+  bytes owner = 1 [(koinos.btype) = ADDRESS];
+  repeated bytes operators = 2 [(koinos.btype) = ADDRESS];
+}
+
+// @description Collection name
+// @read-only true
+// @result str
+message name_arguments {}
+
+// @description Collection symbol
+// @read-only true
+// @result str
+message symbol_arguments {}
+
+// @description Off-chain metadata location (empty: metadata is on chain, see metadata_of)
+// @read-only true
+// @result str
+message uri_arguments {}
+
+// @description The collection's owner (the admin)
+// @read-only true
+// @result address
+message owner_arguments {}
+
+// @description Editions that exist
+// @read-only true
+// @result uint64
+message total_supply_arguments {}
+
+// @description Royalties (none: SwarmTales takes nothing from resales)
+// @read-only true
+// @result royalties_result
+message royalties_arguments {}
+
+// @description Editions a wallet holds
+// @read-only true
+// @result uint64
+message balance_of_arguments {
+  bytes owner = 1 [(koinos.btype) = ADDRESS];
+}
+
+// @description Who holds an edition (token_id: 8 bytes, big-endian token number)
+// @read-only true
+// @result address
+message owner_of_arguments {
+  bytes token_id = 1 [(koinos.btype) = HEX];
+}
+
+// @description An edition's metadata as JSON
+// @read-only true
+// @result str
+message metadata_of_arguments {
+  bytes token_id = 1 [(koinos.btype) = HEX];
+}
+
+// @description Edition ids, at most 100, after start
+// @read-only true
+// @result token_ids
+message get_tokens_arguments {
+  bytes start = 1 [(koinos.btype) = HEX];
+  int32 limit = 2;
+  bool descending = 3;
+}
+
+// @description A wallet's edition ids, at most 100, after start
+// @read-only true
+// @result token_ids
+message get_tokens_by_owner_arguments {
+  bytes owner = 1 [(koinos.btype) = ADDRESS];
+  bytes start = 2 [(koinos.btype) = HEX];
+  int32 limit = 3;
+  bool descending = 4;
+}
+
+// @description Approvals (none: approvals aren't offered)
+// @read-only true
+// @result approved_result
+message get_approved_arguments {
+  bytes token_id = 1 [(koinos.btype) = HEX];
+  bytes start = 2 [(koinos.btype) = ADDRESS];
+  uint32 limit = 3;
+  bool descending = 4;
+}
+
+// @description Operator approval (always false: approvals aren't offered)
+// @read-only true
+// @result boole
+message is_approved_for_all_arguments {
+  bytes owner = 1 [(koinos.btype) = ADDRESS];
+  bytes operator = 2 [(koinos.btype) = ADDRESS];
+}
+
+// @description Operator approvals (none)
+// @read-only true
+// @result operator_approvals_result
+message get_operator_approvals_arguments {
+  bytes owner = 1 [(koinos.btype) = ADDRESS];
+  bytes start = 2 [(koinos.btype) = ADDRESS];
+  int32 limit = 3;
+  bool descending = 4;
+}
+
+// =====================================================================
+// Readers and writers
+// =====================================================================
+
+// @description Buy a numbered Collector's Edition of a finished book. The buyer signs; at most max_price is charged
+// @read-only false
+// @result empty_object
+message buy_edition_arguments {
+  bytes buyer = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  bytes token = 3 [(koinos.btype) = ADDRESS];
+  uint64 max_price = 4 [jstype = JS_STRING];
+}
+
+// @description Claim your free First Edition (opener) or Contributor Edition (writer) of a finished book
+// @read-only false
+// @result empty_object
+message claim_writer_edition_arguments {
+  bytes writer = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+}
+
+// @description Pay a writer what they're owed from a book's Collector's Editions in one token. Anyone may call; the tokens go to the writer
+// @read-only false
+// @result empty_object
+message claim_earnings_arguments {
+  bytes writer = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  bytes token = 3 [(koinos.btype) = ADDRESS];
+}
+
+// @description The opener chooses the book's Collector's Edition price in one token, inside the admin's range (0: the default)
+// @read-only false
+// @result empty_object
+message set_book_price_arguments {
+  bytes opener = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  bytes token = 3 [(koinos.btype) = ADDRESS];
+  uint64 price = 4 [jstype = JS_STRING];
+}
+
+// @description KCS-5 transfer: the owner gives or sells a Collector's Edition. Writers' editions can't be moved
+// @read-only false
+// @result empty_object
+message transfer_arguments {
+  bytes from = 1 [(koinos.btype) = ADDRESS];
+  bytes to = 2 [(koinos.btype) = ADDRESS];
+  bytes token_id = 3 [(koinos.btype) = HEX];
+  string memo = 4;
+}
+
+// @description KCS-5 burn: the owner destroys one of their editions (a writer's earnings don't change)
+// @read-only false
+// @result empty_object
+message burn_arguments {
+  bytes token_id = 1 [(koinos.btype) = HEX];
+  string memo = 2;
+}
+
+// @description Refused: approvals aren't offered
+// @read-only false
+// @result empty_object
+message approve_arguments {
+  bytes owner = 1 [(koinos.btype) = ADDRESS];
+  bytes operator = 2 [(koinos.btype) = ADDRESS];
+  bytes token_id = 3 [(koinos.btype) = HEX];
+  string memo = 4;
+  bool approve = 5;
+}
+
+// @description Refused: approvals aren't offered
+// @read-only false
+// @result empty_object
+message set_approval_for_all_arguments {
+  bytes owner = 1 [(koinos.btype) = ADDRESS];
+  bytes operator = 2 [(koinos.btype) = ADDRESS];
+  bool approved = 3;
+  string memo = 4;
+}
+
+// =====================================================================
+// Admin
+// =====================================================================
+
+// @description Admin: Stories and Shop (each set once), and the treasury
+// @read-only false
+// @result empty_object
+message set_addresses_arguments {
+  bytes stories = 1 [(koinos.btype) = ADDRESS];
+  bytes shop = 2 [(koinos.btype) = ADDRESS];
+  bytes treasury = 3 [(koinos.btype) = ADDRESS];
+}
+
+// @description Admin: accept a payment token (it must also be enabled in Shop) and its price range, or switch it off
+// @read-only false
+// @result empty_object
+message set_payment_token_arguments {
+  bytes token = 1 [(koinos.btype) = ADDRESS];
+  token_settings settings = 2;
+}
+
+// @description Admin: the treasury's share of each sale in basis points (at most 3000)
+// @read-only false
+// @result empty_object
+message set_platform_bps_arguments {
+  uint32 bps = 1;
+}
+
+// @description Admin: the website address used in metadata
+// @read-only false
+// @result empty_object
+message set_site_arguments {
+  string site = 1;
+}
+
+// @description Admin: pause sales and writers' edition claims (earnings, transfers and burns keep working)
+// @read-only false
+// @result empty_object
+message set_paused_arguments {
+  bool paused = 1;
+}
+
+// @description Admin: propose a new admin (it must accept)
+// @read-only false
+// @result empty_object
+message set_admin_arguments {
+  bytes new_admin = 1 [(koinos.btype) = ADDRESS];
+}
+
+// @description The proposed admin accepts
+// @read-only false
+// @result empty_object
+message accept_admin_arguments {}
+
+// =====================================================================
+// Events
+// =====================================================================
+
+// KCS-5 events
+message mint_event {
+  bytes to = 1 [(koinos.btype) = ADDRESS];
+  bytes token_id = 2 [(koinos.btype) = HEX];
+  string memo = 3;
+}
+
+message transfer_event {
+  bytes from = 1 [(koinos.btype) = ADDRESS];
+  bytes to = 2 [(koinos.btype) = ADDRESS];
+  bytes token_id = 3 [(koinos.btype) = HEX];
+  string memo = 4;
+}
+
+message burn_event {
+  bytes from = 1 [(koinos.btype) = ADDRESS];
+  bytes token_id = 2 [(koinos.btype) = HEX];
+  string memo = 3;
+}
+
+message sale_event {
+  bytes buyer = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  bytes token = 3 [(koinos.btype) = ADDRESS];
+  uint64 price = 4 [jstype = JS_STRING];
+  uint64 to_treasury = 5 [jstype = JS_STRING];
+  uint64 to_writers = 6 [jstype = JS_STRING];
+  uint64 token_number = 7 [jstype = JS_STRING];
+  uint64 number = 8 [jstype = JS_STRING];
+}
+
+message earnings_event {
+  bytes writer = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  bytes token = 3 [(koinos.btype) = ADDRESS];
+  uint64 amount = 4 [jstype = JS_STRING];
+}
+
+message book_price_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  bytes token = 2 [(koinos.btype) = ADDRESS];
+  uint64 price = 3 [jstype = JS_STRING];
+}
+
+message settings_event {
+  config config = 1;
+}
+
+message payment_token_event {
+  bytes token = 1 [(koinos.btype) = ADDRESS];
+  token_settings settings = 2;
+}
+
+// The token's transfer, as this contract sends it (KCS-4).
+message token_transfer_call {
+  bytes from = 1 [(koinos.btype) = ADDRESS];
+  bytes to = 2 [(koinos.btype) = ADDRESS];
+  uint64 value = 3 [jstype = JS_STRING];
+}
+
+message token_balance_query {
+  bytes owner = 1 [(koinos.btype) = ADDRESS];
+}
+
+message token_balance_answer {
+  uint64 value = 1 [jstype = JS_STRING];
+}

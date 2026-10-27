@@ -100,7 +100,7 @@ export function renderPrivacy(page) {
     item("AI help is your choice, and it's labelled",
       "Nothing on SwarmTales writes for you unless you choose to. If you used AI to help write a part, tick “Written with AI help” and readers see the label. The spelling check sends your text to LanguageTool only when you press its button."),
     item("What this site keeps in your browser",
-      "Your reading place, bookmarks, followed stories, reading settings and unsent drafts stay in this browser. They aren't sent anywhere. There are no ads, trackers or analytics cookies. Clearing your browser's site data removes them."),
+      "Your reading place, bookmarks, followed stories, reading settings, unsent drafts and your Reader's Cut choices stay in this browser. They aren't sent anywhere. There are no ads, trackers or analytics cookies. Clearing your browser's site data removes them."),
     h("p", {}, [h("a", { href: "#/terms" }, ["Terms of Use"]), " · ", h("a", { href: "#/report" }, ["Report copied text"])]),
   ]));
 }

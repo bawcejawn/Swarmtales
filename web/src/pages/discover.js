@@ -3,6 +3,7 @@
  * story card the home page and My stories use too.
  */
 import { explainFailure } from "../lib/errors.js";
+import { promptSpotlight } from "./spotlight.js";
 import { KIND, label, VISIBILITY } from "../lib/labels.js";
 import { append, h, icons, replace } from "../ui/dom.js";
 import { state } from "../app/state.js";
@@ -99,6 +100,11 @@ export function renderDiscover(page) {
     h("p", { class: "lede", style: null }, ["Stories that are still being written welcome new writers. Finished ones read like any book."])
   );
   container.lastChild.style.marginTop = "12px";
+  const prompt = promptSpotlight({ withPast: true });
+  if (prompt) {
+    prompt.style.marginTop = "32px";
+    append(container, prompt);
+  }
   const filters = h("div", { class: "filters" });
   const chips = h("div", { class: "chips", role: "group", "aria-label": "Category" });
   const count = h("p", { class: "meta", "aria-live": "polite" });

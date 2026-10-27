@@ -821,6 +821,8 @@ export class Stories extends StoriesAdmin {
     const now = nowSeconds();
     st.status = stories.story_status.STATUS_EDITING;
     st.finalizer_is_admin = false;
+    // The whole final edit runs on code that keeps surviving_sum (Wave 3).
+    if (st.final_cursor == 0) st.sum_tracked = true;
     if (st.locked_at == 0) st.locked_at = now;
     this.touch(st, opener, false);
     this.putStory(args.story_id, st);
@@ -889,6 +891,7 @@ export class Stories extends StoriesAdmin {
     );
     st.status = stories.story_status.STATUS_EDITING;
     st.finalizer_is_admin = true;
+    if (st.final_cursor == 0) st.sum_tracked = true;
     if (st.locked_at == 0) st.locked_at = now;
     this.putStory(args.story_id, st);
     this.emitStatus(args.story_id, st.status, "admin-take-over", this.getAdmin());
@@ -979,6 +982,7 @@ export class Stories extends StoriesAdmin {
       seg.final_mode = item.mode;
       this.segments.put(key, seg);
       this.addSurviving(args.story_id, seg.author!, seg.surviving);
+      st.surviving_sum = SafeMath.add(st.surviving_sum, seg.surviving);
       st.running_hash = foldHash(st.running_hash, next, <u8>item.mode, removed ? new Uint8Array(32) : seg.text_hash!);
       st.final_cursor = next;
       if (item.mode != stories.final_mode.FINAL_UNCHANGED) {

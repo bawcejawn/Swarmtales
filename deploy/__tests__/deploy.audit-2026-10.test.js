@@ -159,7 +159,7 @@ test("M-6: with nothing pinned yet, mainnet refuses every contract address excep
   assert.deepStrictEqual(lib.checkPinnedFlags(lib.resolveNetwork({}), { stories: OTHER, contract: OTHER }, "ink"), []);
   // The table itself only takes "" or an address.
   // (Payment tokens are a list in TOKEN_PINS, audit L-8.)
-  assert.ok(Object.keys(lib.MAINNET_PINNED).sort().join() === "ink,multisig,shop,sponsor,stories");
+  assert.ok(Object.keys(lib.MAINNET_PINNED).sort().join() === "editions,ink,multisig,shop,sponsor,stories");
 });
 
 test("M-6: wire-stories checks each contract's code hash against the release hashes on mainnet", async () => {
@@ -284,7 +284,7 @@ test("M-12: cosign refuses a file whose chain id, contract, entry point or argum
     ["described arguments", (d) => { d.operations[0].args = { paused: false }; }, /arguments are not the ones it describes/],
     ["described method", (d) => { d.operations[0].method = "accept_admin"; }, /different entry point/],
     ["described contract", (d) => { d.operations[0].contract_id = OTHER; }, /calls 16adhn\S* but says/],
-    ["contract name", (d) => { d.operations[0].contract = "token"; }, /not a call to Ink, Shop, Stories, the sponsor or the multisig/],
+    ["contract name", (d) => { d.operations[0].contract = "token"; }, /not a call to Ink, Shop, Stories, Editions, the sponsor or the multisig/],
     ["mana limit", (d) => { d.transaction.header.rc_limit = "900000000"; }, /was changed/],
     ["chain id", (d) => { d.transaction.header.chain_id = lib.NETWORKS.mainnet.chainId; }, /chain id/],
     ["extra header field", (d) => { d.transaction.header.extra = "x"; }, /unexpected field 'extra'/],

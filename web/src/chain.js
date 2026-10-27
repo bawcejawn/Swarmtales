@@ -37,7 +37,7 @@ export async function verifyChain() {
 }
 
 function abiContract(name, signer) {
-  const ids = { ink: contracts.ink, shop: contracts.shop, stories: contracts.stories, sponsor: contracts.sponsor };
+  const ids = { ink: contracts.ink, shop: contracts.shop, stories: contracts.stories, sponsor: contracts.sponsor, editions: contracts.editions };
   if (!ids[name]) throw new Error("Unknown contract " + name);
   return new Contract({
     id: ids[name],
@@ -84,6 +84,7 @@ export function abisFor(operations) {
     [contracts.paymentToken]: utils.tokenAbi,
   };
   if (contracts.sponsor && contracts.sponsorKind === "sponsor") known[contracts.sponsor] = abis.sponsor;
+  if (contracts.editions) known[contracts.editions] = abis.editions;
   const out = {};
   for (const op of operations || []) {
     const id = op && op.call_contract && op.call_contract.contract_id;

@@ -449,7 +449,7 @@ test("O1-13: mainnet compares with the pinned file, never a typed hash, and neve
   const fs = require("fs");
   const path = require("path");
   const file = lib.parseReleaseHashes(fs.readFileSync(path.join(__dirname, "..", "release-hashes.json"), "utf8"));
-  assert.deepStrictEqual(Object.keys(file).sort(), ["ink", "multisig", "shop", "sponsor", "stories"]);
+  assert.deepStrictEqual(Object.keys(file).sort(), ["editions", "ink", "multisig", "shop", "sponsor", "stories"]);
   assert.throws(() => lib.parseReleaseHashes('{"ink":"","shop":"","stories":"","extra":""}'), /unknown entry/);
   assert.throws(() => lib.parseReleaseHashes("{"), /not valid JSON/);
 });

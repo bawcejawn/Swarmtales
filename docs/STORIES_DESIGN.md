@@ -204,7 +204,7 @@ A takedown also wipes every suggestion on the part. Suggested text is not checke
 
 ## 9. Deliberately left out
 
-- NFTs and Contributor Editions: a later Books contract reads `surviving_totals`.
+- Editions (Wave 3, `editions/`) reads `surviving_totals` and the story's `surviving_sum`.
 - Sponsored Mana: a separate Sponsor contract later, OFF by default. *Why:* code that pays Mana should never sit next to the refund mint.
 - Transferring the opener role, co-openers, deleting a story.
 - Keepsakes and tips: a later Shop upgrade.
@@ -212,6 +212,7 @@ A takedown also wipes every suggestion on the part. Suggested text is not checke
 
 ## 10. History (short)
 
+- **Wave 3 (October 2026):** `story.surviving_sum` (field 43), the sum of the writers' surviving totals, filled by the final edit and lowered by a later takedown. The Editions contract splits Collector's Edition sales by it.
 - **Wave 2 (October 2026):** suggested changes (`suggest_change`, `accept_suggestion`, `decline_suggestion`, `get_suggestions`) and the story guide (`set_story_guide`: notes, looking-for, blind round). Needs a short follow-up review before mainnet.
 
 - **19 October 2026:** design decisions (UTF-16 counting, invites as signed links, Sponsor contract separate).

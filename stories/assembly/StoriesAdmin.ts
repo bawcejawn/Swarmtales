@@ -161,6 +161,7 @@ export class StoriesAdmin extends StoriesBase {
         const surv = this.survivingTotals.get(totalKey)!;
         surv.value = surv.value > seg.surviving ? surv.value - seg.surviving : 0;
         this.survivingTotals.put(totalKey, surv);
+        st.surviving_sum = st.surviving_sum > seg.surviving ? st.surviving_sum - seg.surviving : 0;
       }
       if (seg.hidden) this.unhideCount(st);
       st.used_chars = SafeMath.sub(st.used_chars, seg.current_cost);

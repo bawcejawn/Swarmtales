@@ -30,7 +30,7 @@
  *
  * Commands (run from the repository root, after building the contracts):
  *   node deploy/deploy.js status   --ink <addr> --shop <addr> --admin <addr> [--user <addr>] [--stories <addr>] [--story <id>] [--token <addr>] [--sponsor <addr>]
- *   node deploy/deploy.js upload   ink|shop|stories|sponsor --expect <contract wallet address> [--upgrade]
+ *   node deploy/deploy.js upload   ink|shop|stories|sponsor|editions --expect <contract wallet address> [--upgrade]
  *       (mainnet: only the release build pinned in deploy/release-hashes.json is uploaded)
  *       (--upgrade: replace the code of a contract that is already there; its stored data is kept. On mainnet
  *        also add --i-understand-this-replaces-mainnet-code, and follow docs/KEY_CUSTODY.md section 6)
@@ -119,6 +119,16 @@
  *       [--pack-l 45000] [--starter-book 20000] [--starter-short 10000] [--starter-poem 2000]
  *       (every amount you leave out stays as it is on chain)
  *
+ * Editions (keepsake editions of finished books; editions/, Wave 3):
+ *   node deploy/deploy.js upload editions --expect <editions wallet address>
+ *   node deploy/deploy.js wire-editions --admin <addr> --editions <addr> --stories <addr> --shop <addr> --treasury <addr> [--site https://...]
+ *       (Stories and Shop are set once. The site is the link in each edition's metadata)
+ *   node deploy/deploy.js editions-token --admin <addr> --editions <addr> --token <addr> --default 3 --min 1 --max 20   (or --disable)
+ *       (whole tokens. The token must be on in the Shop. Try one small sale and claim on testnet first)
+ *   node deploy/deploy.js editions-share --admin <addr> --editions <addr> --percent 20
+ *       (the treasury's share of each Collector's Edition sale; at most 30, writers get the rest)
+ *   node deploy/deploy.js status --editions <addr> [--story <id>]
+ *
  * Mana sponsor (pays users' mana for SwarmTales transactions only; sponsor/):
  *   node deploy/deploy.js upload sponsor --expect <sponsor wallet address>
  *       (uploads with ONLY the "decides when this account pays" flag on; calls and uploads stay with its key)
@@ -183,6 +193,13 @@ const CONTRACTS = {
     buildHint: "cd sponsor; npx yarn@1.22.22 build:release; cd ..",
     authorizesTransactionApplication: true,
   },
+  // Editions has no authority override: its own tokens move only through the
+  // token's "a contract may move what it holds" rule (editions/README.md).
+  editions: {
+    wasm: path.join(root, "editions", "build", "release", "contract.wasm"),
+    abi: path.join(root, "editions", "abi", "editions.abi"),
+    buildHint: "cd editions; npx yarn@1.22.22 build:release; cd ..",
+  },
   // The multisig turns on all three flags: calls, payments and code uploads
   // all need its quorum. It is uploaded only by multisig-create, together
   // with its setup in the same transaction.
@@ -222,7 +239,7 @@ function readFileOrFail(file, hint) {
 
 function contractFiles(target) {
   const c = CONTRACTS[target];
-  if (!c) lib.fail("Say which contract: ink, shop, stories, sponsor or multisig.");
+  if (!c) lib.fail("Say which contract: ink, shop, stories, sponsor, multisig or editions.");
   return c;
 }
 
@@ -583,7 +600,7 @@ async function isContractWallet(provider, address) {
 
 async function prepareTx(signerAddr, provider, net, operations, onPrepared) {
   const described = operations.map((op, i) => opMeta.get(op) || lib.fail(
-    "This command can't be prepared for multisig signing: operation " + (i + 1) + " is not a call to Ink, Shop, Stories, the sponsor or the multisig."));
+    "This command can't be prepared for multisig signing: operation " + (i + 1) + " is not a call to Ink, Shop, Stories, Editions, the sponsor or the multisig."));
   const f = session.args.flags;
   const payer = f.payer === undefined ? signerAddr : lib.requireAddress(f.payer, "payer");
   const payee = f.payee === undefined ? undefined : lib.requireAddress(f.payee, "payee");
@@ -2008,6 +2025,81 @@ async function cmdReplacePdf(args) {
   console.log("Send back: the transaction id (" + txId + "). The book page should now say the copy matches.");
 }
 
+// ---------- Editions (Wave 3) ----------
+
+/**
+ * Points Editions at Stories and Shop (each set once) and the treasury, and
+ * sets the website used in each edition's metadata. Signed by the Editions
+ * admin (the contract wallet until set-admin editions).
+ */
+async function cmdWireEditions(args) {
+  const f = args.flags;
+  const admin = lib.requireAddress(f.admin, "admin");
+  const editions = lib.requireAddress(f.editions, "editions");
+  const stories = lib.requireAddress(f.stories, "stories");
+  const shop = lib.requireAddress(f.shop, "shop");
+  const treasury = lib.requireAddress(f.treasury, "treasury");
+  if (new Set([editions, stories, shop]).size !== 3) lib.fail("Editions, Stories and Shop must be three different addresses.");
+  if (treasury === editions) lib.fail("The treasury can't be the Editions contract.");
+  const site = f.site === undefined ? null : String(f.site);
+  if (site !== null && !/^https:\/\/[^\s"]{1,190}$/.test(site)) lib.fail("--site must be the website address starting with https://");
+  const { net, provider } = await connect(f);
+  await checkCodeHashes(provider, net, f, { editions, stories, shop });
+  const cfg = await readOnly(provider, "editions", editions, "get_config");
+  if (cfg.admin !== admin) lib.fail("Editions admin is " + (cfg.admin || "(not readable)") + ", not " + admin + ".");
+  lib.requireSetOnce("Editions' Stories address", cfg.stories, stories);
+  lib.requireSetOnce("Editions' Shop address", cfg.shop, shop);
+  const c = contractOf("editions", editions, provider);
+  const ops = [await c.encodeOperation({ name: "set_addresses", args: { stories, shop, treasury } })];
+  if (site !== null) ops.push(await c.encodeOperation({ name: "set_site", args: { site } }));
+  const txId = await dryRunThenSend(await getSigner(provider, admin, "the Editions admin"), provider, net, ops,
+    "editions.set_addresses(stories " + stories + ", shop " + shop + ", treasury " + treasury + ")" + (site !== null ? " + set_site(" + site + ")" : ""));
+  console.log("Send back: the transaction id (" + txId + "). Then: node deploy/deploy.js status --editions " + editions);
+}
+
+/**
+ * Accepts a payment token for Collector's Editions with its price range in
+ * whole tokens (--default --min --max), or --disable. The token must already
+ * be on in the Shop (set-asset), which is where its code is checked.
+ */
+async function cmdEditionsToken(args) {
+  const f = args.flags;
+  const admin = lib.requireAddress(f.admin, "admin");
+  const editions = lib.requireAddress(f.editions, "editions");
+  const { net, provider } = await connect(f);
+  const token = lib.requireAddress(f.token || net.koin, "token");
+  const cfg = await readOnly(provider, "editions", editions, "get_config");
+  const shop = cfg.shop;
+  if (!shop) lib.fail("Editions has no Shop address yet. Run wire-editions first.");
+  const asset = await readOnly(provider, "shop", shop, "get_asset", { token });
+  if (!asset || !asset.symbol) lib.fail("The Shop has no record of token " + token + ". Turn it on there first with set-asset. Nothing was sent.");
+  if (f.disable !== true && !asset.enabled) lib.fail("The Shop has token " + token + " turned off. Turn it on there first. Nothing was sent.");
+  const decimals = Number(asset.decimals || 0);
+  const settings = lib.planEditionsToken(f, decimals);
+  const { utils } = koilib();
+  const op = await contractOf("editions", editions, provider).encodeOperation({ name: "set_payment_token", args: { token, settings } });
+  const summary = settings.enabled
+    ? "Collector's Edition prices in " + asset.symbol + ": default " + utils.formatUnits(settings.default_price, decimals) +
+      ", openers may choose " + utils.formatUnits(settings.min_price, decimals) + " to " + utils.formatUnits(settings.max_price, decimals)
+    : "Collector's Editions no longer on sale in " + asset.symbol;
+  const txId = await dryRunThenSend(await getSigner(provider, admin, "the Editions admin"), provider, net, [op], summary);
+  console.log("Before the first sale in a new token, make one small sale and one claim-earnings on testnet with it (editions/README.md).");
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
+/** The treasury's share of each Collector's Edition sale (--percent, at most 30). */
+async function cmdEditionsShare(args) {
+  const f = args.flags;
+  const admin = lib.requireAddress(f.admin, "admin");
+  const editions = lib.requireAddress(f.editions, "editions");
+  const bps = lib.planEditionsShare(f.percent);
+  const { net, provider } = await connect(f);
+  const op = await contractOf("editions", editions, provider).encodeOperation({ name: "set_platform_bps", args: { bps } });
+  const txId = await dryRunThenSend(await getSigner(provider, admin, "the Editions admin"), provider, net, [op],
+    "treasury share of each Collector's Edition sale: " + (bps / 100) + "% (writers get " + ((10000 - bps) / 100) + "%)");
+  console.log("Send back: the transaction id (" + txId + ").");
+}
+
 async function cmdStatus(args) {
   const f = Object.assign({}, args.flags);
   if (f.user && !f.buyer) f.buyer = f.user;
@@ -2027,6 +2119,7 @@ async function cmdStatus(args) {
   await show("user", f.buyer);
   await show("sponsor", f.sponsor);
   await show("msig", f.multisig);
+  await show("edition", f.editions);
   const read = async (target, addr, name, a) => {
     try {
       return await readOnly(provider, target, addr, name, a);
@@ -2077,6 +2170,19 @@ async function cmdStatus(args) {
       (m && m.hash ? "call " + !!m.authorizes_call_contract + ", pay " + !!m.authorizes_transaction_application + ", upload " + !!m.authorizes_upload_contract : "(no contract)"));
     console.log("multisig.get_config: " + JSON.stringify(await read("multisig", f.multisig, "get_config")));
   }
+  if (f.editions) {
+    console.log("");
+    const meta = await provider.invokeGetContractMetadata(f.editions).catch(() => null);
+    const m = meta && meta.value;
+    console.log("editions authority flags (want call false, pay false, upload false): " +
+      (m && m.hash ? "call " + !!m.authorizes_call_contract + ", pay " + !!m.authorizes_transaction_application + ", upload " + !!m.authorizes_upload_contract : "(no contract)"));
+    const cfg = await read("editions", f.editions, "get_config");
+    console.log("editions.get_config: " + JSON.stringify(cfg));
+    for (const t of (cfg && cfg.payment_tokens) || []) {
+      console.log("editions prices in " + t + ": " + JSON.stringify(await read("editions", f.editions, "get_token_settings", { token: t })));
+    }
+    if (f.story) console.log("editions of story " + f.story + ": " + JSON.stringify(await read("editions", f.editions, "get_book_editions", { story_id: f.story })));
+  }
   if (f.sponsor) {
     console.log("");
     const meta = await provider.invokeGetContractMetadata(f.sponsor).catch(() => null);
@@ -2095,7 +2201,10 @@ async function cmdStatus(args) {
 const COMMON_FLAGS = ["network", "rpc", "i-understand-this-is-mainnet", lib.PIN_OVERRIDE_FLAG.slice(2)];
 const PREPARE_FLAGS = ["prepare", "payer", "payee", "rc-limit"];
 const COMMANDS = {
-  "status": { run: cmdStatus, flags: "ink shop admin user buyer stories story token sponsor multisig" },
+  "status": { run: cmdStatus, flags: "ink shop admin user buyer stories story token sponsor multisig editions" },
+  "wire-editions": { run: cmdWireEditions, prepare: true, flags: "admin editions stories shop treasury site " + lib.HASH_OVERRIDE_FLAG.slice(2) },
+  "editions-token": { run: cmdEditionsToken, prepare: true, flags: "admin editions token default min max disable" },
+  "editions-share": { run: cmdEditionsShare, prepare: true, flags: "admin editions percent" },
   "multisig-create": { run: cmdMultisigCreate, flags: "expect signers threshold" },
   "multisig-signers": { run: cmdMultisigSigners, prepare: true, flags: "multisig signers threshold" },
   "sponsor-config": { run: cmdSponsorConfig, flags: "sponsor ink shop stories tokens per-tx per-account per-day disable" },

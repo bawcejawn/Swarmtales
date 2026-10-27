@@ -998,6 +998,17 @@
                 "options": {
                   "jstype": "JS_STRING"
                 }
+              },
+              "surviving_sum": {
+                "type": "uint64",
+                "id": 43,
+                "options": {
+                  "jstype": "JS_STRING"
+                }
+              },
+              "sum_tracked": {
+                "type": "bool",
+                "id": 44
               }
             },
             "reserved": [
