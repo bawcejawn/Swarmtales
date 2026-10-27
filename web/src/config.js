@@ -55,6 +55,9 @@ export const TESTNET_ADDRESSES = {
   stories: "1Ebsy7ERirZWZwAio8Jz1zueuxQwNfKisR",
   treasury: "18MhKFHohFqVNpy7m7XvDRqZgLgVspyRF6",
   paymentToken: "1FaSvLjQJsCJKq5ybmGsMMQs8RQYyVv8ju",
+  // Wave 3: keepsake editions of finished books. "" until it is uploaded
+  // and wired (docs/WAVE_3.md); the book page hides editions until then.
+  editions: "",
 };
 
 /**
@@ -75,6 +78,7 @@ export const contracts = {
   ink: TESTNET_ADDRESSES.ink,
   shop: TESTNET_ADDRESSES.shop,
   stories: TESTNET_ADDRESSES.stories,
+  editions: TESTNET_ADDRESSES.editions,
   treasury: TESTNET_ADDRESSES.treasury,
   paymentToken: TESTNET_ADDRESSES.paymentToken,
   paymentSymbol: "tKOIN",

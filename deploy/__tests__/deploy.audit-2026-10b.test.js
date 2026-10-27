@@ -510,3 +510,17 @@ test("set-terms: a Terms file with blanks, or a different version number, is ref
   const v3 = require("node:fs").readFileSync(require("node:path").join(__dirname, "..", "..", "web", "public", "terms", "v3.md"), "utf8");
   assert.throws(() => lib.checkTermsText(v3, 3), /blanks to fill in/, "the v3 draft can't be published until its blanks are filled");
 });
+
+test("wave 3: editions prices are whole tokens with min <= default <= max, and the share caps at 30%", () => {
+  assert.deepStrictEqual(lib.planEditionsToken({ default: "3", min: "1", max: "20" }, 6),
+    { enabled: true, default_price: "3000000", min_price: "1000000", max_price: "20000000" });
+  assert.deepStrictEqual(lib.planEditionsToken({ disable: true }, 8), { enabled: false, default_price: "0", min_price: "0", max_price: "0" });
+  assert.throws(() => lib.planEditionsToken({ default: "3", min: "5", max: "20" }, 6), /--min <= --default <= --max/);
+  assert.throws(() => lib.planEditionsToken({ default: "3", min: "0", max: "20" }, 6), /--min must be more than 0/);
+  assert.throws(() => lib.planEditionsToken({ default: "3" }, 6), /Give --default, --min and --max/);
+  assert.strictEqual(lib.planEditionsShare("20"), 2000);
+  assert.strictEqual(lib.planEditionsShare("12.5"), 1250);
+  assert.strictEqual(lib.planEditionsShare("30"), 3000);
+  assert.throws(() => lib.planEditionsShare("30.01"), /can't be above 30%/);
+  assert.throws(() => lib.planEditionsShare("abc"), /--percent must be/);
+});
