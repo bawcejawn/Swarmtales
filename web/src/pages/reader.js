@@ -4,12 +4,15 @@
  */
 import { contracts, network } from "../config.js";
 import { loadStory, writerFlags } from "../chain.js";
+import { loadStoryOrCopy } from "../lib/offline.js";
+import { formatUtc } from "../lib/money.js";
 import { explainFailure } from "../lib/errors.js";
 import { KIND, label, VISIBILITY } from "../lib/labels.js";
 import { shortAddress } from "../lib/money.js";
 import { append, h, icons, replace } from "../ui/dom.js";
 import { readingOrder } from "../lib/order.js";
 import * as reading from "../lib/bookmarks.js";
+import { isFollowing, markSeen, MAX_FOLLOWS, newParts, setFollow } from "../lib/follow.js";
 import { createReader } from "../ui/readAloud.js";
 import { currentAddress, readPref, state, writePref } from "../app/state.js";
 import { chapterWord, clip, num, plural } from "../app/format.js";
@@ -22,11 +25,14 @@ import { finishedReportNote } from "./moderation.js";
 import { adoptWalletPlace, walletPlacesControl } from "./bookmarks.js";
 import { sharePanel } from "./share.js";
 import { finishPanel } from "./finish.js";
+import { supportPanel } from "./support.js";
+import { shareBar } from "./book.js";
+import { storyCredits } from "../lib/credits.js";
 
 export function renderReader(page, id) {
   const container = h("div", { class: "container page" }, [loadingLine("Opening the story…")]);
   append(page, container);
-  loadStory(id).then(async (bundle) => {
+  loadStoryOrCopy(contracts.stories, id, loadStory).then(async ({ bundle, savedAt }) => {
     const story = bundle.story;
     if (!story || Number(story.status || 0) === 0) {
       setMeta("Story not found", "");
@@ -73,6 +79,7 @@ export function renderReader(page, id) {
       totals.set(author, (totals.get(author) || 0) + Number(block.segment.current_cost || block.segment.charged || 0));
     }
     const writers = Array.from(totals.entries()).sort((a, b) => b[1] - a[1]);
+    const credits = storyCredits(story, active);
 
     const cats = storyCategories(story);
     const composeAnchor = h("div", { id: "compose" });
@@ -126,6 +133,7 @@ export function renderReader(page, id) {
         isOpen && (!inviteOnly(story) || canWriteInvited(story, me, flags))
           ? h("button", { type: "button", class: "btn btn-primary btn-block", onClick: goWrite }, ["Write the next part"])
           : null,
+        followButton(id, story),
         accessLine ? h("p", { class: "meta access-line" }, [accessLine]) : null,
         isOpen && inviteOnly(story) && me && (flags.allowed || flags.editor) && !canWriteInvited(story, me, flags)
           ? h("a", { class: "btn btn-secondary btn-block", href: "#/membership" }, ["Get a Writer month"])
@@ -167,6 +175,9 @@ export function renderReader(page, id) {
     // A bookmark saved to the wallet (from any device) wins when it's newer.
     if (me) await adoptWalletPlace(me, id, story.title);
     const progress = reading.load(contracts.stories, id);
+    // Parts added since this browser last opened the story, then remember this visit.
+    const fresh = newParts(contracts.stories, id, story.segment_count);
+    markSeen(contracts.stories, id, story.segment_count);
     ctx.markSeq = progress.mark ? progress.mark.seq : 0;
     const syncNote = h("div", { class: "meta small sync-note", "aria-live": "polite" });
     // A bookmark is saved in this browser at once. It goes to the wallet only
@@ -258,9 +269,9 @@ export function renderReader(page, id) {
     const markOk = progress.mark && readOrder.includes(progress.mark.seq);
     const resumeBar = lastOk || markOk
       ? h("div", { class: "resume-bar", role: "region", "aria-label": "Your place in this story" }, [
-        h("span", { class: "meta" }, [lastOk
+        h("span", { class: "meta" }, [(fresh ? plural(fresh, "new part") + " since your last visit. " : "") + (lastOk
           ? "You were reading Chapter " + progress.last.chapter + " \u00b7 " + progress.last.percent + "% through."
-          : "You bookmarked Chapter " + progress.mark.chapter + "."]),
+          : "You bookmarked Chapter " + progress.mark.chapter + ".")]),
         lastOk ? h("button", { type: "button", class: "btn btn-primary btn-small", onClick: () => goTo(progress.last.seq) }, ["Continue reading"]) : null,
         markOk ? h("button", { type: "button", class: "btn btn-secondary btn-small", onClick: () => goTo(ctx.markSeq || progress.mark.seq) }, ["Go to bookmark"]) : null,
       ])
@@ -298,16 +309,20 @@ export function renderReader(page, id) {
       writers.length
         ? h("section", {}, [
             h("h2", { class: "aside-title" }, ["Writers"]),
-            h("ul", { class: "writers" }, writers.slice(0, 12).map(([address, chars]) => h("li", {}, [
-              avatar(address),
+            h("ul", { class: "writers" }, credits.slice(0, 12).map((c) => h("li", {}, [
+              avatar(c.address),
               h("span", { class: "writer-name" }, [
-                h("b", {}, [shortAddress(address) + (address === story.opener ? " (opener)" : "")]),
-                h("span", {}, [plural(chars, "character")]),
+                h("b", {}, [shortAddress(c.address) + (c.address === story.opener ? " (opener)" : "")]),
+                h("span", {}, [plural(c.chars, "character")]),
+                shareBar(c.share),
               ]),
             ]))),
-            h("p", { class: "meta small", style: null }, ["Characters in the story now. Final credits count what survives the closing edit."]),
+            h("p", { class: "meta small", style: null }, [Number(story.status) === 4
+              ? "Shares count what survived the final edit."
+              : "Shares count the characters in the story now. Final credits count what survives the closing edit."]),
           ])
         : null,
+      supportPanel(id, story, credits),
       h("section", { class: "card" }, [
         h("h2", { class: "aside-title" }, ["On the public record"]),
         h("p", { class: "body-2 small" }, ["Every part of this story, and every edit, is recorded on the Koinos blockchain. Anyone can check who wrote what."]),
@@ -317,6 +332,7 @@ export function renderReader(page, id) {
 
     replace(container, 
       h("p", { class: "breadcrumb" }, [h("a", { href: "#/stories" }, ["Discover"]), cats[0] ? " / " + cats[0] : ""]),
+      savedAt ? notice("warn", h("p", {}, ["You're offline, so this is the copy saved in this browser on " + formatUtc(Math.floor(savedAt / 1000)) + ". Newer parts appear when you're back online."])) : null,
       joinedNote,
       head,
       h("div", { class: "reader-layout" }, [h("div", { class: "reader-main" }, [column]), aside])
@@ -333,25 +349,60 @@ export function renderReader(page, id) {
   });
 }
 
-/** Reading settings: text size and page theme, remembered in this browser. */
+/** Follow a story: kept in this browser; My stories then shows its new parts. */
+function followButton(id, story) {
+  const btn = h("button", { type: "button", class: "btn btn-secondary btn-block follow-btn" });
+  const draw = (on) => {
+    btn.textContent = on ? "\u2713 Following" : "Follow this story";
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+    btn.title = on ? "Saved in this browser. My stories shows new parts." : "Get a \u201cnew parts\u201d note on My stories. Saved in this browser; no account needed.";
+  };
+  draw(isFollowing(contracts.stories, id));
+  btn.addEventListener("click", () => {
+    const want = !isFollowing(contracts.stories, id);
+    const now = setFollow(contracts.stories, id, want, story.title);
+    draw(now);
+    if (now !== want) btn.title = want ? "Couldn't follow: this browser isn't saving site data, or you already follow " + MAX_FOLLOWS + " stories." : btn.title;
+    if (now !== want) btn.textContent = "Couldn't save (browser storage)";
+  });
+  return btn;
+}
+
+/**
+ * Reading settings, remembered in this browser: text size, page colour,
+ * typeface, line spacing and width ("Wide" hides the side panel for a
+ * full-width page, the tablet complaint about narrow reading columns).
+ */
 function readingSettings(column) {
-  const sizes = [["s", "Small"], ["m", "Medium"], ["l", "Large"], ["xl", "Extra large"]];
-  const themes = [["paper", "Paper"], ["sepia", "Sepia"], ["night", "Night"]];
+  const groups = [
+    ["st-read-size", "size", "Text size", "m", [["s", "Small"], ["m", "Medium"], ["l", "Large"], ["xl", "Extra large"]]],
+    ["st-read-theme", "theme", "Page", "paper", [["paper", "Paper"], ["sepia", "Sepia"], ["night", "Night"], ["black", "Black (OLED)"]]],
+    ["st-read-font", "font", "Typeface", "serif", [["serif", "Book serif"], ["sans", "Clean sans"]]],
+    ["st-read-spacing", "spacing", "Line spacing", "normal", [["tight", "Tight lines"], ["normal", "Normal lines"], ["airy", "Airy lines"]]],
+    ["st-read-width", "width", "Width", "normal", [["narrow", "Narrow"], ["normal", "Normal width"], ["wide", "Wide (no side panel)"]]],
+  ];
   const apply = () => {
-    column.dataset.size = readPref("st-read-size", "m");
-    column.dataset.theme = readPref("st-read-theme", "paper");
+    for (const [key, data, , fallback] of groups) column.dataset[data] = readPref(key, fallback);
+    const layout = column.closest(".reader-layout");
+    if (layout) layout.classList.toggle("reading-wide", column.dataset.width === "wide");
   };
   apply();
-  const pick = (key, value) => { writePref(key, value); apply(); };
-  const size = h("select", { "aria-label": "Text size" }, sizes.map(([v, l]) => h("option", { value: v }, [l])));
-  size.value = readPref("st-read-size", "m");
-  size.addEventListener("change", () => pick("st-read-size", size.value));
-  const theme = h("select", { "aria-label": "Page" }, themes.map(([v, l]) => h("option", { value: v }, [l])));
-  theme.value = readPref("st-read-theme", "paper");
-  theme.addEventListener("change", () => pick("st-read-theme", theme.value));
+  // The column is attached to the page after this runs.
+  requestAnimationFrame(apply);
+  const selects = groups.map(([key, , name, fallback, options]) => {
+    const select = h("select", { "aria-label": name }, options.map(([v, l]) => h("option", { value: v }, [l])));
+    select.value = readPref(key, fallback);
+    select.addEventListener("change", () => { writePref(key, select.value); apply(); });
+    return select;
+  });
+  const [size, theme, ...more] = selects;
   return h("div", { class: "reading-settings" }, [
     h("label", {}, [h("span", { class: "visually-hidden" }, ["Text size"]), "Aa ", size]),
     h("label", {}, [h("span", { class: "visually-hidden" }, ["Page"]), theme]),
+    h("details", { class: "more-settings" }, [
+      h("summary", {}, ["More"]),
+      h("div", { class: "more-settings-body" }, more.map((select) => h("label", {}, [select]))),
+    ]),
   ]);
 }
 

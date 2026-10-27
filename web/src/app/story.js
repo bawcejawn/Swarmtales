@@ -3,7 +3,7 @@
  * who may write, and the finished book's text.
  */
 import { label, STORY_STATUS } from "../lib/labels.js";
-import { isActiveWriter, KIND_BOOK, VIS_PRIVATE } from "../lib/rules.js";
+import { isActiveWriter, KIND_POEM, KIND_RULES, KIND_SHORT, VIS_PRIVATE } from "../lib/rules.js";
 import { h } from "../ui/dom.js";
 import { readingOrder } from "../lib/order.js";
 import { state } from "./state.js";
@@ -22,13 +22,25 @@ export function storyCategories(story) {
 
 // Stories opened with no fixed size get their kind's maximum. They can be
 // finished once they reach their kind's minimum.
+function kindRules(story) {
+  return KIND_RULES[Number(story.kind)] || KIND_RULES[KIND_SHORT];
+}
+
 export function kindMin(story) {
-  return Number(story.kind) === KIND_BOOK ? 100000 : 10000;
+  return kindRules(story).min;
+}
+
+export function kindMax(story) {
+  return kindRules(story).max;
 }
 
 export function openEnded(story) {
-  const max = Number(story.max_chars || 0);
-  return max === (Number(story.kind) === KIND_BOOK ? 1000000 : 99999);
+  return Number(story.max_chars || 0) === kindMax(story);
+}
+
+/** How close to its own size a story may close: 10 characters for a Poem, 100 otherwise (the contract's slack). */
+export function closeSlack(story) {
+  return Number(story.kind) === KIND_POEM ? 10 : 100;
 }
 
 export function inviteOnly(story) {
@@ -141,7 +153,7 @@ export function canWriteInvited(story, me, flags) {
 export function closeReadyLocal(story) {
   const used = Number(story.used_chars || 0);
   const max = Number(story.max_chars || 0);
-  return Number(story.status) === 2 || used >= kindMin(story) || used + 100 >= max;
+  return Number(story.status) === 2 || used >= kindMin(story) || used + closeSlack(story) >= max;
 }
 
 /** The finished book as plain text, in reading order, with chapter headings. */

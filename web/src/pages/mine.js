@@ -7,6 +7,7 @@ import { read } from "../chain.js";
 import { explainFailure } from "../lib/errors.js";
 import { append, h, icons, replace } from "../ui/dom.js";
 import * as reading from "../lib/bookmarks.js";
+import { followed, newParts, setFollow } from "../lib/follow.js";
 import { currentAddress } from "../app/state.js";
 import { plural } from "../app/format.js";
 import { connectButton, loadingLine, notice, setMeta } from "../app/ui.js";
@@ -21,8 +22,29 @@ export function renderMine(page) {
   append(container,
     h("p", { class: "eyebrow" }, ["Your shelf"]),
     h("h1", { class: "title" }, ["My stories"]),
-    h("p", { class: "lede" }, ["Every story you opened or wrote in, including private ones that don't appear in Discover."])
+    h("p", { class: "lede" }, ["Stories you follow and are reading, and every story you opened or wrote in, including private ones that don't appear in Discover."])
   );
+  // Following: kept in this browser, with the parts added since the last visit.
+  const follows = followed(contracts.stories);
+  if (follows.length) {
+    const grid = h("div", { class: "card-grid" }, [loadingLine("Checking for new parts…")]);
+    append(container, h("section", { class: "mine-section" }, [
+      h("h2", { class: "h2" }, ["Following"]),
+      h("p", { class: "meta" }, ["Saved in this browser. New parts since your last visit are counted for you."]),
+      grid,
+    ]));
+    storyRows(follows.map((f) => f.id)).then((rows) => {
+      rows.sort((a, b) => newParts(contracts.stories, b.id, b.story.segment_count) - newParts(contracts.stories, a.id, a.story.segment_count));
+      replace(grid, ...rows.map((row) => {
+        const fresh = newParts(contracts.stories, row.id, row.story.segment_count);
+        const card = storyCard(row, undefined, { badge: fresh ? plural(fresh, "new part") : "" });
+        return h("div", { class: "card-wrap" }, [card, h("button", { type: "button", class: "text-button small", onClick: (e) => {
+          setFollow(contracts.stories, row.id, false);
+          e.target.closest(".card-wrap").remove();
+        } }, ["Unfollow"])]);
+      }));
+    }).catch((error) => replace(grid, notice("bad", h("p", {}, [explainFailure(error)]))));
+  }
   // Reading progress: this browser's places, plus bookmarks saved to the wallet.
   const readingSlot = h("div");
   append(container, readingSlot);

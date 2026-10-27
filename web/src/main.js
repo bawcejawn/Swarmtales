@@ -13,5 +13,9 @@ import "@fontsource/ibm-plex-sans/latin-600.css";
 import "./style.css";
 
 import { boot } from "./app/shell.js";
+import { registerServiceWorker } from "./lib/offline.js";
+import { isFramed } from "./lib/frame.js";
 
 boot();
+// Offline opening and "install on home screen" (the built site only).
+if (import.meta.env && import.meta.env.PROD && !isFramed(window)) registerServiceWorker(typeof __BUILD_ID__ === "string" ? __BUILD_ID__ : "dev");

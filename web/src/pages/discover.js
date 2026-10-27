@@ -7,11 +7,29 @@ import { KIND, label, VISIBILITY } from "../lib/labels.js";
 import { append, h, icons, replace } from "../ui/dom.js";
 import { state } from "../app/state.js";
 import { clip, plural } from "../app/format.js";
-import { charsLine, isPublic, progressBar, statusPill, storyCategories } from "../app/story.js";
+import { charsLine, isPublic, percent, progressBar, statusPill, storyCategories } from "../app/story.js";
 import { loadingLine, notice, setMeta } from "../app/ui.js";
 import { firstLine, loadLibrary } from "../app/data.js";
 
-export function storyCard(row, excerptText) {
+/** "today", "yesterday", "5 days ago", "3 months ago" from a time in seconds. */
+export function sinceText(seconds, nowSeconds = Date.now() / 1000) {
+  const days = Math.floor(Math.max(0, nowSeconds - Number(seconds || 0)) / 86400);
+  if (!Number(seconds)) return "";
+  if (days < 1) return "today";
+  if (days < 2) return "yesterday";
+  if (days < 60) return days + " days ago";
+  return Math.round(days / 30) + " months ago";
+}
+
+/** An open story with no new text for this many days shows as "Quiet". */
+export const QUIET_DAYS = 35;
+
+export function isQuiet(story, nowSeconds = Date.now() / 1000) {
+  return Number(story.status) === 1 && Number(story.last_activity_at || 0) > 0 &&
+    nowSeconds - Number(story.last_activity_at) > QUIET_DAYS * 86400;
+}
+
+export function storyCard(row, excerptText, opts = {}) {
   const story = row.story;
   const meta = [storyCategories(story)[0], label(KIND, story.kind)].filter(Boolean).join(" · ");
   const line = h("p", { class: "card-line" }, [excerptText == null ? "" : clip(excerptText, 150)]);
@@ -25,11 +43,16 @@ export function storyCard(row, excerptText) {
       h("p", { class: "meta" }, [meta]),
       h("div", { class: "pills" }, [
         Number(story.visibility) !== 1 ? h("span", { class: "pill pill-neutral" }, [label(VISIBILITY, story.visibility)]) : null,
-        statusPill(story),
+        isQuiet(story) ? h("span", { class: "pill pill-neutral", title: "No new parts for " + QUIET_DAYS + " days" }, ["Quiet"]) : statusPill(story),
       ]),
     ]),
     h("h3", { class: "card-title" }, [story.title || "Untitled"]),
+    opts.badge ? h("p", { class: "new-badge" }, [opts.badge]) : null,
     line,
+    h("p", { class: "meta small card-stats" }, [[
+      plural(Number(story.segment_count || 0), "part"),
+      story.last_activity_at ? "active " + sinceText(story.last_activity_at) : "",
+    ].filter(Boolean).join(" \u00b7 ")]),
     progressBar(story, charsLine(story)),
   ]);
 }
@@ -52,6 +75,16 @@ const KINDS = [
   ["all", "All", () => true],
   ["book", "Books", (s) => Number(s.kind) === 1],
   ["short", "Short stories", (s) => Number(s.kind) === 2],
+  ["poem", "Poems", (s) => Number(s.kind) === 3],
+];
+
+// How a shelf is ordered. "Closest to finishing" uses the progress bar's percent.
+const SORTS = [
+  ["active", "Recently active", (a, b) => Number(b.story.last_activity_at || 0) - Number(a.story.last_activity_at || 0)],
+  ["new", "Newest", (a, b) => Number(b.story.created_at || 0) - Number(a.story.created_at || 0)],
+  ["writers", "Most writers", (a, b) => Number(b.story.contributor_count || 0) - Number(a.story.contributor_count || 0)],
+  ["parts", "Most parts", (a, b) => Number(b.story.segment_count || 0) - Number(a.story.segment_count || 0)],
+  ["close", "Closest to finishing", (a, b) => percent(b.story) - percent(a.story)],
 ];
 
 export function renderDiscover(page) {
@@ -66,8 +99,11 @@ export function renderDiscover(page) {
   const filters = h("div", { class: "filters" });
   const chips = h("div", { class: "chips", role: "group", "aria-label": "Category" });
   const count = h("p", { class: "meta", "aria-live": "polite" });
+  // Made once, so keyboard focus stays on it while the shelf redraws.
+  const sorter = h("select", { "aria-label": "Order" }, SORTS.map(([id, text]) => h("option", { value: id }, [text])));
+  const countRow = h("div", { class: "count-row" }, [count, h("label", { class: "sort" }, ["Order: ", sorter])]);
   const grid = h("div", { class: "card-grid" }, [loadingLine("Reading the shelves…")]);
-  const filterBlock = h("div", { class: "stack" }, [filters, chips, count, grid]);
+  const filterBlock = h("div", { class: "stack" }, [filters, chips, countRow, grid]);
   filterBlock.style.marginTop = "40px";
   append(container, filterBlock);
 
@@ -107,8 +143,11 @@ export function renderDiscover(page) {
 
     const cat = state.discover.category;
     const shown = cat ? inTab.filter((row) => Number(row.story.category_1) === cat || Number(row.story.category_2) === cat) : inTab;
-    shown.sort((a, b) => Number(b.story.last_activity_at || 0) - Number(a.story.last_activity_at || 0));
+    const sort = SORTS.find((x) => x[0] === state.discover.sort) || SORTS[0];
+    shown.sort(sort[2]);
     count.textContent = plural(shown.length, "story", "stories") + (library && library.truncated ? " (showing the first 200 on the network)" : "");
+    sorter.value = sort[0];
+    sorter.onchange = () => { state.discover.sort = sorter.value; draw(library); };
     if (!shown.length) {
       replace(grid, h("div", { class: "empty" }, [
         h("p", { class: "serif" }, ["No stories here yet."]),

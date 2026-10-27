@@ -30,7 +30,7 @@ export const state = {
   library: null, // { rows, truncated } once loaded
   libraryPromise: null,
   excerpts: new Map(),
-  discover: { tab: "open", kind: "all", category: 0 },
+  discover: { tab: "open", kind: "all", category: 0, sort: "active" },
   // Off by default: the story reads like a book. Readers can switch it on.
   showAuthors: readPref("st-show-authors-v2", "0") === "1",
   openKind: "short",

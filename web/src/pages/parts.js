@@ -7,6 +7,7 @@ import { formatUtc, shortAddress } from "../lib/money.js";
 import { append, h, replace } from "../ui/dom.js";
 import { changeMultiplier, hiddenByReports, MAX_PAID_CHANGES } from "../lib/change.js";
 import { readAllVersions } from "../lib/versions.js";
+import { diffCounts, wordDiff } from "../lib/diff.js";
 import { currentAddress } from "../app/state.js";
 import { num } from "../app/format.js";
 import { inviteOnly } from "../app/story.js";
@@ -156,16 +157,37 @@ function versionsView(storyId, block) {
       // A few versions per read: each can hold a whole part (AB-060, AB-070).
       const values = await readAllVersions(
         (from, count) => read("stories", "get_versions", { story_id: String(storyId), seq: String(block.seq), from, count }), n);
-      list.replaceChildren(...values.slice().reverse().map((v) => h("li", {}, [
+      // Each version can show what changed from the one before it,
+      // added words in green and removed ones struck through.
+      const showChanges = h("input", { type: "checkbox" });
+      const byNumber = new Map(values.map((v) => [Number(v.version), v]));
+      const textOf = (v) => (Number(v.kind) === 3 && !v.text ? null : String(v.text || ""));
+      const body = (v) => {
+        const text = textOf(v);
+        if (text === null) return h("p", { class: "version-text seg-placeholder" }, ["(removed)"]);
+        const prev = byNumber.get(Number(v.version) - 1);
+        if (!showChanges.checked || !prev || textOf(prev) === null) return h("p", { class: "version-text" }, [text]);
+        const pieces = wordDiff(textOf(prev), text);
+        const { added, removed } = diffCounts(pieces);
+        return h("div", {}, [
+          h("p", { class: "meta small" }, ["+" + added + " words, \u2212" + removed + " words from version " + prev.version]),
+          h("p", { class: "version-text diff" }, pieces.map((p) => p.op === "same" ? p.text
+            : h(p.op === "add" ? "ins" : "del", {}, [p.text]))),
+        ]);
+      };
+      // The switch sits outside the list, so it keeps focus when the list redraws.
+      list.before(h("label", { class: "check small version-toggle" }, [showChanges, "Show what changed in each version"]));
+      const draw = () => list.replaceChildren(
+        ...values.slice().reverse().map((v) => h("li", {}, [
         h("p", { class: "meta small" }, [
           "Version " + v.version + " \u00b7 " + versionLabel(v) + (formatUtc(v.at) ? " \u00b7 " + formatUtc(v.at).split(",")[0] : ""),
         ]),
-        Number(v.kind) === 3 && !v.text
-          ? h("p", { class: "version-text seg-placeholder" }, ["(removed)"])
-          : h("p", { class: "version-text" }, [v.text || ""]),
+        body(v),
         v.citation ? h("p", { class: "source-note" }, ["Source: " + v.citation]) : null,
         v.ai_assisted ? h("span", { class: "tag-ai" }, ["Written with AI help"]) : null,
       ])));
+      showChanges.addEventListener("change", draw);
+      draw();
     } catch (error) {
       list.replaceChildren(h("li", { class: "meta small" }, [explainFailure(error)]));
     }

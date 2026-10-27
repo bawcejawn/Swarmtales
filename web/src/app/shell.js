@@ -25,7 +25,7 @@ import { linkSecrets, renderJoin, renderPromo } from "../pages/landing.js";
 import { renderMine } from "../pages/mine.js";
 import { renderFinish } from "../pages/finish.js";
 import { renderBook } from "../pages/book.js";
-import { renderHow, renderTerms } from "../pages/info.js";
+import { renderHow, renderPrivacy, renderTerms } from "../pages/info.js";
 import { renderReportPage } from "../pages/report.js";
 import { renderAdmin } from "../pages/admin.js";
 
@@ -42,6 +42,7 @@ function route() {
   if (parts[0] === "mine") return { name: "mine" };
   if (parts[0] === "how") return { name: "how" };
   if (parts[0] === "terms") return { name: "terms" };
+  if (parts[0] === "privacy") return { name: "privacy" };
   if (parts[0] === "report") return { name: "report" };
   if (parts[0] === "admin") return { name: "admin" };
   if (parts[0] === "shop" || parts[0] === "membership") return { name: "membership" };
@@ -68,16 +69,22 @@ function renderNav() {
   const nav = document.getElementById("nav");
   if (!nav) return;
   const here = route().name;
+  // The short names are the phone tab bar's.
   const items = [
-    ["discover", "#/stories", "Discover"],
-    ["open", "#/open", "Open a story"],
-    ["how", "#/how", "How it works"],
-    ["mine", "#/mine", "My stories"],
-    ["membership", "#/membership", "Membership"],
+    ["discover", "#/stories", "Discover", "Discover"],
+    ["open", "#/open", "Open a story", "Open"],
+    ["how", "#/how", "How it works", "Help"],
+    ["mine", "#/mine", "My stories", "Shelf"],
+    ["membership", "#/membership", "Membership", "Ink"],
   ];
-  replace(nav, ...items.map(([name, href, text]) => {
-    const current = here === name || (name === "discover" && here === "story");
-    return h("a", { href, "aria-current": current ? "page" : null }, [text]);
+  replace(nav, ...items.map(([name, href, text, short]) => {
+    const current = here === name || (name === "discover" && (here === "story" || here === "book"));
+    // Only one of the two names is shown (and read) at a time, so the
+    // accessible name is always the visible word (WCAG 2.5.3).
+    return h("a", { href, "aria-current": current ? "page" : null }, [
+      h("span", { class: "nav-long" }, [text]),
+      h("span", { class: "nav-short" }, [short]),
+    ]);
   }));
 }
 
@@ -121,9 +128,11 @@ export function boot() {
         h("p", {}, [
           h("a", { href: "#/how" }, ["How it works"]), " · ",
           h("a", { href: "#/terms" }, ["Terms of Use"]), " · ",
+          h("a", { href: "#/privacy" }, ["Privacy and AI"]), " · ",
           h("a", { href: "#/report" }, ["Report copied text"]), " · ",
           h("a", { href: SITE.adminPowersUrl, rel: "noopener" }, ["What the admin can and can't do"]), " · ",
           h("a", { href: SITE.sourceUrl, rel: "noopener" }, ["Source code"]), " · ",
+          h("a", { href: "./feeds/latest.xml", type: "application/rss+xml" }, ["RSS: new parts"]), " · ",
           h("a", { href: "#/admin" }, ["Admin"]),
         ]),
         h("details", {}, [
@@ -236,6 +245,7 @@ export function renderPage() {
   else if (here.name === "join") renderJoin(page, here.storyId, here.inviteId);
   else if (here.name === "how") renderHow(page);
   else if (here.name === "terms") renderTerms(page);
+  else if (here.name === "privacy") renderPrivacy(page);
   else if (here.name === "report") renderReportPage(page);
   else if (here.name === "admin") renderAdmin(page);
   else renderHome(page);

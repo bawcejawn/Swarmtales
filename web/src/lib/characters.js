@@ -17,7 +17,12 @@ const COMMON = new Set((
   "One Two Three Four Five Six Seven Eight Nine Ten Every Each Some All Both Most Many Much More Less Few Other Another " +
   "Let Don't Didn't Can't Won't Wasn't Isn't Aren't Couldn't Wouldn't Shouldn't Do Does Did Is Are Was Were Be Been Being " +
   "Have Has Had Go Went Come Came See Saw Look Looked Said Says Tell Told Ask Asked Mother Father Mom Dad Grandma Grandpa " +
-  "Sentence Line Part Testnet SwarmTales Ink"
+  "Sentence Line Part Testnet SwarmTales Ink " +
+  // Words that often start a sentence but are never names.
+  "On In At Of To From By As Off Out Up Down Over Near Far Since Though Although Because Unless Whether Whatever " +
+  "Whenever Wherever However Meanwhile Instead Also Too Very Really Than Last Next First Second Third Finally Today " +
+  "Tomorrow Yesterday Tonight Morning Evening Night Day Suddenly Slowly Quickly Soon Afterwards Together Alone Like " +
+  "Such Same Whole Half Hours Minutes Years Days Weeks Months Moments Seconds Nobody Everywhere Anywhere Nowhere Why"
 ).split(" ").map((w) => w.toLowerCase()));
 
 const TITLES = new Set(["mr", "mrs", "ms", "dr", "captain", "sir", "lady", "lord", "miss", "professor", "doctor", "king", "queen", "prince", "princess", "uncle", "aunt", "father", "mother", "sister", "brother", "detective", "officer", "general", "colonel", "sergeant"]);

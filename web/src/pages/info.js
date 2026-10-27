@@ -75,3 +75,32 @@ export function renderHow(page) {
   ]);
   append(container, column);
 }
+
+/**
+ * Privacy and AI: what is public, what SwarmTales promises, and what it can't
+ * promise. Plain, because writers are leaving other sites over vague promises.
+ */
+export function renderPrivacy(page) {
+  setMeta("Your writing, privacy and AI", "What is public on SwarmTales, and what SwarmTales does and doesn't do with your writing and AI.");
+  const item = (title, ...text) => h("section", { class: "privacy-item" }, [h("h2", { class: "h3" }, [title]), ...text.map((t) => h("p", { class: "body-2" }, [t]))]);
+  append(page, h("div", { class: "container page narrow" }, [
+    h("p", { class: "eyebrow" }, ["Privacy and AI"]),
+    h("h1", { class: "title" }, ["Your writing, privacy and AI"]),
+    h("p", { class: "lede" }, ["The short version: what you write here is public and permanent, it is credited to your wallet, and SwarmTales never trains or sells AI on it."]),
+    item("Everything written is public",
+      "Every part, every edit and every kept version is stored on the public Koinos blockchain. Anyone can read it there, including people who run their own copy of the network.",
+      "A private story limits who can write in it, not who can read it. Don't write anything you wouldn't want the world to see."),
+    item("Your credit can't be quietly changed",
+      "Each part is signed by its writer's wallet. Changes by other people are recorded as new versions with their name, and the earlier versions stay readable."),
+    item("SwarmTales doesn't train or sell AI on your writing",
+      "We don't use your writing to train AI models, and we don't sell or license it to anyone who does.",
+      "Every page of this website carries a machine-readable \u201cno text and data mining\u201d notice (the opt-out European law recognises). Once the site has its own web address, it will also tell known AI crawlers to stay away."),
+    item("What we can't promise",
+      "Text on a public blockchain can be copied by anyone who reads the chain, and some scrapers ignore opt-outs. No public site can fully stop that, and we won't pretend otherwise."),
+    item("AI help is your choice, and it's labelled",
+      "Nothing on SwarmTales writes for you unless you choose to. If you used AI to help write a part, tick “Written with AI help” and readers see the label. The spelling check sends your text to LanguageTool only when you press its button."),
+    item("What this site keeps in your browser",
+      "Your reading place, bookmarks, followed stories, reading settings and unsent drafts stay in this browser. They aren't sent anywhere. There are no ads, trackers or analytics cookies. Clearing your browser's site data removes them."),
+    h("p", {}, [h("a", { href: "#/terms" }, ["Terms of Use"]), " · ", h("a", { href: "#/report" }, ["Report copied text"])]),
+  ]));
+}
