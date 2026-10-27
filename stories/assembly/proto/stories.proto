@@ -180,6 +180,13 @@ message story {
   string summary = 35;
   bytes summary_by = 36 [(koinos.btype) = ADDRESS];
   uint64 summary_at = 37 [jstype = JS_STRING];
+  // The story guide (Wave 2): notes for writers (characters, world, style),
+  // who the story is looking for, and whether it is played as a blind round.
+  string notes = 38;
+  string wanted = 39;            // "Looking for: ..." (empty: not looking); public stories show in "Seeking writers"
+  bool blind = 40;               // blind round: the website shows writers only the newest part until the story closes
+  bytes guide_by = 41 [(koinos.btype) = ADDRESS];
+  uint64 guide_at = 42 [jstype = JS_STRING];
 }
 
 message segment {
@@ -234,6 +241,8 @@ message segment {
   // or removing it gives back no Ink (AB-062).
   bool refund_forfeited = 34;
   reserved 35;                   // was live_counted (every part is counted)
+  uint32 pending_suggestions = 36; // suggestions waiting for the writer (at most MAX_PENDING_SUGGESTIONS)
+  uint32 suggestion_count = 37;    // suggestions ever made on this part (ids 1..count, at most MAX_SUGGESTIONS)
 }
 
 message address_list {
@@ -247,10 +256,35 @@ message segment_version {
   string text = 3;
   uint64 cost = 4 [jstype = JS_STRING];
   uint64 at = 5 [jstype = JS_STRING];
-  uint32 kind = 6;               // 1 original, 2 changed by someone (paid), 3 removed by someone (paid), 4 edited by its writer, 5 final edit
+  uint32 kind = 6;               // 1 original, 2 changed by someone (paid), 3 removed by someone (paid), 4 edited by its writer, 5 final edit, 6 a suggestion the writer accepted (by = who suggested it)
   bytes by = 7 [(koinos.btype) = ADDRESS];      // who made this version
   string citation = 8;           // what the changer said their words quote (paid changes only)
   bool ai_assisted = 9;          // the changer said their words are AI-assisted (paid changes only)
+}
+
+// A suggested change to a part (Wave 2): someone proposes new text, the
+// part's writer accepts or declines it. Accepting works like the writer's own
+// edit (the writer pays for added letters); the version records who suggested it.
+message suggestion {
+  uint32 id = 1;
+  bytes proposer = 2 [(koinos.btype) = ADDRESS];
+  string text = 3;               // empty once cleared by moderation
+  bytes base_hash = 4;           // the part's text_hash when suggested: accepting needs the part unchanged since
+  uint32 base_versions = 5;      // the part's version_count when suggested
+  string citation = 6;
+  bool ai_assisted = 7;
+  uint64 at = 8 [jstype = JS_STRING];
+  uint32 status = 9;             // 0 waiting, 1 accepted, 2 declined, 3 withdrawn, 4 cleared by moderation
+  bytes closed_by = 10 [(koinos.btype) = ADDRESS];
+  uint64 closed_at = 11 [jstype = JS_STRING];
+  string note = 12;              // the writer's reply when declining (up to 200 characters)
+  uint64 cost = 13 [jstype = JS_STRING]; // the text's Ink count
+  bool cleared = 14;             // moderation wiped its text (its status is kept)
+}
+
+message suggestion_list {
+  repeated suggestion values = 1;
+  uint32 next = 2;               // the id to ask for next, or 0 when there are no more
 }
 
 message version_list {
@@ -665,6 +699,81 @@ message set_story_summary_arguments {
   bytes account = 1 [(koinos.btype) = ADDRESS];
   uint64 story_id = 2 [jstype = JS_STRING];
   string summary = 3;            // up to 1,500 characters
+}
+
+// @description Suggest a change to someone else's part in an OPEN story. Free: nothing is charged until the part's
+// writer accepts. Who may suggest: anyone who may write in the story (a private story's allow-list, a Writer month or
+// the promo trial, as for new text), not blocked, not the part's writer. The text follows the rules for new text and
+// the per-submission cap. A part takes at most 5 waiting suggestions (one per wallet) and 20 in all. Needs the
+// rights confirmation and the current Terms version. Returns the suggestion id.
+// @read-only false
+// @result uint32
+message suggest_change_arguments {
+  bytes proposer = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  uint64 seq = 3 [jstype = JS_STRING];
+  string text = 4;
+  string citation = 5;           // what it quotes, if anything (up to 200 characters)
+  bool ai_assisted = 6;
+  bool rights_confirmed = 7;
+  uint32 terms_version = 8;
+}
+
+// @description The part's writer accepts a waiting suggestion: the part's text becomes the suggested text, exactly as
+// if the writer had edited it (letters beyond the current length cost the writer Ink, at most max_ink; shortening
+// refunds as for an edit). Refused if the part changed since the suggestion was made. The new version records who
+// suggested it, and that wallet counts as having changed the part. Returns the new version number.
+// @read-only false
+// @result uint32
+message accept_suggestion_arguments {
+  bytes writer = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  uint64 seq = 3 [jstype = JS_STRING];
+  uint32 id = 4;
+  uint64 expected_cost = 5 [jstype = JS_STRING];  // the suggested text's Ink count, as the page showed it
+  uint64 max_ink = 6 [jstype = JS_STRING];        // the most Ink the writer agrees to pay for added letters
+  bool rights_confirmed = 7;     // the writer confirms they may use the text, as for their own edit
+  uint32 terms_version = 8;
+}
+
+// @description Close a waiting suggestion without changing the part: the part's writer declines it (with an optional
+// note), the proposer withdraws it, anyone closes it once the part has changed, been removed or the story is no
+// longer open (finished or archived), and the admin or the moderator clears it with moderate = true (its text
+// is wiped; works while paused, and on closed suggestions too). Free.
+// @read-only false
+// @result empty_object
+message decline_suggestion_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  uint64 seq = 3 [jstype = JS_STRING];
+  uint32 id = 4;
+  string note = 5;               // up to 200 characters
+  bool moderate = 6;             // the admin or moderator clearing it (wipes its text); false for everyone else
+}
+
+// @description A part's suggestions by id, oldest first, at most 5 per call and about 64 KB of text. Start with
+// from = 1 and continue from the returned next until it is 0. Empty for a part that was taken down.
+// @read-only true
+// @result suggestion_list
+message get_suggestions_arguments {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 seq = 2 [jstype = JS_STRING];
+  uint32 from = 3;
+  uint32 count = 4;
+}
+
+// @description The story guide: notes for writers (characters, world, tone; up to 3,000 characters), who the story is
+// looking for (up to 140 characters; empty = not looking), and the blind round switch (only the opener may change
+// it). The opener or an editor sets it while the story is open or being finished. The admin or the moderator may
+// clear the notes and the wanted line (both empty) at any time.
+// @read-only false
+// @result empty_object
+message set_story_guide_arguments {
+  bytes account = 1 [(koinos.btype) = ADDRESS];
+  uint64 story_id = 2 [jstype = JS_STRING];
+  string notes = 3;
+  string wanted = 4;
+  bool blind = 5;
 }
 
 // @description The part's own writer edits it in an OPEN story. Rewording is free; letters beyond the part's
@@ -1217,4 +1326,23 @@ message fund_event {
   string action = 3;             // "deposit" or "returned"
   uint64 amount = 4 [jstype = JS_STRING];
   uint64 fund_after = 5 [jstype = JS_STRING];
+}
+
+// A suggestion was made, accepted, declined, withdrawn or cleared.
+message suggestion_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  uint64 seq = 2 [jstype = JS_STRING];
+  uint32 id = 3;
+  bytes by = 4 [(koinos.btype) = ADDRESS];
+  string action = 5;             // "suggested", "accepted", "declined", "withdrawn", "closed", "cleared"
+  bytes proposer = 6 [(koinos.btype) = ADDRESS];
+  uint32 version = 7;            // accepted: the new version of the part
+}
+
+message guide_event {
+  uint64 story_id = 1 [jstype = JS_STRING];
+  bytes by = 2 [(koinos.btype) = ADDRESS];
+  string notes = 3;
+  string wanted = 4;
+  bool blind = 5;
 }

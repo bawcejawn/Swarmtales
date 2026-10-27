@@ -708,3 +708,15 @@ details.chapter[open] .chapter-number { color: var(--page-accent); }
 .version-toggle { list-style: none; }
 .continue-strip { margin-top: 8px; margin-bottom: 32px; }
 .privacy-item { margin-top: 28px; }
+
+/* ---- Wave 2: suggestions, notes for writers, blind round ---- */
+.seg.blind-hidden { display: none; }
+.suggestions summary { cursor: pointer; }
+.suggestions.has-waiting summary { color: #7a4a00; font-weight: 600; }
+.suggestion-list { display: flex; flex-direction: column; gap: 16px; margin-top: 10px; }
+.suggestion-item { border-left: 3px solid var(--line, #e7e2d7); padding-left: 12px; display: flex; flex-direction: column; gap: 6px; }
+.suggestion-item .row { gap: 8px; }
+.suggestion-diff { display: flex; flex-direction: column; gap: 4px; }
+.wanted-line { margin: 4px 0; padding: 6px 10px; border-radius: 8px; background: #eef5ec; font-size: 14px; }
+.guide-notes { white-space: pre-wrap; }
+.card-wanted { margin: 0; font-size: 14px; color: #1d5b2a; }

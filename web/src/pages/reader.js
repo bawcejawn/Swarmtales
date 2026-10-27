@@ -243,6 +243,27 @@ export function renderReader(page, id) {
       append(article, details);
     }
 
+    // Blind round (Wave 2): while the story is open, show only the newest
+    // part, so each writer continues from it alone. Reading the rest is one
+    // click away (the text is public anyway); finished stories show it all.
+    let blindBar = null;
+    if (story.blind && Number(story.status) === 1) {
+      const live = [...article.querySelectorAll(".seg:not(.seg-muted)")];
+      if (live.length > 1) {
+        live.slice(0, -1).forEach((el) => el.classList.add("blind-hidden"));
+        article.querySelectorAll("details.chapter").forEach((d) => { d.open = true; });
+        const reveal = h("button", { type: "button", class: "btn btn-secondary btn-small" }, ["Show the whole story anyway"]);
+        blindBar = notice("info", h("p", {}, [
+          "Blind round: you see only the newest part. Write what comes next from it alone; the whole story is revealed when it's finished. ",
+          reveal,
+        ]));
+        reveal.addEventListener("click", () => {
+          article.querySelectorAll(".blind-hidden").forEach((el) => el.classList.remove("blind-hidden"));
+          blindBar.remove();
+        });
+      }
+    }
+
     // Read-aloud items in reading order; each chapter's first part announces it.
     const listenItems = [];
     for (const chapter of chapters) {
@@ -283,6 +304,7 @@ export function renderReader(page, id) {
         h("label", { class: "check" }, [toggle, "Show who wrote what"]),
         readingSettings(column),
       ]),
+      blindBar,
       resumeBar,
       syncNote,
       listen,

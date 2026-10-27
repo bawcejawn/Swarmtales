@@ -64,6 +64,7 @@ The Shop admin **cannot** take back a payment that has already been split, or se
   - After a takedown in a finished book, publish a replacement book link and text hash. The contract does not recompute the hash; `deploy.js replace-pdf` computes it from the chain and shows it before signing.
   - **Block or unblock** a wallet. A blocked wallet can't open, write, edit, change or report text, join with an invite, revive a story, set a citation (it may clear one), restore a hidden part, rename its story, change editors or the allow-list, create invites, or make text changes or remove visible parts in a final edit. It may still remove its own parts, and a blocked finalizer may still remove hidden parts so the book can be finished.
   - Clear a story's summary. The moderator can too. This works while paused.
+  - Clear a suggested change (its text is wiped) and clear a story's notes and looking-for line. The moderator can too. This works while paused.
   - Set the moderator key, how many writer reports hide a part (1 to 20) and the strike limit (1 to 20, starts at 5).
 - **Terms of Use:** publish a new version. Every new part, and every rewrite of one's own part, must then accept it.
 - **Finishing a book:** take over the final edit when the opener asked, or has been inactive for the set number of days. Paused time doesn't count, and a take-over is refused while paused. In that final edit the admin can lightly edit text (the same small allowance any finalizer has, kept as a version, so the admin can be named for a strike like anyone else who changed it) and remove parts. With the multisig admin, **each** final-edit batch (at most 50 parts) is its own transaction needing the quorum, so a long Book takes many cosigned batches (audit I-9); plan the signers' time for it, or leave finishing to the opener where possible.
@@ -82,7 +83,7 @@ The Stories admin **cannot** mint or burn Ink, refund outside the rules, or fina
 
 ## The moderator (copy checker)
 
-The moderator key can hide parts, take over a hide writer reports made for copying (it then counts as the checker's hide: removing the part refunds nothing and restoring it gives up the refund), unhide any part the admin didn't hide, add, replace or clear a part's public "this text also appears in…" note, and clear any story's summary, even while paused. It can't take a part down, delete text, touch Ink, or change any setting.
+The moderator key can hide parts, take over a hide writer reports made for copying (it then counts as the checker's hide: removing the part refunds nothing and restoring it gives up the refund), unhide any part the admin didn't hide, add, replace or clear a part's public "this text also appears in…" note, clear any story's summary, any suggested change, and any story's notes and looking-for line, even while paused. It can't take a part down, delete text, touch Ink, or change any setting.
 
 How the checker uses it: it hides a part only when a book that is provably older than the part contains its text; matches found only on the web get a note, never a hide. It never hides a part its opener restored. It signs in a separate step that re-checks every action on the chain; the step that searches the web never holds the key. It runs in GitHub Actions and signs only for the chain id it expects.
 

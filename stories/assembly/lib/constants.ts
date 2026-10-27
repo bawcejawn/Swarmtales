@@ -33,12 +33,27 @@ export const REMOVED_SPACE_ID: u32 = 27;
 export const PART_EDITORS_SPACE_ID: u32 = 28;
 export const PART_CHANGERS_SPACE_ID: u32 = 29;
 export const LIVE_PARTS_SPACE_ID: u32 = 30;
+export const SUGGESTIONS_SPACE_ID: u32 = 31;
 export const MAX_SUMMARY: i32 = 1500;
+// The story guide (Wave 2).
+export const MAX_NOTES: i32 = 3000;
+export const MAX_WANTED: i32 = 140;
+// Suggestions (Wave 2): waiting at once, and ever per part (so a takedown can always wipe them in one call).
+export const MAX_PENDING_SUGGESTIONS: u32 = 5;
+export const MAX_SUGGESTIONS: u32 = 20;
+export const MAX_SUGGESTION_READ: u32 = 5;
+export const SUGGESTION_WAITING: u32 = 0;
+export const SUGGESTION_ACCEPTED: u32 = 1;
+export const SUGGESTION_DECLINED: u32 = 2;
+export const SUGGESTION_WITHDRAWN: u32 = 3;
+export const SUGGESTION_CLEARED: u32 = 4;
 export const VERSION_ORIGINAL: u32 = 1;
 export const VERSION_CHANGED: u32 = 2;
 export const VERSION_REMOVED: u32 = 3;
 export const VERSION_EDITED: u32 = 4;
 export const VERSION_FINAL: u32 = 5;
+// A suggestion its writer accepted (Wave 2). Counts like the writer's own edit for the version room.
+export const VERSION_SUGGESTED: u32 = 6;
 export const MIN_CHANGE_UNITS: u64 = 10;
 export const MAX_PAID_CHANGES: u32 = 60;
 // The writer's own edits make new versions up to this version number. Past
