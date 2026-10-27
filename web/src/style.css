@@ -742,3 +742,8 @@ details.chapter[open] .chapter-number { color: var(--page-accent); }
 .editions-panel { margin-top: 32px; display: grid; gap: 16px; }
 .editions-panel .h4 { font-size: 17px; font-weight: 600; margin: 0; }
 .readers-cut .btn { white-space: nowrap; }
+
+/* Wave 3: weekly prompt */
+.prompt-spotlight { display: grid; gap: 12px; padding: 24px 28px; border-radius: var(--radius); background: var(--honey-bg); border: 1px solid var(--line); }
+.prompt-text { margin: 0; font-family: var(--serif); font-size: 22px; line-height: 1.35; color: var(--ink); text-wrap: balance; }
+.prompt-past { margin: 8px 0 0; padding-left: 20px; display: grid; gap: 6px; }

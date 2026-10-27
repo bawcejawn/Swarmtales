@@ -2,6 +2,7 @@
  * Home page and the connected wallet's desk.
  */
 import { contracts } from "../config.js";
+import { promptSpotlight } from "./spotlight.js";
 import { explainFailure } from "../lib/errors.js";
 import { KIND, label, TIER } from "../lib/labels.js";
 import { formatMana, formatUtc, shortAddress } from "../lib/money.js";
@@ -20,6 +21,7 @@ export function renderHome(page) {
   setMeta("", "SwarmTales is collaborative fiction: read a chapter, then write the next part. Reading is free. Every contribution is credited on the Koinos blockchain.");
   const featuredSlot = h("div", { class: "card card-lg" }, [loadingLine("Finding a story being written now…")]);
   const gridSlot = h("div", { class: "card-grid" }, [loadingLine("Reading the shelves…")]);
+  const prompt = promptSpotlight();
 
   append(page,     h("section", { class: "container", style: null }, [
       h("div", { class: "split section", "aria-labelledby": "home-title" }, [
@@ -37,6 +39,7 @@ export function renderHome(page) {
         featuredSlot,
       ]),
     ]),
+    prompt ? h("div", { class: "container" }, [prompt]) : null,
     continueStrip(),
     accountDesk(),
     h("section", { class: "section section-surface", "aria-labelledby": "how-title" }, [

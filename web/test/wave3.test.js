@@ -114,3 +114,22 @@ test("wave 3: who may claim which free edition", () => {
   assert.equal(kindLabel(3), "Collector's Edition");
   assert.equal(tokenIdHex(258), "0x0000000000000102");
 });
+
+import { promptsNow } from "../src/lib/spotlight.js";
+
+test("wave 3: this week's prompt is the newest one that has started", () => {
+  const list = [
+    { start: "2026-11-02", storyId: "3", prompt: "A" },
+    { start: "2026-11-09", storyId: "4", prompt: "B" },
+    { start: "2026-11-16", storyId: "5", prompt: "C" },
+    { start: "bad", storyId: "6", prompt: "D" },
+    { start: "2026-11-01", storyId: "0", prompt: "E" },
+  ];
+  const at = (d) => promptsNow(list, new Date(d + "T12:00:00Z"));
+  assert.equal(at("2026-10-30").current, null);
+  assert.equal(at("2026-11-02").current.prompt, "A");
+  assert.equal(at("2026-11-12").current.prompt, "B");
+  assert.deepEqual(at("2026-11-12").past.map((p) => p.prompt), ["A"]);
+  assert.deepEqual(at("2027-01-01").past.map((p) => p.prompt), ["B", "A"]);
+  assert.equal(promptsNow([], new Date()).current, null);
+});
