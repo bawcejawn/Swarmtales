@@ -42,6 +42,7 @@ describe("surviving sum (Wave 3)", () => {
     new Stories().close_story(new stories.close_story_arguments(ALICE, id));
     checkpoint();
     expect(story(id).surviving_sum).toBe(0);
+    expect(story(id).sum_tracked).toBe(true);
 
     const count = story(id).segment_count;
     const items: stories.final_item[] = [];

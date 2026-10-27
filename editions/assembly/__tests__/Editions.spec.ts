@@ -7,7 +7,7 @@
 // =====================================================================
 
 import { Base58, MockVM, System, authority, chain, Protobuf, system_calls } from "@koinos/sdk-as";
-import { Editions, idKey, idFromKey, shareOf, jsonText } from "../Editions";
+import { Editions, idKey, idFromKey, shareOf, jsonText, isAddress } from "../Editions";
 import { editions } from "../proto/editions";
 
 const EDITIONS = Base58.decode("1MRxjnjFDhZfjtjgpxBNczsMGVEtYqfFyS");
@@ -68,8 +68,8 @@ function ok(): system_calls.exit_arguments {
   return result(new Uint8Array(0));
 }
 
-function story(status: u32, min: u64, sum: u64, needsPdf: bool = false, title: string = "The \"Hive\" Book"): system_calls.exit_arguments {
-  const st = new editions.stories_story(OPENER, title, status, min, needsPdf, sum);
+function story(status: u32, min: u64, sum: u64, needsPdf: bool = false, title: string = "The \"Hive\" Book", tracked: bool = true): system_calls.exit_arguments {
+  const st = new editions.stories_story(OPENER, title, status, min, needsPdf, sum, tracked);
   return result(Protobuf.encode(st, editions.stories_story.encode));
 }
 
@@ -122,6 +122,9 @@ function events(name: string): Uint8Array[] {
   for (let i = 0; i < all.length; i++) if (all[i].name == name) out.push(all[i].data!);
   return out;
 }
+
+// AssemblyScript has no closures: values the fails() callbacks use live here.
+let gBad: Uint8Array = new Uint8Array(0);
 
 // ---------- tests ----------
 
@@ -194,6 +197,23 @@ describe("settings", () => {
     fails(() => {
       new Editions().set_payment_token(new editions.set_payment_token_arguments(WRITER, new editions.token_settings(true, 5, 1, 20)));
     }, "EDITIONS: at most 4 payment tokens");
+  });
+
+  it("drops a token turned off from the list, so the list never fills up for good", () => {
+    signAs(EDITIONS);
+    const tokens = [OTHER, MALLORY, READER];
+    for (let i = 0; i < tokens.length; i++) {
+      new Editions().set_payment_token(new editions.set_payment_token_arguments(tokens[i], new editions.token_settings(true, 5, 1, 20)));
+    }
+    new Editions().set_payment_token(new editions.set_payment_token_arguments(OTHER, new editions.token_settings(false, 0, 0, 0)));
+    expect(new Editions().get_config(new editions.get_config_arguments()).payment_tokens.length).toBe(3);
+    new Editions().set_payment_token(new editions.set_payment_token_arguments(WRITER, new editions.token_settings(true, 5, 1, 20)));
+    expect(new Editions().get_config(new editions.get_config_arguments()).payment_tokens.length).toBe(4);
+  });
+
+  it("checks the site address", () => {
+    signAs(EDITIONS);
+    fails(() => { new Editions().set_site(new editions.set_site_arguments("https://swarmtales.example/")); }, "EDITIONS: leave the slash off the end of the site address");
   });
 
   it("refuses an https-less site", () => {
@@ -283,6 +303,9 @@ describe("collector's editions", () => {
       "EDITIONS: this book is being updated after a takedown; editions are on sale again once it's republished");
     MockVM.setCallContractResults([story(FINALIZED, 50, 0)]);
     fails(() => { new Editions().buy_edition(new editions.buy_edition_arguments(READER, STORY, USDT, PRICE)); }, "EDITIONS: this book has no surviving text to share");
+    MockVM.setCallContractResults([story(FINALIZED, 50, 400, false, "T", false)]);
+    fails(() => { new Editions().buy_edition(new editions.buy_edition_arguments(READER, STORY, USDT, PRICE)); },
+      "EDITIONS: this book was finished before editions could share its sales");
   });
 
   it("needs the buyer's signature and their price limit", () => {
@@ -324,6 +347,24 @@ describe("collector's editions", () => {
     expect(c.balance_of(new editions.balance_of_arguments(OTHER)).value).toBe(1);
     expect(c.get_tokens_by_owner(new editions.get_tokens_by_owner_arguments(READER, null, 10, false)).values.length).toBe(0);
     expect(c.get_tokens_by_owner(new editions.get_tokens_by_owner_arguments(OTHER, null, 10, false)).values.length).toBe(1);
+  });
+
+  it("refuses a recipient address with a bad checksum or a SwarmTales contract", () => {
+    buy();
+    expect(isAddress(OTHER)).toBe(true);
+    gBad = OTHER.slice(0);
+    gBad[10] = gBad[10] ^ 1;
+    expect(isAddress(gBad)).toBe(false);
+    signAs(READER);
+    fails(() => { new Editions().transfer(new editions.transfer_arguments(READER, gBad, tokenId(1), "")); }, "EDITIONS: that recipient address isn't valid (check it for typos)");
+    fails(() => { new Editions().transfer(new editions.transfer_arguments(READER, STORIES, tokenId(1), "")); }, "EDITIONS: can't send an edition to a SwarmTales contract");
+  });
+
+  it("returns nothing for a start that isn't a token id", () => {
+    buy();
+    const c = new Editions();
+    expect(c.get_tokens(new editions.get_tokens_arguments(new Uint8Array(3), 10, false)).values.length).toBe(0);
+    expect(c.get_tokens_by_owner(new editions.get_tokens_by_owner_arguments(READER, new Uint8Array(3), 10, false)).values.length).toBe(0);
   });
 
   it("refuses approvals", () => {
@@ -466,7 +507,7 @@ function earnings(who: Uint8Array, mine: u64, sum: u64 = 400): editions.earnings
 }
 
 function claim(who: Uint8Array, mine: u64, owed: u64, pool: u64, sum: u64 = 400): void {
-  MockVM.setCallContractResults([story(FINALIZED, 50, sum), surviving(mine), bal(0), bal(pool), ok(), bal(owed), bal(pool - owed)]);
+  MockVM.setCallContractResults([story(FINALIZED, 50, sum), story(FINALIZED, 50, sum), surviving(mine), bal(0), bal(pool), ok(), bal(owed), bal(pool - owed)]);
   new Editions().claim_earnings(new editions.claim_earnings_arguments(who, STORY, USDT));
   MockVM.commitTransaction();
 }
@@ -487,7 +528,7 @@ describe("writers' earnings", () => {
     claim(WRITER, 100, 600000, 2400000);
     expect(earnings(WRITER, 100).owed).toBe(0);
     expect(earnings(WRITER, 100).paid).toBe(600000);
-    MockVM.setCallContractResults([story(FINALIZED, 50, 400), surviving(100)]);
+    MockVM.setCallContractResults([story(FINALIZED, 50, 400), story(FINALIZED, 50, 400), surviving(100)]);
     fails(() => { new Editions().claim_earnings(new editions.claim_earnings_arguments(WRITER, STORY, USDT)); }, "EDITIONS: nothing to claim yet");
     buy(PRICE, 1800000);
     expect(earnings(WRITER, 100).owed).toBe(600000);
@@ -498,7 +539,7 @@ describe("writers' earnings", () => {
 
   it("refuses a payout that doesn't arrive", () => {
     buy();
-    MockVM.setCallContractResults([story(FINALIZED, 50, 400), surviving(100), bal(0), bal(2400000), ok(), bal(1), bal(1800000)]);
+    MockVM.setCallContractResults([story(FINALIZED, 50, 400), story(FINALIZED, 50, 400), surviving(100), bal(0), bal(2400000), ok(), bal(1), bal(1800000)]);
     fails(() => { new Editions().claim_earnings(new editions.claim_earnings_arguments(WRITER, STORY, USDT)); }, "EDITIONS: payout did not arrive");
   });
 
@@ -522,8 +563,17 @@ describe("writers' earnings", () => {
     claim(WRITER, 100, 600000, 2400000);
   });
 
-  it("keeps a writer's share inside the whole even if Stories disagrees", () => {
+  it("pays nothing when Stories' numbers don't add up", () => {
     buy();
-    expect(earnings(WRITER, 900, 400).owed).toBe(2400000);
+    expect(earnings(WRITER, 900, 400).owed).toBe(0);
+    MockVM.setCallContractResults([story(FINALIZED, 50, 400, false, "T", false), surviving(100)]);
+    expect(new Editions().get_earnings(new editions.get_earnings_arguments(STORY, USDT, WRITER)).owed).toBe(0);
+  });
+
+  it("stops claims while the book waits for republishing", () => {
+    buy();
+    MockVM.setCallContractResults([story(FINALIZED, 50, 400, true)]);
+    fails(() => { new Editions().claim_earnings(new editions.claim_earnings_arguments(WRITER, STORY, USDT)); },
+      "EDITIONS: this book is being updated after a takedown; earnings can be collected again once it's republished");
   });
 });

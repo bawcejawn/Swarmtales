@@ -113,7 +113,7 @@ Editions (`editions/`) makes keepsake editions of finished books. Its admin can:
 - **Pause** sales and claims of writers' editions. Writers can still collect earnings, and holders can still give away or burn editions, while paused.
 - **Propose a new admin**, who must accept.
 
-The Editions admin **cannot** mint editions, move or burn anyone's edition, change a book's opener or shares, or take the money kept for writers: there is no withdraw, and the contract pays out only to the writer a claim names. The Editions contract key can replace its code, like every contract key.
+The Editions admin **cannot** mint editions, move or burn anyone's edition, change a book's opener or shares, or take the money kept for writers: there is no withdraw, and the contract pays out only to the writer a claim names. The Editions contract key can replace its code, like every contract key, and new code could do anything code can do: that is why the Editions key is kept offline like the others. The same goes for the Stories key, since Editions trusts the shares Stories reports.
 
 ## What works at each stage
 

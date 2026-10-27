@@ -79,7 +79,7 @@ async function draw(body, storyId, story, credits) {
         formatUnits(toTreasury.toString(), decimals) + " " + symbol + " to SwarmTales. " +
         (sold ? plural(sold, "copy has", "copies have") + " been collected so far." : "Be the first to collect it."),
       ]),
-      h("p", { class: "meta small" }, ["It's a keepsake, not an investment, and doesn't give you any copyright in the book. You can give it or sell it on yourself; SwarmTales takes nothing from that." +
+      h("p", { class: "meta small" }, ["It's a keepsake, not an investment, and doesn't give you any copyright in the book. You can send it to another wallet yourself, as a gift or a private sale; SwarmTales takes nothing from that." +
         (network.mainnet ? "" : " (Test version: this uses test tokens.)")]),
       me ? h("div", { class: "row" }, [buy]) : connectButton("Connect a wallet to collect it"),
       paused ? notice("warn", h("p", {}, ["Editions are paused for a moment. Please try again later."])) : null,

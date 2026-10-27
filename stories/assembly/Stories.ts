@@ -821,6 +821,8 @@ export class Stories extends StoriesAdmin {
     const now = nowSeconds();
     st.status = stories.story_status.STATUS_EDITING;
     st.finalizer_is_admin = false;
+    // The whole final edit runs on code that keeps surviving_sum (Wave 3).
+    if (st.final_cursor == 0) st.sum_tracked = true;
     if (st.locked_at == 0) st.locked_at = now;
     this.touch(st, opener, false);
     this.putStory(args.story_id, st);
@@ -889,6 +891,7 @@ export class Stories extends StoriesAdmin {
     );
     st.status = stories.story_status.STATUS_EDITING;
     st.finalizer_is_admin = true;
+    if (st.final_cursor == 0) st.sum_tracked = true;
     if (st.locked_at == 0) st.locked_at = now;
     this.putStory(args.story_id, st);
     this.emitStatus(args.story_id, st.status, "admin-take-over", this.getAdmin());

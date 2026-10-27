@@ -14,8 +14,9 @@ syntax = "proto3";
 //     accepted payment token (the opener may choose a price inside the
 //     admin's range). The buyer's payment is split in the same
 //     transaction: platform_bps (20% at launch, never above 30%) to the
-//     treasury, the rest to the book's writers. Collector's Editions can
-//     be given or sold on by their owner.
+//     treasury, the rest to the book's writers. A Collector's Edition's
+//     holder can send it to another wallet (a gift or a private sale);
+//     marketplaces aren't supported (no approvals).
 //
 // WRITERS' MONEY
 //   The writers' part of each sale is kept by this contract, per book and
@@ -125,6 +126,7 @@ message stories_story {
   uint64 contributor_edition_min = 16 [jstype = JS_STRING];
   bool needs_new_pdf = 32;
   uint64 surviving_sum = 43 [jstype = JS_STRING];
+  bool sum_tracked = 44;
 }
 
 message stories_surviving_query {

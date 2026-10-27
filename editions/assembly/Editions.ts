@@ -31,7 +31,7 @@
 //   another contract can't act in a user's name here.
 // =====================================================================
 
-import { System, Storage, authority, Protobuf, SafeMath, Arrays, chain } from "@koinos/sdk-as";
+import { System, Storage, authority, Protobuf, SafeMath, Arrays, chain, Crypto } from "@koinos/sdk-as";
 import { editions } from "./proto/editions";
 
 const CONFIG_SPACE_ID: u32 = 0;
@@ -99,6 +99,28 @@ export function shareOf(a: u64, b: u64, c: u64): u64 {
   System.require(b <= c, "EDITIONS: a writer's share can't exceed the whole");
   System.require(c < 4294967296, "EDITIONS: surviving total too large");
   return SafeMath.add(SafeMath.mul(a / c, b), SafeMath.mul(a % c, b) / c);
+}
+
+/**
+ * A well-formed Koinos address: version byte 0, then the 20-byte hash and a
+ * 4-byte checksum (the first 4 bytes of a double sha256 of the first 21).
+ * Exported for the tests.
+ */
+export function isAddress(a: Uint8Array): bool {
+  if (a.length != ADDRESS_LENGTH || a[0] != 0) return false;
+  const once = sha256(a.slice(0, 21));
+  if (once.length != 32) return false;
+  const twice = sha256(once);
+  if (twice.length != 32) return false;
+  for (let i = 0; i < 4; i++) if (twice[i] != a[21 + i]) return false;
+  return true;
+}
+
+// The raw 32-byte sha256: System.hash may answer a multihash (0x12 0x20 + digest).
+function sha256(data: Uint8Array): Uint8Array {
+  const h = System.hash(Crypto.multicodec.sha2_256, data);
+  if (h == null) return new Uint8Array(0);
+  return h!.length == 34 && h![0] == 0x12 && h![1] == 0x20 ? h!.slice(2) : h!;
 }
 
 /** Text for a JSON string value: quotes, backslashes and control characters escaped. */
@@ -268,6 +290,8 @@ export class Editions {
 
   get_tokens(args: editions.get_tokens_arguments): editions.token_ids {
     const limit = this.listLimit(args.limit);
+    // A start that isn't a token id gives nothing rather than starting over.
+    if (args.start != null && args.start!.length != 0 && args.start!.length != ID_LENGTH) return new editions.token_ids([]);
     let start = args.start != null && args.start!.length == ID_LENGTH ? args.start! : new Uint8Array(0);
     if (args.descending && start.length == 0) start = idKey(u64.MAX_VALUE);
     const keys = this.editionsById.getManyKeys(start, limit,
@@ -280,6 +304,7 @@ export class Editions {
     if (args.owner == null || args.owner!.length != ADDRESS_LENGTH) return new editions.token_ids(out);
     const owner = args.owner!;
     const limit = this.listLimit(args.limit);
+    if (args.start != null && args.start!.length != 0 && args.start!.length != ID_LENGTH) return new editions.token_ids(out);
     const hasStart = args.start != null && args.start!.length == ID_LENGTH;
     let key = join(owner, hasStart ? args.start! : (args.descending ? idKey(u64.MAX_VALUE) : new Uint8Array(0)));
     while (out.length < limit) {
@@ -320,6 +345,7 @@ export class Editions {
     const st = this.readStory(args.story_id);
     this.requireFinished(st);
     System.require(!st.needs_new_pdf, "EDITIONS: this book is being updated after a takedown; editions are on sale again once it's republished");
+    System.require(st.sum_tracked, "EDITIONS: this book was finished before editions could share its sales");
     System.require(st.surviving_sum > 0, "EDITIONS: this book has no surviving text to share");
     this.requireUsableToken(token);
     const price = this.priceFor(args.story_id, token);
@@ -395,6 +421,8 @@ export class Editions {
     const writer = this.requireAddress(args.writer, "EDITIONS: invalid writer address");
     const token = this.requireAddress(args.token, "EDITIONS: invalid token address");
     System.require(!Arrays.equal(writer, this.contractId), "EDITIONS: invalid writer address");
+    System.require(!this.readStory(args.story_id).needs_new_pdf,
+      "EDITIONS: this book is being updated after a takedown; earnings can be collected again once it's republished");
     const e = this.earningsOf(args.story_id, token, writer);
     System.require(e.owed > 0, "EDITIONS: nothing to claim yet");
 
@@ -445,7 +473,11 @@ export class Editions {
     const from = this.requireAddress(args.from, "EDITIONS: invalid sender address");
     const to = this.requireAddress(args.to, "EDITIONS: invalid recipient address");
     System.require(!Arrays.equal(from, to), "EDITIONS: sender and recipient are the same");
-    System.require(!Arrays.equal(to, this.contractId), "EDITIONS: can't send an edition to the Editions contract");
+    System.require(isAddress(to), "EDITIONS: that recipient address isn't valid (check it for typos)");
+    const cfgNow = this.config.get()!;
+    System.require(!Arrays.equal(to, this.contractId) &&
+      !(cfgNow.stories != null && Arrays.equal(to, cfgNow.stories!)) && !(cfgNow.shop != null && Arrays.equal(to, cfgNow.shop!)),
+    "EDITIONS: can't send an edition to a SwarmTales contract");
     System.require(this.text(args.memo).length <= MAX_MEMO_LENGTH, "EDITIONS: memo too long");
     const tokenId = this.requireTokenId(args.token_id);
     const ed = this.editionsById.get(tokenId);
@@ -535,15 +567,20 @@ export class Editions {
       System.require(s.min_price > 0 && s.min_price <= s.default_price && s.default_price <= s.max_price,
         "EDITIONS: prices must satisfy 0 < min <= default <= max");
     }
+    // The list holds the tokens on sale now: a token turned off leaves it
+    // (its pots stay claimable), so it never fills up for good.
+    const kept: Uint8Array[] = [];
     let listed = false;
     for (let i = 0; i < cfg.payment_tokens.length; i++) {
       if (Arrays.equal(cfg.payment_tokens[i], token)) listed = true;
+      else kept.push(cfg.payment_tokens[i]);
     }
-    if (!listed) {
-      System.require(cfg.payment_tokens.length < MAX_PAYMENT_TOKENS, "EDITIONS: at most 4 payment tokens");
-      cfg.payment_tokens.push(token);
-      this.saveConfig(cfg);
+    if (s.enabled) {
+      if (!listed) System.require(kept.length < MAX_PAYMENT_TOKENS, "EDITIONS: at most 4 payment tokens");
+      kept.push(token);
     }
+    cfg.payment_tokens = kept;
+    this.saveConfig(cfg);
     this.tokens.put(token, s);
     const ev = new editions.payment_token_event(token, s);
     System.event("editions.payment_token_event", Protobuf.encode(ev, editions.payment_token_event.encode), []);
@@ -568,6 +605,7 @@ export class Editions {
     const site = this.text(args.site);
     System.require(site.length <= MAX_SITE_LENGTH, "EDITIONS: site address too long");
     System.require(site.length == 0 || site.startsWith("https://"), "EDITIONS: the site address must start with https://");
+    System.require(!site.endsWith("/"), "EDITIONS: leave the slash off the end of the site address");
     const cfg = this.config.get()!;
     cfg.site = site;
     this.saveConfig(cfg);
@@ -621,9 +659,9 @@ export class Editions {
     const st = this.readStory(storyId);
     const mine = this.readSurviving(storyId, writer);
     const sum = st.surviving_sum;
-    // A share can't exceed the whole, even if the two reads ever disagree.
-    const share = mine > sum ? sum : mine;
-    const earned = shareOf(pot.received, share, sum);
+    // If the two reads ever disagree, pay nothing rather than guess.
+    if (!st.sum_tracked || sum == 0 || mine > sum) return new editions.earnings(0, paid, 0);
+    const earned = shareOf(pot.received, mine, sum);
     let owed: u64 = earned > paid ? earned - paid : 0;
     const left = pot.received > pot.paid ? pot.received - pot.paid : 0;
     if (owed > left) owed = left;
@@ -634,7 +672,8 @@ export class Editions {
     const cfg = this.config.get()!;
     cfg.next_token_id = SafeMath.add(cfg.next_token_id, 1);
     cfg.total_supply = SafeMath.add(cfg.total_supply, 1);
-    this.saveConfig(cfg);
+    // Counters only: no settings event for each edition made.
+    this.config.put(cfg);
     const tokenNumber = cfg.next_token_id;
     const tokenId = idKey(tokenNumber);
     const ed = new editions.edition(to, storyId, kind, number, title, this.now());

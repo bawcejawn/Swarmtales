@@ -190,6 +190,9 @@ message story {
   // Wave 3: the sum of every writer's surviving total (filled by the final
   // edit, lowered by a later takedown). Editions splits collector sales by it.
   uint64 surviving_sum = 43 [jstype = JS_STRING];
+  // True when the whole final edit ran on code that keeps surviving_sum, so
+  // the sum matches the writers' totals. Editions sells only such books.
+  bool sum_tracked = 44;
 }
 
 message segment {
